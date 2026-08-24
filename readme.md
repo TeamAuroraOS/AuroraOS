@@ -1,0 +1,1 @@
+# Aurora OS for the Nintendo 3DS. I will write more later, or you can add more.

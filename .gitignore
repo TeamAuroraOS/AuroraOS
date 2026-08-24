@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+output/
+*.bin
+*.elf
+*.firm
+*.o
+*.a
+*.map
+*.lst
+
+# Editor / OS files
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local tool/cache files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Windows generated files
+desktop.ini
