@@ -8,4 +8,3 @@
 Hey there! 👋
 Aurora is a custom OS for the Nintendo 3DS.
 You can get updates on our Discord: https://discord.gg/h6jpnGdUJ
-Updates: https://discord.gg/h6jpnGdUJ
