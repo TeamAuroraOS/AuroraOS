@@ -15,9 +15,6 @@ static Color console_fg = {0xFF, 0xFF, 0xFF};
 static Color console_bg = {0x10, 0x10, 0x20};
 
 void screen_init(void) {
-  
-
-  
   Color top_bg = {0x05, 0x0A, 0x15};
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, top_bg);
 

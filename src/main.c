@@ -143,6 +143,8 @@ static void draw_splash_screen(void) {
 
 #define SEL_BORDER 3
 
+static void draw_home_screen(int selection);
+
 static void draw_tile(int x, int y, Color bg_color,
                       const unsigned char *icon_bits, const char *label,
                       int selected) {
@@ -172,9 +174,7 @@ static void draw_tile(int x, int y, Color bg_color,
               bg_color);
 }
 
-void ui_draw_home_screen(void) {
-  
-}
+void ui_draw_home_screen(void) { draw_home_screen(0); }
 
 static void draw_home_screen(int selection) {
   
