@@ -1,3 +1,4 @@
+/* Coded By DisLoPik for the AuroraOS Project. */
 #ifndef AURORA_H
 #define AURORA_H
 
@@ -25,10 +26,8 @@
 #define REG_LCD_TOP_CFG     (*(volatile uint32_t *)0x10400400)
 #define REG_LCD_BOT_CFG     (*(volatile uint32_t *)0x10400500)
 
-#define VRAM_TOP_LA         ((volatile uint8_t *)0x18300000) 
-#define VRAM_TOP_LB         ((volatile uint8_t *)0x18346500) 
-#define VRAM_BOT_A          ((volatile uint8_t *)0x1838CA00) 
-#define VRAM_BOT_B          ((volatile uint8_t *)0x183C7800) 
+#define VRAM_TOP_LA         ((volatile uint8_t *)0x18300000)
+#define VRAM_BOT_A          ((volatile uint8_t *)0x18346500)
 
 #define TOP_SCREEN_WIDTH    400
 #define TOP_SCREEN_HEIGHT   240

@@ -1,3 +1,4 @@
+/* Coded By DisLoPik for the AuroraOS Project. */
 #ifndef ICONS_H
 #define ICONS_H
 

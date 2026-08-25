@@ -1,5 +1,6 @@
 
 
+/* Coded By DisLoPik for the AuroraOS Project. */
 #include "aurora.h"
 #include "aurora_logo.h"
 #include "font.h"
@@ -12,13 +13,11 @@ void delay(volatile u32 cycles) {
 }
 
 void power_off(void) {
-  
-  *(volatile u32 *)0x10141200 = 0;         
-  *(volatile u32 *)0x10141100 |= (1 << 0); 
+  *(volatile u32 *)0x10141200 = 0;
+  *(volatile u32 *)0x10141100 |= (1 << 0);
 
-  
   while (1) {
-    __asm__ volatile("mcr p15, 0, r0, c7, c0, 4"); 
+    __asm__ volatile("mcr p15, 0, r0, c7, c0, 4");
   }
 }
 
@@ -32,13 +31,12 @@ static u32 str_len(const char *s) {
 static u32 prev_keys = 0;
 
 u32 get_keys(void) {
-  
   return ~REG_HID_PAD & 0x3FF;
 }
 
 u32 get_keys_down(void) {
   u32 cur = get_keys();
-  u32 down = cur & ~prev_keys; 
+  u32 down = cur & ~prev_keys;
   prev_keys = cur;
   return down;
 }
@@ -70,7 +68,6 @@ int check_files_directory(void) {
 static void draw_splash_screen(void) {
   volatile u8 *fb = VRAM_TOP_LA;
 
-  
   for (int x = 0; x < TOP_SCREEN_WIDTH; x++) {
     for (int y = 0; y < TOP_SCREEN_HEIGHT; y++) {
       u8 r = (u8)(5 + (y * 30) / TOP_SCREEN_HEIGHT);
@@ -85,7 +82,6 @@ static void draw_splash_screen(void) {
     }
   }
 
-  
   int ribbon_y_start = 90;
   int ribbon_y_end = 150;
   for (int x = 0; x < TOP_SCREEN_WIDTH; x++) {
@@ -117,14 +113,12 @@ static void draw_splash_screen(void) {
     }
   }
 
-  
   int logo_x = (TOP_SCREEN_WIDTH - AURORA_LOGO_WIDTH) / 2;
   int logo_y = 90;
   draw_aurora_logo(VRAM_TOP_LA, logo_x, logo_y, TOP_SCREEN_HEIGHT,
                    COLOR_WHITE);
 
-  
-  const char *version = "v0.1.0 - Initial Build";
+  const char *version = "v0.0.2 - Initial Build";
   int ver_len = (int)str_len(version);
   int ver_x = (TOP_SCREEN_WIDTH - ver_len * FONT_WIDTH) / 2;
   int ver_y = 165;
@@ -133,7 +127,7 @@ static void draw_splash_screen(void) {
               ver_color);
 }
 
-#define TILE_SIZE       80  
+#define TILE_SIZE       80
 #define TILE_Y          70  
 #define TILE_GAP        40  
 #define TILE_TOTAL_W    (TILE_SIZE * 2 + TILE_GAP) 
@@ -150,18 +144,15 @@ static void draw_tile(int x, int y, Color bg_color,
                       int selected) {
   volatile u8 *fb = VRAM_BOT_A;
 
-  
   if (selected) {
     draw_filled_rect(fb, x - SEL_BORDER, y - SEL_BORDER,
                      TILE_SIZE + SEL_BORDER * 2, TILE_SIZE + SEL_BORDER * 2,
                      BOT_SCREEN_HEIGHT, COLOR_WHITE);
   }
 
-  
   draw_filled_rect(fb, x, y, TILE_SIZE, TILE_SIZE, BOT_SCREEN_HEIGHT,
                    bg_color);
 
-  
   int icon_x = x + (TILE_SIZE - ICON_SIZE) / 2;
   int icon_y = y + (TILE_SIZE - ICON_SIZE) / 2 - 6; 
   draw_icon_32(fb, icon_x, icon_y, BOT_SCREEN_HEIGHT, icon_bits, COLOR_WHITE);
@@ -180,7 +171,6 @@ static void draw_home_screen(int selection) {
   
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BG_DARK);
 
-  
   const char *title = "Aurora OS";
   int title_len = (int)str_len(title);
   int title_x = (BOT_SCREEN_WIDTH - title_len * FONT_WIDTH) / 2;
@@ -210,10 +200,8 @@ static void draw_home_screen(int selection) {
 }
 
 int ui_power_off_confirm(void) {
-  
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BG_DARK);
 
-  
   int icon_x = (BOT_SCREEN_WIDTH - ICON_SIZE) / 2;
   int icon_y = 50;
   draw_icon_32(VRAM_BOT_A, icon_x, icon_y, BOT_SCREEN_HEIGHT,
@@ -234,50 +222,43 @@ int ui_power_off_confirm(void) {
               COLOR_BG_DARK);
   screen_present_bottom();
 
-  
   int bar_y = 160;
   int bar_h = 8;
   int bar_w = 200;
   int bar_x = (BOT_SCREEN_WIDTH - bar_w) / 2;
 
-  
   draw_filled_rect(VRAM_BOT_A, bar_x, bar_y, bar_w, bar_h, BOT_SCREEN_HEIGHT,
                    COLOR_DARK_GRAY);
 
-  
   #define COUNTDOWN_STEPS 250
   #define DELAY_PER_STEP  500000
 
   for (int i = 0; i < COUNTDOWN_STEPS; i++) {
-    
     u32 keys = get_keys();
-    if (keys & BUTTON_B) { 
-      
+    if (keys & BUTTON_B) {
       const char *cancel_msg = "Cancelled!";
       int cancel_len = (int)str_len(cancel_msg);
       int cancel_x = (BOT_SCREEN_WIDTH - cancel_len * FONT_WIDTH) / 2;
-      
+
       draw_filled_rect(VRAM_BOT_A, 0, 100, BOT_SCREEN_WIDTH, 80,
                        BOT_SCREEN_HEIGHT, COLOR_BG_DARK);
       draw_string(VRAM_BOT_A, cancel_x, 120, BOT_SCREEN_HEIGHT, cancel_msg,
                   COLOR_GREEN, COLOR_BG_DARK);
       screen_present_bottom();
-      delay(30000000); 
-      return 1;        
+      delay(30000000);
+      return 1;
     }
 
-    
     int fill_w = bar_w - (i * bar_w / COUNTDOWN_STEPS);
-    
+
     draw_filled_rect(VRAM_BOT_A, bar_x, bar_y, bar_w, bar_h, BOT_SCREEN_HEIGHT,
                      COLOR_DARK_GRAY);
-    
+
     if (fill_w > 0) {
       draw_filled_rect(VRAM_BOT_A, bar_x, bar_y, fill_w, bar_h,
                        BOT_SCREEN_HEIGHT, COLOR_RED);
     }
 
-    
     int secs_left = 5 - (i * 5 / COUNTDOWN_STEPS);
     char sec_str[] = "  ";
     sec_str[0] = '0' + (char)secs_left;
@@ -289,13 +270,12 @@ int ui_power_off_confirm(void) {
     delay(DELAY_PER_STEP);
   }
 
-  return 0; 
+  return 0;
 }
 
 static void draw_settings_screen(void) {
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BG_DARK);
 
-  
   draw_filled_rect(VRAM_BOT_A, 0, 0, BOT_SCREEN_WIDTH, 24, BOT_SCREEN_HEIGHT,
                    COLOR_DARK_GRAY);
   const char *title = "Settings";
@@ -304,8 +284,6 @@ static void draw_settings_screen(void) {
   draw_string(VRAM_BOT_A, title_x, 8, BOT_SCREEN_HEIGHT, title, COLOR_WHITE,
               COLOR_DARK_GRAY);
 
-  
-  
   int icon_x = 20;
   int icon_y = 50;
   draw_icon_32(VRAM_BOT_A, icon_x, icon_y, BOT_SCREEN_HEIGHT,
@@ -382,18 +360,14 @@ void ui_settings_menu(void) {
 }
 
 int main(void) {
-  
+
   screen_init();
 
-  
   draw_splash_screen();
 
-  
   set_brightness((u32)current_brightness);
 
-  
-  int selection = 0; 
-
+  int selection = 0;
   draw_home_screen(selection);
 
   while (1) {

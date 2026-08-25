@@ -1,32 +1,11 @@
-"""
-aaf_tool.py -- Convert audio files to/from the custom .aaf format.
-
-.aaf format:
-    Mono, 16-bit (or 8-bit) PCM, low sample rate by default.
-    16-byte header followed by raw PCM sample data:
-
-        offset  size  field
-        0       4     magic ("AAF1")
-        4       1     version
-        5       1     channels (always 1)
-        6       1     bit depth (8 or 16)
-        7       1     reserved
-        8       4     sample rate (uint32, little-endian)
-        12      4     number of samples (uint32, little-endian)
-        16      -     raw PCM sample data
-
-Dependencies:
-    pip install pydub simpleaudio
-    ffmpeg must be installed and on PATH for non-WAV input formats
-"""
-
+# Coded By DisLoPik for the AuroraOS Project.
 import argparse
 import struct
 from pathlib import Path
 
 MAGIC = b"AAF1"
 VERSION = 1
-HEADER_FORMAT = "<4sBBBBII"  # magic, version, channels, bit_depth, reserved, sample_rate, num_samples
+HEADER_FORMAT = "<4sBBBBII"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
 
@@ -48,9 +27,9 @@ def convert_to_aaf(input_path: str, output_path: str, sample_rate: int, bit_dept
         HEADER_FORMAT,
         MAGIC,
         VERSION,
-        1,  # channels (mono)
+        1,
         bit_depth,
-        0,  # reserved
+        0,
         sample_rate,
         num_samples,
     )

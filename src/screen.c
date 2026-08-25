@@ -1,5 +1,6 @@
 
 
+/* Coded By DisLoPik for the AuroraOS Project. */
 #include "aurora.h"
 #include "aurora_logo.h"
 #include "font.h"
@@ -26,17 +27,9 @@ void screen_init(void) {
   screen_present_bottom();
 }
 
-void screen_present_top(void) {
-  for (u32 i = 0; i < TOP_FB_SIZE; i++) {
-    VRAM_TOP_LB[i] = VRAM_TOP_LA[i];
-  }
-}
+void screen_present_top(void) {}
 
-void screen_present_bottom(void) {
-  for (u32 i = 0; i < BOT_FB_SIZE; i++) {
-    VRAM_BOT_B[i] = VRAM_BOT_A[i];
-  }
-}
+void screen_present_bottom(void) {}
 
 void clear_screen(volatile u8 *fb, u32 fb_size, Color color) {
   for (u32 i = 0; i < fb_size; i += 3) {

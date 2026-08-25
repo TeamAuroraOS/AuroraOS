@@ -1,25 +1,4 @@
-"""
-apf_tool.py  Convert PNG/JPEG images to a custom .apf image format, and open .apf files.
-
-.apf format:
-    400x240 pixels (5:3 aspect ratio), RGB or RGBA,
-
-Offset  Size  Field
-0       4     Magic bytes: b'APF1'
-4       2     Width  (uint16, little-endian)  always 400
-6       2     Height (uint16, little-endian)  always 240
-8       1     Pixel format: 0 = RGB (3 bytes/pixel), 1 = RGBA (4 bytes/pixel)
-9       1     Reserved (0x00, for future use)
-10      ...   Raw pixel data, row-major, top-left to bottom-right,
-              3 or 4 bytes per pixel depending on the format byte.
-
-Every .apf file is exactly 400x240 pixels (a 5:3 aspect ratio). Conversion only
-scales images up or down to fit it never crops or stretches so only source
-images that are already 5:3 (or extremely close to it, allowing for integer
-pixel rounding) are accepted.
-
-"""
-
+# Coded By DisLoPik for the AuroraOS Project.
 import argparse
 import struct
 import sys
@@ -30,8 +9,8 @@ from PIL import Image
 MAGIC = b"APF1"
 TARGET_WIDTH = 400
 TARGET_HEIGHT = 240
-TARGET_RATIO = TARGET_WIDTH / TARGET_HEIGHT  # 5/3 ~= 1.6667
-RATIO_TOLERANCE = 0.01  # allow tiny rounding slack in source dimensions
+TARGET_RATIO = TARGET_WIDTH / TARGET_HEIGHT
+RATIO_TOLERANCE = 0.01
 
 FORMAT_RGB = 0
 FORMAT_RGBA = 1

@@ -1,5 +1,6 @@
 
 
+/* Coded By DisLoPik for the AuroraOS Project. */
 #ifndef AURORA_LOGO_H
 #define AURORA_LOGO_H
 
