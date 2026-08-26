@@ -1,4 +1,3 @@
-# Coded By DisLoPik for the AuroraOS Project.
 import argparse
 import struct
 import sys

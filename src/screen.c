@@ -1,6 +1,5 @@
 
 
-/* Coded By DisLoPik for the AuroraOS Project. */
 #include "aurora.h"
 #include "aurora_logo.h"
 #include "font.h"

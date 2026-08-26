@@ -1,4 +1,3 @@
-/* Coded By DisLoPik for the AuroraOS Project. */
 #ifndef AURORA_H
 #define AURORA_H
 

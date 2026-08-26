@@ -1,6 +1,5 @@
 
 
-@ Coded By DisLoPik for the AuroraOS Project.
 .section .vectors, "ax"
 .arm
 .align 4
