@@ -137,7 +137,7 @@ static void draw_splash_screen(void) {
   draw_aurora_logo(VRAM_TOP_LA, logo_x, logo_y, TOP_SCREEN_HEIGHT,
                    COLOR_WHITE);
 
-  const char *version = "v0.0.2 - Initial Build";
+  const char *version = "v0.0.3 - Initial Build";
   int ver_len = (int)str_len(version);
   int ver_x = (TOP_SCREEN_WIDTH - ver_len * FONT_WIDTH) / 2;
   int ver_y = 165;
