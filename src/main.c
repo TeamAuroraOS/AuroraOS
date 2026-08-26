@@ -4,6 +4,7 @@
 #include "aurora.h"
 #include "aurora_logo.h"
 #include "font.h"
+#include "i2c.h"
 #include "icons.h"
 
 void delay(volatile u32 cycles) {
@@ -12,10 +13,28 @@ void delay(volatile u32 cycles) {
   }
 }
 
-void power_off(void) {
-  *(volatile u32 *)0x10141200 = 0;
-  *(volatile u32 *)0x10141100 |= (1 << 0);
+/* Drain the ARM9 write buffer (ARMv5TE equivalent of a DSB). Mirrors the
+   ARM_DSB() GodMode9 issues between the two MCU writes in PowerOff(). */
+static inline void arm9_drain_write_buffer(void) {
+  __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
+}
 
+void power_off(void) {
+  /* Real 3DS power-off path, learned from GodMode9
+     (arm9/source/common/power.c, PowerOff()). The old version only poked the
+     GPIO registers at 0x1014_1xxx, which blanked the LCDs but never cut system
+     power -- hence "screen goes off but the system stays on". The console is
+     actually powered down by the MCU over I2C. */
+  I2C_init();
+
+  /* MCU reg 0x22, bit 0: power the LCDs off first (prevents MCU hangs). -- GodMode9 */
+  I2C_writeReg(I2C_DEV_MCU, 0x22, 1 << 0);
+  arm9_drain_write_buffer(); /* == ARM_DSB() in GodMode9's PowerOff() */
+
+  /* MCU reg 0x20, bit 0: cut system power (bit 2 would reboot instead). -- GodMode9 */
+  I2C_writeReg(I2C_DEV_MCU, 0x20, 1 << 0);
+
+  /* Should never reach here; wait for the power to drop. */
   while (1) {
     __asm__ volatile("mcr p15, 0, r0, c7, c0, 4");
   }
@@ -200,75 +219,22 @@ static void draw_home_screen(int selection) {
 }
 
 int ui_power_off_confirm(void) {
+  /* Power off is now instant: no countdown, no cancel. We just paint a brief
+     "Powering off..." splash and return 0 (0 = proceed, never cancelled) so
+     the caller shuts down immediately. */
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BG_DARK);
 
   int icon_x = (BOT_SCREEN_WIDTH - ICON_SIZE) / 2;
-  int icon_y = 50;
+  int icon_y = 70;
   draw_icon_32(VRAM_BOT_A, icon_x, icon_y, BOT_SCREEN_HEIGHT,
                icon_power_bits, COLOR_RED);
 
-  
   const char *msg1 = "Powering off...";
   int msg1_len = (int)str_len(msg1);
   int msg1_x = (BOT_SCREEN_WIDTH - msg1_len * FONT_WIDTH) / 2;
-  draw_string(VRAM_BOT_A, msg1_x, 100, BOT_SCREEN_HEIGHT, msg1, COLOR_WHITE,
-              COLOR_BG_DARK);
-
-  
-  const char *msg2 = "Hold X to cancel";
-  int msg2_len = (int)str_len(msg2);
-  int msg2_x = (BOT_SCREEN_WIDTH - msg2_len * FONT_WIDTH) / 2;
-  draw_string(VRAM_BOT_A, msg2_x, 120, BOT_SCREEN_HEIGHT, msg2, COLOR_YELLOW,
+  draw_string(VRAM_BOT_A, msg1_x, 120, BOT_SCREEN_HEIGHT, msg1, COLOR_WHITE,
               COLOR_BG_DARK);
   screen_present_bottom();
-
-  int bar_y = 160;
-  int bar_h = 8;
-  int bar_w = 200;
-  int bar_x = (BOT_SCREEN_WIDTH - bar_w) / 2;
-
-  draw_filled_rect(VRAM_BOT_A, bar_x, bar_y, bar_w, bar_h, BOT_SCREEN_HEIGHT,
-                   COLOR_DARK_GRAY);
-
-  #define COUNTDOWN_STEPS 250
-  #define DELAY_PER_STEP  500000
-
-  for (int i = 0; i < COUNTDOWN_STEPS; i++) {
-    u32 keys = get_keys();
-    if (keys & BUTTON_B) {
-      const char *cancel_msg = "Cancelled!";
-      int cancel_len = (int)str_len(cancel_msg);
-      int cancel_x = (BOT_SCREEN_WIDTH - cancel_len * FONT_WIDTH) / 2;
-
-      draw_filled_rect(VRAM_BOT_A, 0, 100, BOT_SCREEN_WIDTH, 80,
-                       BOT_SCREEN_HEIGHT, COLOR_BG_DARK);
-      draw_string(VRAM_BOT_A, cancel_x, 120, BOT_SCREEN_HEIGHT, cancel_msg,
-                  COLOR_GREEN, COLOR_BG_DARK);
-      screen_present_bottom();
-      delay(30000000);
-      return 1;
-    }
-
-    int fill_w = bar_w - (i * bar_w / COUNTDOWN_STEPS);
-
-    draw_filled_rect(VRAM_BOT_A, bar_x, bar_y, bar_w, bar_h, BOT_SCREEN_HEIGHT,
-                     COLOR_DARK_GRAY);
-
-    if (fill_w > 0) {
-      draw_filled_rect(VRAM_BOT_A, bar_x, bar_y, fill_w, bar_h,
-                       BOT_SCREEN_HEIGHT, COLOR_RED);
-    }
-
-    int secs_left = 5 - (i * 5 / COUNTDOWN_STEPS);
-    char sec_str[] = "  ";
-    sec_str[0] = '0' + (char)secs_left;
-    int sec_x = (BOT_SCREEN_WIDTH - 1 * FONT_WIDTH) / 2;
-    draw_string(VRAM_BOT_A, sec_x, bar_y + bar_h + 8, BOT_SCREEN_HEIGHT,
-                sec_str, COLOR_WHITE, COLOR_BG_DARK);
-    screen_present_bottom();
-
-    delay(DELAY_PER_STEP);
-  }
 
   return 0;
 }
