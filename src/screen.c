@@ -31,10 +31,18 @@ void screen_present_top(void) {}
 void screen_present_bottom(void) {}
 
 void clear_screen(volatile u8 *fb, u32 fb_size, Color color) {
-  for (u32 i = 0; i < fb_size; i += 3) {
-    fb[i + 0] = color.b;
-    fb[i + 1] = color.g;
-    fb[i + 2] = color.r;
+  /* Fill the framebuffer with a repeating 32-bit pattern. */
+  u32 b = color.b, g = color.g, r = color.r;
+  u32 w0 = b | (g << 8) | (r << 16) | (b << 24);
+  u32 w1 = g | (r << 8) | (b << 16) | (g << 24);
+  u32 w2 = r | (b << 8) | (g << 16) | (r << 24);
+  volatile u32 *p = (volatile u32 *)fb;
+  volatile u32 *end = p + (fb_size >> 2);
+  while (p < end) {
+    p[0] = w0;
+    p[1] = w1;
+    p[2] = w2;
+    p += 3;
   }
 }
 
@@ -97,16 +105,41 @@ void draw_aurora_logo(volatile u8 *fb, int x0, int y0, int screen_height,
 
 void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h,
                       int screen_height, Color color) {
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (y + h > screen_height)
+    h = screen_height - y;
+  if (w <= 0 || h <= 0)
+    return;
+
+  u8 b = color.b, g = color.g, r = color.r;
+  /* Store one offset per column to avoid multiplying inside the inner loop. */
   for (int px = x; px < x + w; px++) {
-    for (int py = y; py < y + h; py++) {
-      draw_pixel(fb, px, py, screen_height, color);
+    volatile u8 *p = fb + ((px * screen_height) + (screen_height - 1 - y)) * 3;
+    for (int i = 0; i < h; i++) {
+      p[0] = b;
+      p[1] = g;
+      p[2] = r;
+      p -= 3;
     }
   }
 }
 
-/* Filled rounded rectangle. Corners are quarter-circles of the given radius;
-   a pixel in a corner region is drawn only if it falls inside that corner's
-   circle (center inset by `radius` from the two nearest edges). */
+/* Fill one rounded corner using a simple circle test. */
+static void fill_corner(volatile u8 *fb, int bx, int by, int r, int cx0,
+                        int cy0, int screen_height, Color color) {
+  int r2 = r * r;
+  for (int cy = by; cy < by + r; cy++) {
+    for (int cx = bx; cx < bx + r; cx++) {
+      int ex = cx - cx0, ey = cy - cy0;
+      if (ex * ex + ey * ey <= r2)
+        draw_pixel(fb, cx, cy, screen_height, color);
+    }
+  }
+}
+
 void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h,
                             int radius, int screen_height, Color color) {
   if (radius < 0)
@@ -116,30 +149,20 @@ void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h,
   if (radius > h / 2)
     radius = h / 2;
 
-  for (int dy = 0; dy < h; dy++) {
-    for (int dx = 0; dx < w; dx++) {
-      int ccx = -1, ccy = -1; /* nearest corner circle center, if any */
-      if (dx < radius && dy < radius) {
-        ccx = radius;
-        ccy = radius;
-      } else if (dx >= w - radius && dy < radius) {
-        ccx = w - 1 - radius;
-        ccy = radius;
-      } else if (dx < radius && dy >= h - radius) {
-        ccx = radius;
-        ccy = h - 1 - radius;
-      } else if (dx >= w - radius && dy >= h - radius) {
-        ccx = w - 1 - radius;
-        ccy = h - 1 - radius;
-      }
-      if (ccx >= 0) {
-        int ex = dx - ccx;
-        int ey = dy - ccy;
-        if (ex * ex + ey * ey > radius * radius)
-          continue; /* outside the rounded corner */
-      }
-      draw_pixel(fb, x + dx, y + dy, screen_height, color);
-    }
+  draw_filled_rect(fb, x + radius, y, w - 2 * radius, h, screen_height, color);
+  draw_filled_rect(fb, x, y + radius, radius, h - 2 * radius, screen_height,
+                   color);
+  draw_filled_rect(fb, x + w - radius, y + radius, radius, h - 2 * radius,
+                   screen_height, color);
+
+  if (radius > 0) {
+    fill_corner(fb, x, y, radius, x + radius, y + radius, screen_height, color);
+    fill_corner(fb, x + w - radius, y, radius, x + w - 1 - radius, y + radius,
+                screen_height, color);
+    fill_corner(fb, x, y + h - radius, radius, x + radius, y + h - 1 - radius,
+                screen_height, color);
+    fill_corner(fb, x + w - radius, y + h - radius, radius, x + w - 1 - radius,
+                y + h - 1 - radius, screen_height, color);
   }
 }
 
@@ -151,6 +174,19 @@ void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height,
       int bit_idx = 7 - (col % 8);
       if (icon_bits[byte_idx] & (1 << bit_idx)) {
         draw_pixel(fb, x + col, y + row, screen_height, color);
+      }
+    }
+  }
+}
+
+void draw_icon_scaled(volatile u8 *fb, int x, int y, int screen_height,
+                      const unsigned char *icon_bits, Color color, int scale) {
+  for (int row = 0; row < ICON_SIZE; row++) {
+    for (int col = 0; col < ICON_SIZE; col++) {
+      int byte_idx = row * ICON_ROW_BYTES + (col / 8);
+      if (icon_bits[byte_idx] & (0x80 >> (col % 8))) {
+        draw_filled_rect(fb, x + col * scale, y + row * scale, scale, scale,
+                         screen_height, color);
       }
     }
   }

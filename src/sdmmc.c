@@ -1,39 +1,22 @@
-/*
- * Minimal read-only SD card driver (ARM9).
- *
- * This is a trimmed rewrite of GodMode9's SD driver
- * (arm9/source/nand/sdmmc.c, originally by Normmatt, (c) 2014-2015). The
- * controller-register configuration, the SD command encodings (e.g. 0x33C12
- * for READ_MULTIPLE_BLOCK) and the init sequence are taken straight from there
- * because that is the proven, known-good path for this hardware. Everything
- * marked "from GodMode9" is a direct port. The NAND/eMMC handle and the write
- * path were removed -- the AuroraOS loader only reads blocks off the SD card.
- *   Reference: https://github.com/d0k3/GodMode9
- */
 #include "sdmmc.h"
 
 static mmcdevice handleSD;
 
-/* Coarse millisecond busy-wait built on AuroraOS's delay(). The exact figure
-   is not critical -- every caller here only needs a lower bound, so
-   over-waiting is fine. */
+/* Coarse millisecond wait, enough for the controller polling loops. */
 static void sdmmc_wait_ms(u32 ms) {
     while (ms--)
         delay(40000);
 }
 
-/* --- from GodMode9 sdmmc.h (moved here as a private helper) --- */
 static void setckl(u32 data) {
     sdmmc_write16(REG_SDCLKCTL, data & 0xFF);
     sdmmc_write16(REG_SDCLKCTL, (1u << 8) | (data & 0x2FF));
 }
 
-/* from GodMode9 sdmmc.c */
 static int get_error(mmcdevice *ctx) {
     return (int)((ctx->error << 29) >> 31);
 }
 
-/* from GodMode9 sdmmc.c */
 static void set_target(mmcdevice *ctx) {
     sdmmc_mask16(REG_SDPORTSEL, 0x3, (u16)ctx->devicenumber);
     setckl(ctx->clk);
@@ -43,14 +26,7 @@ static void set_target(mmcdevice *ctx) {
         sdmmc_mask16(REG_SDOPT, 0x8000, 0); /* 4-bit bus */
 }
 
-/* from GodMode9 sdmmc.c -- issues a command and, for data commands, PIO-copies
-   the payload through the 32-bit FIFO. Encoding of `cmd`:
-     bits [0:15] -> hardware SDCMD register (index + response + data flags)
-     bit  16     -> command has a response (read the RESP registers)
-     bit  17     -> read  data phase
-     bit  18     -> write data phase
-   Only the read path is exercised by AuroraOS; the write branch is kept intact
-   from the reference but never reached here. */
+/* Send an SD command and copy any read/write data through the FIFO. */
 static void sdmmc_send_command(mmcdevice *ctx, u32 cmd, u32 args) {
     const bool getSDRESP = (cmd << 15) >> 31;
     u16 flags = (u16)((cmd << 15) >> 31);
@@ -155,7 +131,6 @@ static void sdmmc_send_command(mmcdevice *ctx, u32 cmd, u32 args) {
     }
 }
 
-/* from GodMode9 sdmmc.c -- decode capacity (in sectors) from the CSD. */
 static u32 sdmmc_calc_size(u8 *csd, int type) {
     u32 result = 0;
     if (type == -1)
@@ -183,7 +158,6 @@ static u32 sdmmc_calc_size(u8 *csd, int type) {
     return result;
 }
 
-/* from GodMode9 sdmmc.c (SD half of sdmmc_init) -- configure the controller. */
 static void sdmmc_controller_init(void) {
     handleSD.isSDHC = 0;
     handleSD.SDOPT = 0;

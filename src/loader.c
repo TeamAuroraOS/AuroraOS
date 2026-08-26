@@ -108,7 +108,7 @@ void boot_aurora(void) {
     return;
   }
 
-  /* --- ARM9 payload --- */
+  /* ARM9 payload. */
   p = lcpy(line, "ARM9 ");
   p = ldec(p, (int)hdr.arm9_size);
   p = lcpy(p, "B -> ");
@@ -129,7 +129,7 @@ void boot_aurora(void) {
   lhex32(p, *(volatile u32 *)hdr.arm9_load_addr);
   loader_line(line, COLOR_LIGHT_GRAY);
 
-  /* --- optional ARM11 payload --- */
+  /* Optional ARM11 payload. */
   if (hdr.arm11_size) {
     p = lcpy(line, "ARM11 ");
     p = ldec(p, (int)hdr.arm11_size);
@@ -156,7 +156,7 @@ void boot_aurora(void) {
   p = lcpy(line, "Jumping -> ");
   lhex32(p, hdr.arm9_entry);
   loader_line(line, COLOR_GREEN);
-  delay(20000000); /* let the status be visible for a moment */
+  delay(20000000); /* Keep the status on screen briefly. */
 
-  aurora_jump_arm9(hdr.arm9_entry); /* never returns */
+  aurora_jump_arm9(hdr.arm9_entry); /* Never returns. */
 }

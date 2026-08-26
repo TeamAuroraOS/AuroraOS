@@ -22,11 +22,11 @@ static inline void arm9_drain_write_buffer(void) {
 void power_off(void) {
   I2C_init();
 
-  /* MCU reg 0x22, bit 0: power the LCDs off first (prevents MCU hangs). -- GodMode9 */
+  /* Power the LCDs off before cutting system power. */
   I2C_writeReg(I2C_DEV_MCU, 0x22, 1 << 0);
-  arm9_drain_write_buffer(); /* == ARM_DSB() in GodMode9's PowerOff() */
+  arm9_drain_write_buffer(); /* Match the ARM DSB sequence used by GodMode9. */
 
-  /* MCU reg 0x20, bit 0: cut system power (bit 2 would reboot instead). -- GodMode9 */
+  /* Cut power to the console; bit 2 would trigger a reboot. */
   I2C_writeReg(I2C_DEV_MCU, 0x20, 1 << 0);
 
   while (1) {
@@ -128,7 +128,7 @@ static void draw_splash_screen(void) {
   draw_aurora_logo(VRAM_TOP_LA, logo_x, logo_y, TOP_SCREEN_HEIGHT,
                    COLOR_WHITE);
 
-  const char *version = "v0.0.5 - Initial Build";
+  const char *version = "v0.0.6 - Initial Build";
   int ver_len = (int)str_len(version);
   int ver_x = (TOP_SCREEN_WIDTH - ver_len * FONT_WIDTH) / 2;
   int ver_y = 165;
@@ -137,9 +137,7 @@ static void draw_splash_screen(void) {
               ver_color);
 }
 
-/* Firm launcher home screen: three tiles -- Boot (loads AURORAOS.BIN, the OS),
-   Power (off), and Settings. The full Home Menu UI lives in the OS payload
-   (src/os/), not here. */
+/* Launcher tile layout for the three main actions. */
 #define TILE_SIZE       80
 #define TILE_Y          70
 #define TILE_GAP        16
