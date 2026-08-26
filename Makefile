@@ -43,7 +43,7 @@ ARM9_CFLAGS := $(ARM9_ARCH) \
                -nostdlib \
                -nostartfiles \
                -Wall -Wextra \
-               -g -O0 \
+               -g -O2 \
                -I$(INC_DIR)
 
 ARM9_ASFLAGS := $(ARM9_ARCH) -mthumb-interwork
@@ -124,7 +124,8 @@ rebuild: clean all
 OS_DIR  := src/os
 OS_LD   := $(OS_DIR)/os.ld
 OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
-           $(BUILD_DIR)/os_screen.o $(BUILD_DIR)/os_i2c.o
+           $(BUILD_DIR)/os_screen.o $(BUILD_DIR)/os_i2c.o \
+           $(BUILD_DIR)/os_string.o
 
 $(BUILD_DIR)/os_start.o: $(OS_DIR)/os_start.s | dirs
 	@echo [AS9 ] Assembling $<
@@ -139,6 +140,10 @@ $(BUILD_DIR)/os_screen.o: $(SRC_DIR)/screen.c $(wildcard $(INC_DIR)/*.h) | dirs
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_i2c.o: $(SRC_DIR)/i2c.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_string.o: $(SRC_DIR)/string.c | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
