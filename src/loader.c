@@ -1,13 +1,3 @@
-/* Coded By DisLoPik for the AuroraOS Project. */
-/*
- * "Boot Aurora" loader (Phase 6).
- *
- * Reads AURORAOS.BIN (an AOS1 container, see include/loader.h) off the SD card,
- * copies the ARM9 (and optional ARM11) payload to its load address, hands the
- * ARM11 its entry point via the shared mailbox, then flushes caches and jumps
- * into the ARM9 payload. Every step prints a status line so a failure shows
- * where it happened instead of a black screen.
- */
 #include "aurora.h"
 #include "ff.h"
 #include "loader.h"
@@ -15,13 +5,12 @@
 static FATFS loader_fs;
 static FIL loader_file;
 
-/* --- small self-contained formatting helpers --- */
 static char *lcpy(char *dst, const char *src) {
   while ((*dst = *src)) {
     dst++;
     src++;
   }
-  return dst; /* -> terminating NUL */
+  return dst;
 }
 
 static char *ldec(char *p, int v) {
@@ -52,7 +41,6 @@ static char *lhex32(char *p, u32 v) {
   return p;
 }
 
-/* Current write cursor for status lines. */
 static int loader_y;
 
 static void loader_line(const char *msg, Color color) {
@@ -62,7 +50,6 @@ static void loader_line(const char *msg, Color color) {
   screen_present_bottom();
 }
 
-/* Draw a "B: Back" prompt and block until B is pressed, then unmount. */
 static void loader_wait_back(void) {
   draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 18, BOT_SCREEN_HEIGHT,
               "B: Back", COLOR_LIGHT_GRAY, COLOR_BG_DARK);
@@ -72,7 +59,7 @@ static void loader_wait_back(void) {
       break;
     delay(60000);
   }
-  f_mount(NULL, "", 0); /* unmount */
+  f_mount(NULL, "", 0);
 }
 
 void boot_aurora(void) {
@@ -168,7 +155,7 @@ void boot_aurora(void) {
   }
 
   f_close(&loader_file);
-  f_mount(NULL, "", 0); /* unmount before leaving FatFs behind */
+  f_mount(NULL, "", 0);
 
   p = lcpy(line, "Jumping -> ");
   lhex32(p, hdr.arm9_entry);

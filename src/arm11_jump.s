@@ -1,4 +1,3 @@
-/* Coded By DisLoPik for the AuroraOS Project. */
 /*
  * ARM11 (MPCore, ARMv6K) cache-flush + branch stub.
  *
@@ -14,7 +13,6 @@
 .global aurora_jump_arm11
 .type aurora_jump_arm11, %function
 
-@ void aurora_jump_arm11(uint32_t entry);  -- r0 = entry point, never returns
 aurora_jump_arm11:
     mov     r12, r0
     mov     r0, #0

@@ -17,8 +17,6 @@
 #define AOS_MAGIC "AOS1" /* first 4 bytes of the file, not NUL-terminated */
 
 /*
- * Phase 4 -- load addresses for a booted payload.
- *
  * The running loader lives in ARM9 internal RAM (0x08006800..0x08100000, see
  * arm9.ld) and ARM11 AXIWRAM (0x1FF80000..0x20000000, see arm11.ld). FCRAM
  * (0x20000000+) is untouched by the loader, so payloads are copied there. These

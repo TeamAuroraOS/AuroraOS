@@ -1,4 +1,3 @@
-/* Coded By DisLoPik for the AuroraOS Project. */
 /*
  * ARM9 (ARM946E-S) cache-flush + branch stub for the loader.
  *
@@ -15,7 +14,6 @@
 .global aurora_jump_arm9
 .type aurora_jump_arm9, %function
 
-@ void aurora_jump_arm9(uint32_t entry);  -- r0 = entry point, never returns
 aurora_jump_arm9:
     mov     r12, r0                 @ preserve the entry point
 

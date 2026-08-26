@@ -1,6 +1,5 @@
-/* Coded By DisLoPik for the AuroraOS Project. */
 /*
- * Throwaway ARM9 test payload (Phase 7).
+ * ARM9 test payload.
  *
  * The smallest thing that proves the whole loader pipeline end to end: it fills
  * both 3DS framebuffers with solid green, then spins. If "Boot Aurora" turns the

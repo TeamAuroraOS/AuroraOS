@@ -117,8 +117,6 @@ clean:
 
 rebuild: clean all
 
-# Phase 7 throwaway test payload -> AURORAOS.BIN at the repo root (kept out of
-# output/ so `make clean` doesn't wipe it). Copy the result to the SD card root.
 TESTPAYLOAD_DIR := tools/testpayload
 
 testpayload: dirs

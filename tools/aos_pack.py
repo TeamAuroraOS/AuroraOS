@@ -28,11 +28,11 @@ assert HEADER_SIZE == 36
 
 # Memory regions the running loader itself occupies (from arm9.ld / arm11.ld).
 # A loaded payload must NOT be placed on top of these, or it clobbers the code
-# doing the copy. Used only for a soft warning here -- Phase 4 finalizes addrs.
+# doing the copy. Used only for a soft warning.
 LOADER_ARM9_RANGE = (0x08006800, 0x08100000)
 LOADER_ARM11_RANGE = (0x1FF80000, 0x20000000)
 
-# Provisional defaults (FCRAM, well clear of the loader). Phase 4 finalizes.
+# Default payload addresses in FCRAM, well clear of the loader.
 DEFAULT_ARM9_LOAD = 0x22000000
 DEFAULT_ARM11_LOAD = 0x24000000
 
