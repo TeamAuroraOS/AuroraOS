@@ -146,8 +146,11 @@ static void draw_splash_screen(void) {
               ver_color);
 }
 
+/* Firm launcher home screen: three tiles -- Boot (loads AURORAOS.BIN, the OS),
+   Power (off), and Settings. The full Home Menu UI lives in the OS payload
+   (src/os/), not here. */
 #define TILE_SIZE       80
-#define TILE_Y          70  
+#define TILE_Y          70
 #define TILE_GAP        16
 #define TILE_TOTAL_W    (TILE_SIZE * 3 + TILE_GAP * 2)
 #define TILE_X_START    ((BOT_SCREEN_WIDTH - TILE_TOTAL_W) / 2)
@@ -171,14 +174,12 @@ static void draw_tile(int x, int y, Color bg_color,
                      BOT_SCREEN_HEIGHT, COLOR_WHITE);
   }
 
-  draw_filled_rect(fb, x, y, TILE_SIZE, TILE_SIZE, BOT_SCREEN_HEIGHT,
-                   bg_color);
+  draw_filled_rect(fb, x, y, TILE_SIZE, TILE_SIZE, BOT_SCREEN_HEIGHT, bg_color);
 
   int icon_x = x + (TILE_SIZE - ICON_SIZE) / 2;
-  int icon_y = y + (TILE_SIZE - ICON_SIZE) / 2 - 6; 
+  int icon_y = y + (TILE_SIZE - ICON_SIZE) / 2 - 6;
   draw_icon_32(fb, icon_x, icon_y, BOT_SCREEN_HEIGHT, icon_bits, COLOR_WHITE);
 
-  
   int label_len = (int)str_len(label);
   int label_x = x + (TILE_SIZE - label_len * FONT_WIDTH) / 2;
   int label_y = y + TILE_SIZE - FONT_HEIGHT - 6;
@@ -189,23 +190,20 @@ static void draw_tile(int x, int y, Color bg_color,
 void ui_draw_home_screen(void) { draw_home_screen(0); }
 
 static void draw_home_screen(int selection) {
-  
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BG_DARK);
 
-  const char *title = "Aurora OS";
+  const char *title = "Aurora Launcher";
   int title_len = (int)str_len(title);
   int title_x = (BOT_SCREEN_WIDTH - title_len * FONT_WIDTH) / 2;
   draw_string(VRAM_BOT_A, title_x, 16, BOT_SCREEN_HEIGHT, title, COLOR_AURORA,
               COLOR_BG_DARK);
 
-  
   const char *subtitle = "Select an option";
   int sub_len = (int)str_len(subtitle);
   int sub_x = (BOT_SCREEN_WIDTH - sub_len * FONT_WIDTH) / 2;
   draw_string(VRAM_BOT_A, sub_x, 32, BOT_SCREEN_HEIGHT, subtitle,
               COLOR_LIGHT_GRAY, COLOR_BG_DARK);
 
-  
   draw_tile(TILE_BOOT_X, TILE_Y, COLOR_BLUE, icon_boot_bits, "Boot",
             selection == 0);
   draw_tile(TILE_POWER_X, TILE_Y, COLOR_RED, icon_power_bits, "Power",
@@ -213,7 +211,6 @@ static void draw_home_screen(int selection) {
   draw_tile(TILE_SETTINGS_X, TILE_Y, COLOR_DARK_GRAY, icon_settings_bits,
             "Settings", selection == 2);
 
-  
   const char *hint2 = "A:OK  START:SD  SELECT:FS";
   int hint2_len = (int)str_len(hint2);
   int hint2_x = (BOT_SCREEN_WIDTH - hint2_len * FONT_WIDTH) / 2;
@@ -519,11 +516,8 @@ void ui_fs_test(void) {
 }
 
 int main(void) {
-
   screen_init();
-
   draw_splash_screen();
-
   set_brightness((u32)current_brightness);
 
   int selection = 0;
@@ -532,7 +526,6 @@ int main(void) {
   while (1) {
     u32 kdown = get_keys_down();
 
-    
     if (kdown & BUTTON_DLEFT) {
       if (selection > 0) {
         selection--;
@@ -549,14 +542,12 @@ int main(void) {
 
     if (kdown & BUTTON_A) {
       if (selection == 0) {
-        /* Boot Aurora: load AURORAOS.BIN and jump. Returns only on error. */
+        /* Boot Aurora: load AURORAOS.BIN (the OS) and jump into it. */
         boot_aurora();
         draw_home_screen(selection);
       } else if (selection == 1) {
-        int cancelled = ui_power_off_confirm();
-        if (!cancelled) {
+        if (!ui_power_off_confirm())
           power_off();
-        }
         draw_home_screen(selection);
       } else if (selection == 2) {
         ui_settings_menu();

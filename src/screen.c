@@ -104,6 +104,45 @@ void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h,
   }
 }
 
+/* Filled rounded rectangle. Corners are quarter-circles of the given radius;
+   a pixel in a corner region is drawn only if it falls inside that corner's
+   circle (center inset by `radius` from the two nearest edges). */
+void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h,
+                            int radius, int screen_height, Color color) {
+  if (radius < 0)
+    radius = 0;
+  if (radius > w / 2)
+    radius = w / 2;
+  if (radius > h / 2)
+    radius = h / 2;
+
+  for (int dy = 0; dy < h; dy++) {
+    for (int dx = 0; dx < w; dx++) {
+      int ccx = -1, ccy = -1; /* nearest corner circle center, if any */
+      if (dx < radius && dy < radius) {
+        ccx = radius;
+        ccy = radius;
+      } else if (dx >= w - radius && dy < radius) {
+        ccx = w - 1 - radius;
+        ccy = radius;
+      } else if (dx < radius && dy >= h - radius) {
+        ccx = radius;
+        ccy = h - 1 - radius;
+      } else if (dx >= w - radius && dy >= h - radius) {
+        ccx = w - 1 - radius;
+        ccy = h - 1 - radius;
+      }
+      if (ccx >= 0) {
+        int ex = dx - ccx;
+        int ey = dy - ccy;
+        if (ex * ex + ey * ey > radius * radius)
+          continue; /* outside the rounded corner */
+      }
+      draw_pixel(fb, x + dx, y + dy, screen_height, color);
+    }
+  }
+}
+
 void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height,
                   const unsigned char *icon_bits, Color color) {
   for (int row = 0; row < ICON_SIZE; row++) {
