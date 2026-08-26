@@ -3,31 +3,15 @@
 
 #include <stdint.h>
 
-/*
- * AuroraOS bootable container format ("AOS1").
- *
- * A packaged payload is simply:
- *     [ aos_header_t ][ arm9 payload ][ arm11 payload ]
- *
- * The header records where each payload sits in the file (offset/size) and
- * where it must be copied and jumped to in memory. This layout MUST stay in
- * sync with the host packer, tools/aos_pack.py.
- */
+/* AuroraOS bootable container format ("AOS1"). */
 
 #define AOS_MAGIC "AOS1" /* first 4 bytes of the file, not NUL-terminated */
 
-/*
- * The running loader lives in ARM9 internal RAM (0x08006800..0x08100000, see
- * arm9.ld) and ARM11 AXIWRAM (0x1FF80000..0x20000000, see arm11.ld). FCRAM
- * (0x20000000+) is untouched by the loader, so payloads are copied there. These
- * must match the defaults in tools/aos_pack.py and the test payload's linker
- * script. The loader still copies to whatever the packed header says.
- */
+/* Loader memory ranges are kept clear of payload loads. */
 #define AOS_ARM9_LOAD_ADDR  0x22000000u /* FCRAM, 32 MB clear of ARM11 slot */
 #define AOS_ARM11_LOAD_ADDR 0x24000000u /* FCRAM */
 
-/* Fixed FCRAM word the ARM9 loader writes with the ARM11 entry point to wake
-   the ARM11 spin loop. MUST match ARM11_MAILBOX in src/arm11_start.s. */
+/* ARM11 wakeup mailbox. Must match src/arm11_start.s. */
 #define AOS_ARM11_MAILBOX   0x27000000u
 
 typedef struct {
@@ -42,19 +26,13 @@ typedef struct {
   uint32_t arm11_entry;
 } aos_header_t;
 
-/* The packer writes exactly this many bytes for the header. */
 _Static_assert(sizeof(aos_header_t) == 36,
                "aos_header_t must be 36 bytes to match tools/aos_pack.py");
 
-/* Load "AURORAOS.BIN" from the SD card, copy its payloads into place and jump.
-   The 8.3 file name is required because FatFs is built with long file names
-   disabled. Returns only on error (bad/missing file); on success it never
-   returns -- control passes to the loaded payload. */
+/* Load AURORAOS.BIN from the SD card and jump into the ARM9 payload. */
 void boot_aurora(void);
 
-/* ARM9 cache-flush + branch stub (src/arm9_jump.s). Cleans the data cache,
-   invalidates the instruction cache, masks interrupts and branches to entry.
-   Never returns. */
+/* ARM9 cache-flush + branch stub. */
 void aurora_jump_arm9(uint32_t entry);
 
 #endif /* AURORA_LOADER_H */

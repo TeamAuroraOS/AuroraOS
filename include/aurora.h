@@ -98,6 +98,7 @@ void draw_aurora_logo(volatile u8 *fb, int x0, int y0, int screen_height, Color 
 void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h, int screen_height, Color color);
 void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h, int radius, int screen_height, Color color);
 void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height, const unsigned char *icon_bits, Color color);
+void draw_icon_scaled(volatile u8 *fb, int x, int y, int screen_height, const unsigned char *icon_bits, Color color, int scale);
 
 void console_init(void);
 void console_print(const char *str);

@@ -257,9 +257,8 @@
 
 
 #define FF_FS_NOFSINFO	0
-/* If you need to know the correct free space on the FAT32 volume, set bit 0 of
-/  this option, and f_getfree() on the first time after volume mount will force
-/  a full FAT scan. Bit 1 controls the use of last allocated cluster number.
+/* Bit 0 forces a full FAT scan to refresh free-space tracking. Bit 1 controls
+/  whether the last allocated cluster number is trusted from the FSINFO block.
 /
 /  bit0=0: Use free cluster count in the FSINFO if available.
 /  bit0=1: Do not trust free cluster count in the FSINFO.
