@@ -58,7 +58,7 @@ ARM9_ENTRY      := 0x08006800
 ARM11_LOAD_ADDR := 0x1FF80000
 ARM11_ENTRY     := 0x1FF80000
 
-.PHONY: all clean rebuild dirs testpayload
+.PHONY: all clean rebuild dirs os greentest
 
 all: dirs $(FIRM)
 	@echo ""
@@ -117,14 +117,44 @@ clean:
 
 rebuild: clean all
 
-TESTPAYLOAD_DIR := tools/testpayload
+# ---- AuroraOS payload (AURORAOS.BIN) ----------------------------------------
+# The real OS: the Home Menu, built standalone at 0x22000000 and packed into
+# AURORAOS.BIN (repo root, so `make clean` doesn't wipe it). Copy it to the SD
+# card root; the launcher firm's "Boot" tile loads it.
+OS_DIR  := src/os
+OS_LD   := $(OS_DIR)/os.ld
+OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
+           $(BUILD_DIR)/os_screen.o $(BUILD_DIR)/os_i2c.o
 
-testpayload: dirs
-	@echo [AS9 ] Assembling $(TESTPAYLOAD_DIR)/payload.s
-	$(AS) $(ARM9_ARCH) -mthumb-interwork -c $(TESTPAYLOAD_DIR)/payload.s -o $(BUILD_DIR)/payload.o
-	@echo [LD9 ] Linking payload
-	$(LD) -T $(TESTPAYLOAD_DIR)/payload.ld -nostdlib -nostartfiles -Wl,--build-id=none $(BUILD_DIR)/payload.o -o $(BUILD_DIR)/payload.elf
-	$(OBJCOPY) -O binary $(BUILD_DIR)/payload.elf $(BUILD_DIR)/payload.bin
+$(BUILD_DIR)/os_start.o: $(OS_DIR)/os_start.s | dirs
+	@echo [AS9 ] Assembling $<
+	$(AS) $(ARM9_ASFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_main.o: $(OS_DIR)/os_main.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $<
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_screen.o: $(SRC_DIR)/screen.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_i2c.o: $(SRC_DIR)/i2c.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+os: $(OS_OBJS)
+	@echo [LD9 ] Linking AuroraOS payload
+	$(LD) -T $(OS_LD) -nostdlib -nostartfiles -Wl,--build-id=none -Wl,--gc-sections $(OS_OBJS) -o $(BUILD_DIR)/os.elf -lgcc
+	$(OBJCOPY) -O binary $(BUILD_DIR)/os.elf $(BUILD_DIR)/os.bin
 	@echo [PACK] Packing AURORAOS.BIN
-	python tools/aos_pack.py pack $(BUILD_DIR)/payload.bin -o AURORAOS.BIN --arm9-load 0x22000000
+	python tools/aos_pack.py pack $(BUILD_DIR)/os.bin -o AURORAOS.BIN --arm9-load 0x22000000
 	@echo "  -> AURORAOS.BIN (copy this to the SD card root)"
+
+# Debug filler payload (fills the screen green) -- handy for isolating loader
+# problems from OS problems. Outputs greentest.bin; rename to AURORAOS.BIN to boot it.
+greentest: dirs
+	$(AS) $(ARM9_ASFLAGS) -c tools/testpayload/payload.s -o $(BUILD_DIR)/payload.o
+	$(LD) -T tools/testpayload/payload.ld -nostdlib -nostartfiles -Wl,--build-id=none $(BUILD_DIR)/payload.o -o $(BUILD_DIR)/payload.elf
+	$(OBJCOPY) -O binary $(BUILD_DIR)/payload.elf $(BUILD_DIR)/payload.bin
+	python tools/aos_pack.py pack $(BUILD_DIR)/payload.bin -o greentest.bin --arm9-load 0x22000000
+	@echo "  -> greentest.bin"
