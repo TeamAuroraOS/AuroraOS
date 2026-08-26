@@ -17,8 +17,8 @@ C_SOURCES  := $(wildcard $(SRC_DIR)/*.c)
 S_SOURCES  := $(wildcard $(SRC_DIR)/*.s)
 
 ARM9_C_SRC := $(C_SOURCES)
-ARM9_S_SRC := $(SRC_DIR)/start.s
-ARM11_S_SRC := $(SRC_DIR)/arm11_start.s
+ARM9_S_SRC := $(SRC_DIR)/start.s $(SRC_DIR)/arm9_jump.s
+ARM11_S_SRC := $(SRC_DIR)/arm11_start.s $(SRC_DIR)/arm11_jump.s
 
 ARM9_C_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/arm9_%.o,$(ARM9_C_SRC))
 ARM9_S_OBJ := $(patsubst $(SRC_DIR)/%.s,$(BUILD_DIR)/arm9_%.o,$(ARM9_S_SRC))
@@ -58,7 +58,7 @@ ARM9_ENTRY      := 0x08006800
 ARM11_LOAD_ADDR := 0x1FF80000
 ARM11_ENTRY     := 0x1FF80000
 
-.PHONY: all clean rebuild dirs
+.PHONY: all clean rebuild dirs testpayload
 
 all: dirs $(FIRM)
 	@echo ""
@@ -116,3 +116,17 @@ clean:
 	@echo [CLEAN] Done.
 
 rebuild: clean all
+
+# Phase 7 throwaway test payload -> AURORAOS.BIN at the repo root (kept out of
+# output/ so `make clean` doesn't wipe it). Copy the result to the SD card root.
+TESTPAYLOAD_DIR := tools/testpayload
+
+testpayload: dirs
+	@echo [AS9 ] Assembling $(TESTPAYLOAD_DIR)/payload.s
+	$(AS) $(ARM9_ARCH) -mthumb-interwork -c $(TESTPAYLOAD_DIR)/payload.s -o $(BUILD_DIR)/payload.o
+	@echo [LD9 ] Linking payload
+	$(LD) -T $(TESTPAYLOAD_DIR)/payload.ld -nostdlib -nostartfiles -Wl,--build-id=none $(BUILD_DIR)/payload.o -o $(BUILD_DIR)/payload.elf
+	$(OBJCOPY) -O binary $(BUILD_DIR)/payload.elf $(BUILD_DIR)/payload.bin
+	@echo [PACK] Packing AURORAOS.BIN
+	python tools/aos_pack.py pack $(BUILD_DIR)/payload.bin -o AURORAOS.BIN --arm9-load 0x22000000
+	@echo "  -> AURORAOS.BIN (copy this to the SD card root)"

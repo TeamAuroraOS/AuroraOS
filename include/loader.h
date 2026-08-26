@@ -29,6 +29,10 @@
 #define AOS_ARM9_LOAD_ADDR  0x22000000u /* FCRAM, 32 MB clear of ARM11 slot */
 #define AOS_ARM11_LOAD_ADDR 0x24000000u /* FCRAM */
 
+/* Fixed FCRAM word the ARM9 loader writes with the ARM11 entry point to wake
+   the ARM11 spin loop. MUST match ARM11_MAILBOX in src/arm11_start.s. */
+#define AOS_ARM11_MAILBOX   0x27000000u
+
 typedef struct {
   char magic[4];          /* "AOS1" */
   uint32_t arm9_offset;   /* byte offset of the ARM9 payload within the file */
@@ -46,8 +50,14 @@ _Static_assert(sizeof(aos_header_t) == 36,
                "aos_header_t must be 36 bytes to match tools/aos_pack.py");
 
 /* Load "AURORAOS.BIN" from the SD card, copy its payloads into place and jump.
-   (Implemented in Phase 6.) The 8.3 file name is required because FatFs is
-   built with long file names disabled. */
+   The 8.3 file name is required because FatFs is built with long file names
+   disabled. Returns only on error (bad/missing file); on success it never
+   returns -- control passes to the loaded payload. */
 void boot_aurora(void);
+
+/* ARM9 cache-flush + branch stub (src/arm9_jump.s). Cleans the data cache,
+   invalidates the instruction cache, masks interrupts and branches to entry.
+   Never returns. */
+void aurora_jump_arm9(uint32_t entry);
 
 #endif /* AURORA_LOADER_H */

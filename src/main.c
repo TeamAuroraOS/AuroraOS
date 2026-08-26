@@ -6,6 +6,7 @@
 #include "ff.h"
 #include "i2c.h"
 #include "icons.h"
+#include "loader.h"
 #include "sdmmc.h"
 
 void delay(volatile u32 cycles) {
@@ -147,11 +148,13 @@ static void draw_splash_screen(void) {
 
 #define TILE_SIZE       80
 #define TILE_Y          70  
-#define TILE_GAP        40  
-#define TILE_TOTAL_W    (TILE_SIZE * 2 + TILE_GAP) 
-#define TILE_X_START    ((BOT_SCREEN_WIDTH - TILE_TOTAL_W) / 2) 
-#define TILE_POWER_X    TILE_X_START
-#define TILE_SETTINGS_X (TILE_X_START + TILE_SIZE + TILE_GAP)
+#define TILE_GAP        16
+#define TILE_TOTAL_W    (TILE_SIZE * 3 + TILE_GAP * 2)
+#define TILE_X_START    ((BOT_SCREEN_WIDTH - TILE_TOTAL_W) / 2)
+#define TILE_STEP       (TILE_SIZE + TILE_GAP)
+#define TILE_BOOT_X     TILE_X_START
+#define TILE_POWER_X    (TILE_X_START + TILE_STEP)
+#define TILE_SETTINGS_X (TILE_X_START + TILE_STEP * 2)
 
 #define SEL_BORDER 3
 
@@ -203,10 +206,12 @@ static void draw_home_screen(int selection) {
               COLOR_LIGHT_GRAY, COLOR_BG_DARK);
 
   
-  draw_tile(TILE_POWER_X, TILE_Y, COLOR_RED, icon_power_bits, "Power",
+  draw_tile(TILE_BOOT_X, TILE_Y, COLOR_BLUE, icon_boot_bits, "Boot",
             selection == 0);
+  draw_tile(TILE_POWER_X, TILE_Y, COLOR_RED, icon_power_bits, "Power",
+            selection == 1);
   draw_tile(TILE_SETTINGS_X, TILE_Y, COLOR_DARK_GRAY, icon_settings_bits,
-            "Settings", selection == 1);
+            "Settings", selection == 2);
 
   
   const char *hint2 = "A:OK  START:SD  SELECT:FS";
@@ -536,26 +541,25 @@ int main(void) {
     }
 
     if (kdown & BUTTON_DRIGHT) {
-      if (selection < 1) {
+      if (selection < 2) {
         selection++;
         draw_home_screen(selection);
       }
     }
 
-    
     if (kdown & BUTTON_A) {
       if (selection == 0) {
-        
+        /* Boot Aurora: load AURORAOS.BIN and jump. Returns only on error. */
+        boot_aurora();
+        draw_home_screen(selection);
+      } else if (selection == 1) {
         int cancelled = ui_power_off_confirm();
         if (!cancelled) {
           power_off();
         }
-        
         draw_home_screen(selection);
-      } else if (selection == 1) {
-        
+      } else if (selection == 2) {
         ui_settings_menu();
-
         draw_home_screen(selection);
       }
     }
