@@ -1,12 +1,3 @@
-/*
- * ARM11 (MPCore, ARMv6K) cache-flush + branch stub.
- *
- * Reached from the ARM11 spin loop once the ARM9 loader has posted an entry
- * point in the handoff mailbox. Unlike the ARM946E-S, ARMv6 has whole-cache
- * operations, so we can clean+invalidate the D-cache in one op, then invalidate
- * the I-cache and branch predictor before jumping. This path is only exercised
- * once an AOS1 image actually carries an ARM11 payload.
- */
 .section .text
 .arm
 .align 2

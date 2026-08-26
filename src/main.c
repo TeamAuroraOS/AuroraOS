@@ -15,18 +15,11 @@ void delay(volatile u32 cycles) {
   }
 }
 
-/* Drain the ARM9 write buffer (ARMv5TE equivalent of a DSB). Mirrors the
-   ARM_DSB() GodMode9 issues between the two MCU writes in PowerOff(). */
 static inline void arm9_drain_write_buffer(void) {
   __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
 }
 
 void power_off(void) {
-  /* Real 3DS power-off path, learned from GodMode9
-     (arm9/source/common/power.c, PowerOff()). The old version only poked the
-     GPIO registers at 0x1014_1xxx, which blanked the LCDs but never cut system
-     power -- hence "screen goes off but the system stays on". The console is
-     actually powered down by the MCU over I2C. */
   I2C_init();
 
   /* MCU reg 0x22, bit 0: power the LCDs off first (prevents MCU hangs). -- GodMode9 */
@@ -71,8 +64,6 @@ void set_brightness(u32 level) {
 }
 
 int sd_is_inserted(void) {
-  /* SIGSTATE (bit 5) reflects the card-detect signal on the SD controller.
-     SDMMC_BASE / REG_SDSTATUS0 / TMIO_STAT0_SIGSTATE now come from sdmmc.h. */
   return !(sdmmc_read16(REG_SDSTATUS0) & TMIO_STAT0_SIGSTATE);
 }
 

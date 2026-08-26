@@ -125,7 +125,6 @@ void boot_aurora(void) {
     return;
   }
 
-  /* Read back the first word so we can confirm the copy actually landed. */
   p = lcpy(line, "  first word: ");
   lhex32(p, *(volatile u32 *)hdr.arm9_load_addr);
   loader_line(line, COLOR_LIGHT_GRAY);
@@ -148,9 +147,6 @@ void boot_aurora(void) {
       loader_wait_back();
       return;
     }
-    /* Wake the ARM11 spin loop. aurora_jump_arm9()'s cache clean below flushes
-       both this mailbox word and the payload out to physical RAM before the
-       ARM11 can act on it. */
     *(volatile u32 *)AOS_ARM11_MAILBOX = hdr.arm11_entry;
   }
 

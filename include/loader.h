@@ -21,8 +21,7 @@
  * arm9.ld) and ARM11 AXIWRAM (0x1FF80000..0x20000000, see arm11.ld). FCRAM
  * (0x20000000+) is untouched by the loader, so payloads are copied there. These
  * must match the defaults in tools/aos_pack.py and the test payload's linker
- * script. The loader still copies to whatever the packed header says; these are
- * the known-good values we pack with.
+ * script. The loader still copies to whatever the packed header says.
  */
 #define AOS_ARM9_LOAD_ADDR  0x22000000u /* FCRAM, 32 MB clear of ARM11 slot */
 #define AOS_ARM11_LOAD_ADDR 0x24000000u /* FCRAM */

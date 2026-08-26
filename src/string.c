@@ -1,12 +1,3 @@
-/*
- * Freestanding libc string/memory helpers.
- *
- * AuroraOS builds with -ffreestanding -nostdlib, so newlib's libc is not
- * linked. FatFs (ff.c) uses memcpy/memset/memcmp/strchr/strlen, and GCC itself
- * may emit calls to memcpy/memset for aggregate copies, so we provide our own.
- * Signatures match <string.h>. -fno-builtin (and -O0) keep the compiler from
- * turning these loops back into calls to themselves.
- */
 #include <stddef.h>
 
 void *memcpy(void *dst, const void *src, size_t n) {

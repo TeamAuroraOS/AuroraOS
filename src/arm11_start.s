@@ -12,8 +12,6 @@ _start11:
     cpsid   aif
     ldr     sp, =_stack11_top
 
-    @ Clear the mailbox up front so uninitialised RAM can never trigger a bogus
-    @ jump. We then spin until the ARM9 side posts a real entry point.
     ldr     r0, =ARM11_MAILBOX
     mov     r1, #0
     str     r1, [r0]

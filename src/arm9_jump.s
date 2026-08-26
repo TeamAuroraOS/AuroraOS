@@ -1,13 +1,3 @@
-/*
- * ARM9 (ARM946E-S) cache-flush + branch stub for the loader.
- *
- * After the loader copies a payload into RAM, the freshly written bytes may
- * still sit in the ARM9 data cache while the instruction cache holds stale
- * lines. Before jumping we must WRITE BACK (clean) the data cache -- not just
- * invalidate it, or the copy is discarded -- then invalidate the instruction
- * cache. Cache sizes/ops for the 3DS ARM9 confirmed from GodMode9 common/arm.h
- * (ICACHE_SZ = DCACHE_SZ = 4096, 4-way, 32-byte lines).
- */
 .section .text
 .arm
 .align 2

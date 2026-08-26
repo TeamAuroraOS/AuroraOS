@@ -12,7 +12,6 @@
  */
 #include "sdmmc.h"
 
-/* The one device we care about: the SD card (controller port 0). */
 static mmcdevice handleSD;
 
 /* Coarse millisecond busy-wait built on AuroraOS's delay(). The exact figure
