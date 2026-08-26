@@ -1,11 +1,12 @@
 
 
-/* Coded By DisLoPik for the AuroraOS Project. */
 #include "aurora.h"
 #include "aurora_logo.h"
 #include "font.h"
+#include "ff.h"
 #include "i2c.h"
 #include "icons.h"
+#include "sdmmc.h"
 
 void delay(volatile u32 cycles) {
   while (cycles--) {
@@ -34,7 +35,6 @@ void power_off(void) {
   /* MCU reg 0x20, bit 0: cut system power (bit 2 would reboot instead). -- GodMode9 */
   I2C_writeReg(I2C_DEV_MCU, 0x20, 1 << 0);
 
-  /* Should never reach here; wait for the power to drop. */
   while (1) {
     __asm__ volatile("mcr p15, 0, r0, c7, c0, 4");
   }
@@ -69,11 +69,10 @@ void set_brightness(u32 level) {
   current_brightness = (int)level;
 }
 
-#define SDMMC_BASE 0x10006000
-#define REG_SDSTATUS0 (*(volatile u16 *)(SDMMC_BASE + 0x1C))
-
 int sd_is_inserted(void) {
-  return !(REG_SDSTATUS0 & (1 << 5));
+  /* SIGSTATE (bit 5) reflects the card-detect signal on the SD controller.
+     SDMMC_BASE / REG_SDSTATUS0 / TMIO_STAT0_SIGSTATE now come from sdmmc.h. */
+  return !(sdmmc_read16(REG_SDSTATUS0) & TMIO_STAT0_SIGSTATE);
 }
 
 int sd_init(void) {
@@ -210,7 +209,7 @@ static void draw_home_screen(int selection) {
             "Settings", selection == 1);
 
   
-  const char *hint2 = "D-Pad: Select   A: Confirm";
+  const char *hint2 = "A:OK  START:SD  SELECT:FS";
   int hint2_len = (int)str_len(hint2);
   int hint2_x = (BOT_SCREEN_WIDTH - hint2_len * FONT_WIDTH) / 2;
   draw_string(VRAM_BOT_A, hint2_x, BOT_SCREEN_HEIGHT - 20, BOT_SCREEN_HEIGHT,
@@ -219,9 +218,6 @@ static void draw_home_screen(int selection) {
 }
 
 int ui_power_off_confirm(void) {
-  /* Power off is now instant: no countdown, no cancel. We just paint a brief
-     "Powering off..." splash and return 0 (0 = proceed, never cancelled) so
-     the caller shuts down immediately. */
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BG_DARK);
 
   int icon_x = (BOT_SCREEN_WIDTH - ICON_SIZE) / 2;
@@ -321,7 +317,199 @@ void ui_settings_menu(void) {
       return; 
     }
 
-    delay(60000); 
+    delay(60000);
+  }
+}
+
+static char hex_nibble(u8 v) {
+  return (char)(v < 10 ? '0' + v : 'A' + (v - 10));
+}
+
+static char *str_cpy_ret(char *dst, const char *src) {
+  while ((*dst = *src)) {
+    dst++;
+    src++;
+  }
+  return dst;
+}
+
+static void int_to_str(int v, char *out) {
+  char tmp[12];
+  int i = 0;
+  unsigned uv = (v < 0) ? (unsigned)(-v) : (unsigned)v;
+  if (uv == 0)
+    tmp[i++] = '0';
+  while (uv) {
+    tmp[i++] = (char)('0' + (uv % 10));
+    uv /= 10;
+  }
+  int p = 0;
+  if (v < 0)
+    out[p++] = '-';
+  while (i)
+    out[p++] = tmp[--i];
+  out[p] = '\0';
+}
+
+static void build_hex_line(const u8 *data, int n, char *out) {
+  int p = 0;
+  for (int i = 0; i < n; i++) {
+    out[p++] = hex_nibble((u8)(data[i] >> 4));
+    out[p++] = hex_nibble((u8)(data[i] & 0xF));
+    out[p++] = ' ';
+  }
+  out[p] = '\0';
+}
+
+static u8 sd_test_buf[512];
+
+void ui_sd_test(void) {
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BG_DARK);
+
+  const char *title = "SD Card Test";
+  int title_len = (int)str_len(title);
+  int title_x = (BOT_SCREEN_WIDTH - title_len * FONT_WIDTH) / 2;
+  draw_string(VRAM_BOT_A, title_x, 8, BOT_SCREEN_HEIGHT, title, COLOR_AURORA,
+              COLOR_BG_DARK);
+  screen_present_bottom();
+
+  char line[48];
+  int y = 32;
+
+  int init_res = sdmmc_sdcard_init();
+  char *p = str_cpy_ret(line, "Init: ");
+  int_to_str(init_res, p);
+  draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line,
+              init_res == 0 ? COLOR_GREEN : COLOR_RED, COLOR_BG_DARK);
+  y += 16;
+
+  if (init_res != 0) {
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, "SD init failed",
+                COLOR_RED, COLOR_BG_DARK);
+  } else {
+    int read_res = sdmmc_sdcard_readsectors(0, 1, sd_test_buf);
+    p = str_cpy_ret(line, "Read: ");
+    int_to_str(read_res, p);
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line,
+                read_res == 0 ? COLOR_GREEN : COLOR_RED, COLOR_BG_DARK);
+    y += 20;
+
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, "Sector 0, bytes 0-15:",
+                COLOR_LIGHT_GRAY, COLOR_BG_DARK);
+    y += 16;
+    build_hex_line(&sd_test_buf[0], 8, line);
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line, COLOR_WHITE,
+                COLOR_BG_DARK);
+    y += 12;
+    build_hex_line(&sd_test_buf[8], 8, line);
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line, COLOR_WHITE,
+                COLOR_BG_DARK);
+    y += 20;
+
+    p = str_cpy_ret(line, "Signature: ");
+    *p++ = hex_nibble((u8)(sd_test_buf[510] >> 4));
+    *p++ = hex_nibble((u8)(sd_test_buf[510] & 0xF));
+    *p++ = hex_nibble((u8)(sd_test_buf[511] >> 4));
+    *p++ = hex_nibble((u8)(sd_test_buf[511] & 0xF));
+    *p = '\0';
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line, COLOR_WHITE,
+                COLOR_BG_DARK);
+    y += 16;
+
+    int pass = (sd_test_buf[510] == 0x55 && sd_test_buf[511] == 0xAA);
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT,
+                pass ? "PASS: valid boot sector" : "No 0x55AA signature",
+                pass ? COLOR_GREEN : COLOR_YELLOW, COLOR_BG_DARK);
+  }
+
+  draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 20, BOT_SCREEN_HEIGHT,
+              "B: Back", COLOR_LIGHT_GRAY, COLOR_BG_DARK);
+  screen_present_bottom();
+
+  while (1) {
+    u32 kdown = get_keys_down();
+    if (kdown & BUTTON_B)
+      return;
+    delay(60000);
+  }
+}
+
+static FATFS fs_volume;
+static FIL fs_file;
+
+void ui_fs_test(void) {
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BG_DARK);
+
+  const char *title = "FatFs Test";
+  int title_len = (int)str_len(title);
+  int title_x = (BOT_SCREEN_WIDTH - title_len * FONT_WIDTH) / 2;
+  draw_string(VRAM_BOT_A, title_x, 8, BOT_SCREEN_HEIGHT, title, COLOR_AURORA,
+              COLOR_BG_DARK);
+  screen_present_bottom();
+
+  char line[48];
+  int y = 32;
+
+  FRESULT fr = f_mount(&fs_volume, "", 1);
+  char *p = str_cpy_ret(line, "Mount: ");
+  int_to_str((int)fr, p);
+  draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line,
+              fr == FR_OK ? COLOR_GREEN : COLOR_RED, COLOR_BG_DARK);
+  y += 16;
+
+  if (fr == FR_OK) {
+    fr = f_open(&fs_file, "test.txt", FA_READ);
+    p = str_cpy_ret(line, "Open test.txt: ");
+    int_to_str((int)fr, p);
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line,
+                fr == FR_OK ? COLOR_GREEN : COLOR_RED, COLOR_BG_DARK);
+    y += 16;
+
+    if (fr == FR_OK) {
+      char data[33];
+      UINT br = 0;
+      fr = f_read(&fs_file, data, sizeof(data) - 1, &br);
+      f_close(&fs_file);
+
+      p = str_cpy_ret(line, "Read: ");
+      p = str_cpy_ret(p, (fr == FR_OK) ? "OK  bytes=" : "ERR bytes=");
+      int_to_str((int)br, p);
+      draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line,
+                  fr == FR_OK ? COLOR_GREEN : COLOR_RED, COLOR_BG_DARK);
+      y += 20;
+
+      for (UINT i = 0; i < br; i++) {
+        if (data[i] < 0x20 || data[i] > 0x7E)
+          data[i] = '.';
+      }
+      data[br] = '\0';
+      draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, "Contents:",
+                  COLOR_LIGHT_GRAY, COLOR_BG_DARK);
+      y += 16;
+      draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, data, COLOR_WHITE,
+                  COLOR_BG_DARK);
+      y += 20;
+
+      if (fr == FR_OK && br > 0)
+        draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT,
+                    "PASS: file read OK", COLOR_GREEN, COLOR_BG_DARK);
+    } else {
+      draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT,
+                  "Put test.txt on SD root", COLOR_YELLOW, COLOR_BG_DARK);
+    }
+  }
+
+  f_mount(NULL, "", 0);
+
+  draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 20, BOT_SCREEN_HEIGHT,
+              "B: Back", COLOR_LIGHT_GRAY, COLOR_BG_DARK);
+  screen_present_bottom();
+
+  while (1) {
+    u32 kdown = get_keys_down();
+    if (kdown & BUTTON_B)
+      return;
+    delay(60000);
   }
 }
 
@@ -367,12 +555,22 @@ int main(void) {
       } else if (selection == 1) {
         
         ui_settings_menu();
-        
+
         draw_home_screen(selection);
       }
     }
 
-    delay(60000); 
+    if (kdown & BUTTON_START) {
+      ui_sd_test();
+      draw_home_screen(selection);
+    }
+
+    if (kdown & BUTTON_SELECT) {
+      ui_fs_test();
+      draw_home_screen(selection);
+    }
+
+    delay(60000);
   }
 
   return 0;

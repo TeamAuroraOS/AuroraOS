@@ -1,4 +1,3 @@
-/* Coded By DisLoPik for the AuroraOS Project. */
 #ifndef FONT_H
 #define FONT_H
 

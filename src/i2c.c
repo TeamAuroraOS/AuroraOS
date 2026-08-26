@@ -1,4 +1,3 @@
-/* Coded By DisLoPik for the AuroraOS Project. */
 /*
  * Minimal I2C driver (ARM9).
  *
