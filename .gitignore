@@ -1,6 +1,7 @@
 # Build artifacts
 build/
 output/
+mockup/
 *.bin
 *.elf
 *.firm
