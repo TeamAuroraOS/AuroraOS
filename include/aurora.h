@@ -74,6 +74,15 @@ typedef struct {
 #define COLOR_LIGHT_GRAY  ((Color){0xA0, 0xA0, 0xA0})
 #define COLOR_BG_DARK     ((Color){0x10, 0x10, 0x20})
 
+/* Home Menu palette (sampled from the mockups). */
+#define COLOR_HM_BG        ((Color){0x16, 0x16, 0x16})  /* top-screen background */
+#define COLOR_HM_FACET     ((Color){0x24, 0x24, 0x24})  /* faint faceted lines   */
+#define COLOR_HM_BAR       ((Color){0x0C, 0x0C, 0x0C})  /* status / top bar      */
+#define COLOR_HM_CARD      ((Color){0x08, 0x08, 0x08})  /* info card             */
+#define COLOR_HM_SLOT      ((Color){0x2A, 0x2A, 0x2A})  /* app slot              */
+#define COLOR_HM_SLOT_EMPTY ((Color){0x1B, 0x1B, 0x1B}) /* empty app slot        */
+#define COLOR_HM_TEXT2     ((Color){0x9A, 0x9A, 0x9A})  /* secondary text        */
+
 #define REG_LCD_TOP_BRIGHTNESS  (*(volatile u32 *)0x10202240)
 #define REG_LCD_BOT_BRIGHTNESS  (*(volatile u32 *)0x10202A40)
 
@@ -87,6 +96,7 @@ void draw_string(volatile u8 *fb, int x, int y, int screen_height, const char *s
 void draw_aurora_logo(volatile u8 *fb, int x0, int y0, int screen_height, Color color);
 
 void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h, int screen_height, Color color);
+void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h, int radius, int screen_height, Color color);
 void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height, const unsigned char *icon_bits, Color color);
 
 void console_init(void);
