@@ -123,9 +123,15 @@ rebuild: clean all
 # card root; the launcher firm's "Boot" tile loads it.
 OS_DIR  := src/os
 OS_LD   := $(OS_DIR)/os.ld
+# The OS payload now also loads AUR1 apps from the SD card, so it links the
+# SD/FatFs stack, the shared AOS1/AUR1 container parser, and the app hand-off
+# stub -- the same sources the launcher firm uses.
 OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_screen.o $(BUILD_DIR)/os_i2c.o \
-           $(BUILD_DIR)/os_string.o
+           $(BUILD_DIR)/os_string.o $(BUILD_DIR)/os_container.o \
+           $(BUILD_DIR)/os_sdmmc.o $(BUILD_DIR)/os_diskio.o \
+           $(BUILD_DIR)/os_ff.o $(BUILD_DIR)/os_ffunicode.o \
+           $(BUILD_DIR)/os_launch.o
 
 $(BUILD_DIR)/os_start.o: $(OS_DIR)/os_start.s | dirs
 	@echo [AS9 ] Assembling $<
@@ -146,6 +152,30 @@ $(BUILD_DIR)/os_i2c.o: $(SRC_DIR)/i2c.c $(wildcard $(INC_DIR)/*.h) | dirs
 $(BUILD_DIR)/os_string.o: $(SRC_DIR)/string.c | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_container.o: $(SRC_DIR)/container.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_sdmmc.o: $(SRC_DIR)/sdmmc.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_diskio.o: $(SRC_DIR)/diskio.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_ff.o: $(SRC_DIR)/ff.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_ffunicode.o: $(SRC_DIR)/ffunicode.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_launch.o: $(OS_DIR)/os_launch.s | dirs
+	@echo [AS9 ] Assembling $<
+	$(AS) $(ARM9_ASFLAGS) -c $< -o $@
 
 os: $(OS_OBJS)
 	@echo [LD9 ] Linking AuroraOS payload
