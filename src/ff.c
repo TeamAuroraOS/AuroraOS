@@ -2652,6 +2652,7 @@ static void get_fileinfo (
 #endif
 
 
+	fno->fname[0] = 0;			/* Invalidate file info (restored from upstream FatFs) */
 	if (dp->sect == 0) return;	/* Exit if read pointer has reached end of directory */
 
 #if FF_USE_LFN		/* LFN configuration */

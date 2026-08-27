@@ -1,4 +1,5 @@
 #include "aurora.h"
+#include "container.h"
 #include "ff.h"
 #include "loader.h"
 
@@ -91,34 +92,32 @@ void boot_aurora(void) {
     return;
   }
 
+  /* Header + magic: shared with the Home Menu app launcher (container.c). */
   aos_header_t hdr;
-  fr = f_read(&loader_file, &hdr, sizeof(hdr), &br);
-  if (fr != FR_OK || br != sizeof(hdr)) {
+  aurora_status_t st = aurora_parse_header(&loader_file, &hdr);
+  if (st == AURORA_ERR_READ) {
     loader_line("Header read failed", COLOR_RED);
     f_close(&loader_file);
     loader_wait_back();
     return;
   }
-
-  if (hdr.magic[0] != 'A' || hdr.magic[1] != 'O' || hdr.magic[2] != 'S' ||
-      hdr.magic[3] != '1') {
-    loader_line("Bad AOS1 magic", COLOR_RED);
+  if (st == AURORA_ERR_MAGIC) {
+    loader_line("Bad AOS1/AUR1 magic", COLOR_RED);
     f_close(&loader_file);
     loader_wait_back();
     return;
   }
 
-  /* ARM9 payload. */
+  /* ARM9 payload. The firm runs low in memory, so it can read the payload
+   * straight to its final load address. */
   p = lcpy(line, "ARM9 ");
   p = ldec(p, (int)hdr.arm9_size);
   p = lcpy(p, "B -> ");
   lhex32(p, hdr.arm9_load_addr);
   loader_line(line, COLOR_WHITE);
 
-  fr = f_lseek(&loader_file, hdr.arm9_offset);
-  if (fr == FR_OK)
-    fr = f_read(&loader_file, (void *)hdr.arm9_load_addr, hdr.arm9_size, &br);
-  if (fr != FR_OK || br != hdr.arm9_size) {
+  if (aurora_load_arm9(&loader_file, &hdr, (void *)hdr.arm9_load_addr) !=
+      AURORA_OK) {
     loader_line("ARM9 load failed", COLOR_RED);
     f_close(&loader_file);
     loader_wait_back();

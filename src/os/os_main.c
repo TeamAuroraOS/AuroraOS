@@ -1,4 +1,5 @@
 #include "aurora.h"
+#include "container.h"
 #include "font.h"
 #include "i2c.h"
 #include "icons.h"
@@ -37,7 +38,7 @@ static void os_power_off(void) {
 static Color g_accent = COLOR_AURORA;
 static int g_accent_idx = 0;
 
-typedef enum { ACT_NONE = 0, ACT_POWER } HomeAction;
+typedef enum { ACT_NONE = 0, ACT_POWER, ACT_LAUNCH } HomeAction;
 
 typedef struct {
   const char *name; /* NULL => empty placeholder slot */
@@ -45,16 +46,36 @@ typedef struct {
   const unsigned char *icon; /* 32x32 icon bits, or NULL */
   Color tint;                /* big-icon background tint */
   HomeAction action;
+  const char *path;          /* ACT_LAUNCH: container path on the SD card */
 } HomeApp;
 
 #define HOME_COLS  5
 #define HOME_ROWS  3
 #define HOME_COUNT (HOME_COLS * HOME_ROWS)
 
-static const HomeApp home_apps[HOME_COUNT] = {
-    {"Power Off", "System", icon_power_bits, COLOR_DARK_RED, ACT_POWER},
-    /* the rest are zero-initialised -> empty placeholder slots */
-};
+/* Filled at startup by scan_apps()+build_home() (was a static const array with
+ * only Power Off). Slots hold the apps discovered under SD:\Aurora\Apps plus a
+ * permanent Power Off tile. */
+static HomeApp home_apps[HOME_COUNT];
+
+/* App-scan storage. FatFs is built without long file names (FF_USE_LFN=0), so
+ * entries are 8.3 and these short buffers are plenty. */
+#define APPS_DIR "Aurora/Apps"
+#define MAX_APPS HOME_COUNT
+static char app_name[MAX_APPS][16]; /* display name (filename minus ".BIN") */
+static char app_path[MAX_APPS][40]; /* "Aurora/Apps/NAME.BIN"                */
+static unsigned char app_icon[MAX_APPS][ICON_SIZE * ICON_ROW_BYTES];
+static int  app_has_icon[MAX_APPS];
+static int  app_count;
+
+/* Relocatable app hand-off + return stubs (src/os/os_launch.s), and the end of
+ * the OS's loadable image (src/os/os.ld) for the return snapshot. */
+extern const unsigned char os_launch_stub[];
+extern const unsigned char os_launch_stub_end[];
+extern const unsigned char os_return_stub[];
+extern const unsigned char os_return_stub_end[];
+extern const unsigned char _os_image_end[];
+extern void os_cache_sync(void);
 
 static void hm_wifi(int x, int y) {
   for (int b = 0; b < 3; b++) {
@@ -412,7 +433,267 @@ static void settings_open(void) {
   }
 }
 
+/* ============================== App scanning ============================ */
+
+static char *hm_str_copy(char *dst, const char *src) {
+  while ((*dst = *src)) {
+    dst++;
+    src++;
+  }
+  return dst;
+}
+
+/* True if `name` (an upper-case 8.3 FatFs name) ends in ".BIN". */
+static int hm_has_bin_ext(const char *name) {
+  int n = (int)str_len(name);
+  if (n < 5)
+    return 0;
+  return name[n - 4] == '.' && name[n - 3] == 'B' && name[n - 2] == 'I' &&
+         name[n - 1] == 'N';
+}
+
+/* Compare two 8.3 names (already upper-case). Returns <0 / 0 / >0. */
+static int hm_name_cmp(const char *a, const char *b) {
+  while (*a && *a == *b) {
+    a++;
+    b++;
+  }
+  return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+/* Read the embedded icon block from the app container at `path` into `dest`
+ * (ICON_SIZE*ICON_ROW_BYTES bytes). Returns 1 if a valid "AURICON1" icon was
+ * found, 0 otherwise (the caller falls back to a default icon). */
+static int read_app_icon(const char *path, unsigned char *dest) {
+  static FIL f;
+  UINT br;
+  if (f_open(&f, path, FA_READ) != FR_OK)
+    return 0;
+
+  aos_header_t hdr;
+  if (aurora_parse_header(&f, &hdr) != AURORA_OK) {
+    f_close(&f);
+    return 0;
+  }
+
+  char magic[8];
+  int ok = 1;
+  if (f_lseek(&f, hdr.arm9_offset + AURORA_ICON_MAGIC_OFFSET) != FR_OK ||
+      f_read(&f, magic, sizeof(magic), &br) != FR_OK || br != sizeof(magic)) {
+    f_close(&f);
+    return 0;
+  }
+  const char *m = AURORA_ICON_MAGIC;
+  for (int i = 0; i < 8; i++)
+    if (magic[i] != m[i])
+      ok = 0;
+  if (ok) {
+    /* The icon data follows the magic contiguously (payload offset 12). */
+    if (f_read(&f, dest, AURORA_ICON_BYTES, &br) != FR_OK ||
+        br != AURORA_ICON_BYTES)
+      ok = 0;
+  }
+  f_close(&f);
+  return ok;
+}
+
+/* Scan SD:\Aurora\Apps for *.BIN files into app_name/app_path, sorted
+ * alphabetically, and read each app's embedded icon. Display name = filename
+ * without the ".BIN" extension. Returns the count (0 on any error, missing
+ * folder, or missing SD). */
+static int scan_apps(void) {
+  static FATFS scan_fs;
+  static DIR dir;
+  static FILINFO fno;
+  app_count = 0;
+
+  if (f_mount(&scan_fs, "", 1) != FR_OK)
+    return 0;
+  if (f_opendir(&dir, APPS_DIR) != FR_OK) {
+    f_mount(NULL, "", 0);
+    return 0;
+  }
+  while (app_count < MAX_APPS && f_readdir(&dir, &fno) == FR_OK &&
+         fno.fname[0]) {
+    if (fno.fattrib & AM_DIR)
+      continue;
+    if (!hm_has_bin_ext(fno.fname))
+      continue;
+    int n = (int)str_len(fno.fname) - 4; /* strip ".BIN" for the display name */
+    if (n > (int)sizeof(app_name[0]) - 1)
+      n = (int)sizeof(app_name[0]) - 1;
+    int i = 0;
+    for (; i < n; i++)
+      app_name[app_count][i] = fno.fname[i];
+    app_name[app_count][i] = '\0';
+    char *p = hm_str_copy(app_path[app_count], APPS_DIR "/");
+    hm_str_copy(p, fno.fname);
+    app_count++;
+  }
+  f_closedir(&dir);
+
+  /* Alphabetical sort (small n -> insertion sort over both arrays). */
+  for (int i = 1; i < app_count; i++) {
+    char tn[16], tp[40];
+    hm_str_copy(tn, app_name[i]);
+    hm_str_copy(tp, app_path[i]);
+    int j = i - 1;
+    while (j >= 0 && hm_name_cmp(app_name[j], tn) > 0) {
+      hm_str_copy(app_name[j + 1], app_name[j]);
+      hm_str_copy(app_path[j + 1], app_path[j]);
+      j--;
+    }
+    hm_str_copy(app_name[j + 1], tn);
+    hm_str_copy(app_path[j + 1], tp);
+  }
+
+  /* Read each app's icon (in sorted order so it lines up with app_name[i]). */
+  for (int i = 0; i < app_count; i++)
+    app_has_icon[i] = read_app_icon(app_path[i], app_icon[i]);
+
+  f_mount(NULL, "", 0);
+  return app_count;
+}
+
+/* Populate the home grid from the scan: sorted apps first, then a permanent
+ * Power Off tile, then empty slots. Reuses the existing HomeApp rendering. */
+static void build_home(void) {
+  static const Color app_tint = {0x2C, 0x50, 0x74};
+  for (int i = 0; i < HOME_COUNT; i++)
+    home_apps[i] = (HomeApp){0};
+
+  int slot = 0;
+  for (int i = 0; i < app_count && slot < HOME_COUNT; i++, slot++) {
+    home_apps[slot].name = app_name[i];
+    home_apps[slot].dev = "SD App";
+    /* Use the app's own embedded icon; fall back to a generic one. */
+    home_apps[slot].icon = app_has_icon[i] ? app_icon[i] : icon_boot_bits;
+    home_apps[slot].tint = app_tint;
+    home_apps[slot].action = ACT_LAUNCH;
+    home_apps[slot].path = app_path[i];
+  }
+  if (slot < HOME_COUNT) {
+    home_apps[slot].name = "Power Off";
+    home_apps[slot].dev = "System";
+    home_apps[slot].icon = icon_power_bits;
+    home_apps[slot].tint = COLOR_DARK_RED;
+    home_apps[slot].action = ACT_POWER;
+  }
+}
+
+/* ============================== App launch ============================== */
+
+static void launch_msg(const char *msg, Color color) {
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+  draw_string(VRAM_BOT_A, 12, 12, BOT_SCREEN_HEIGHT, "Launch app", COLOR_AURORA,
+              COLOR_HM_BG);
+  draw_string(VRAM_BOT_A, 12, 40, BOT_SCREEN_HEIGHT, msg, color, COLOR_HM_BG);
+  screen_present_bottom();
+}
+
+static void launch_wait_back(void) {
+  while (1) {
+    if (get_keys_down() & BUTTON_B)
+      return;
+    delay(60000);
+  }
+}
+
+/* Install the HOME-return path: snapshot the running OS image, record its size
+ * and the "ready" magic in the descriptor, and relocate the return stub to its
+ * fixed address. After this, an app that branches to AURORA_RETURN_STUB_ADDR is
+ * brought back to a freshly restarted Home Menu. */
+static void os_install_return(void) {
+  u32 os_size = (u32)((const unsigned char *)_os_image_end -
+                      (const unsigned char *)AOS_ARM9_LOAD_ADDR);
+
+  volatile u8 *src = (volatile u8 *)AOS_ARM9_LOAD_ADDR;
+  volatile u8 *snap = (volatile u8 *)AURORA_OS_SNAPSHOT_ADDR;
+  for (u32 i = 0; i < os_size; i++)
+    snap[i] = src[i];
+
+  volatile u32 *desc = (volatile u32 *)AURORA_RETURN_DESC_ADDR;
+  desc[0] = AURORA_RETURN_READY_MAGIC;
+  desc[1] = os_size;
+
+  volatile u8 *rs = (volatile u8 *)AURORA_RETURN_STUB_ADDR;
+  const unsigned char *rc = os_return_stub;
+  u32 rn = (u32)(os_return_stub_end - os_return_stub);
+  for (u32 i = 0; i < rn; i++)
+    rs[i] = rc[i];
+
+  os_cache_sync(); /* flush snapshot + descriptor + stub to memory */
+}
+
+/* Relocate the hand-off stub to scratch (clear of both the staged payload and
+ * the load region) and jump into it. Never returns. */
+static void os_run_stub(u32 src, u32 dst, u32 size, u32 entry) {
+  volatile u8 *s = (volatile u8 *)os_launch_stub;
+  volatile u8 *d = (volatile u8 *)AURORA_APP_TRAMPOLINE_ADDR;
+  u32 n = (u32)(os_launch_stub_end - os_launch_stub);
+  for (u32 i = 0; i < n; i++)
+    d[i] = s[i];
+  os_cache_sync(); /* make the relocated code fetchable, not stale in I-cache */
+  ((void (*)(u32, u32, u32, u32))AURORA_APP_TRAMPOLINE_ADDR)(src, dst, size,
+                                                             entry);
+}
+
+/* Load and launch the AUR1/AOS1 app at `path`. On success this never returns:
+ * the app replaces the running Home Menu (a deliberate one-way jump for v1 --
+ * see the README). On any error it shows a message, waits for B, and returns. */
+static void os_launch_app(const char *path) {
+  static FATFS app_fs;
+  static FIL app_file;
+
+  launch_msg("Loading...", COLOR_WHITE);
+
+  if (f_mount(&app_fs, "", 1) != FR_OK) {
+    launch_msg("SD mount failed.  B: back", COLOR_RED);
+    launch_wait_back();
+    return;
+  }
+  if (f_open(&app_file, path, FA_READ) != FR_OK) {
+    launch_msg("Open failed.  B: back", COLOR_RED);
+    f_mount(NULL, "", 0);
+    launch_wait_back();
+    return;
+  }
+
+  aos_header_t hdr;
+  aurora_status_t st = aurora_parse_header(&app_file, &hdr);
+  if (st != AURORA_OK) {
+    launch_msg(st == AURORA_ERR_MAGIC ? "Not an AUR1 app.  B: back"
+                                      : "Header read failed.  B: back",
+               COLOR_RED);
+    f_close(&app_file);
+    f_mount(NULL, "", 0);
+    launch_wait_back();
+    return;
+  }
+  if (aurora_load_arm9(&app_file, &hdr, (void *)AURORA_APP_STAGE_ADDR) !=
+      AURORA_OK) {
+    launch_msg("Payload read failed.  B: back", COLOR_RED);
+    f_close(&app_file);
+    f_mount(NULL, "", 0);
+    launch_wait_back();
+    return;
+  }
+  f_close(&app_file);
+  f_mount(NULL, "", 0);
+
+  /* Install the HOME-return path (snapshot + return stub) before the app
+   * overwrites the OS, so pressing HOME can restore the Home Menu. */
+  os_install_return();
+
+  /* Hand off to the app. Does not return. */
+  os_run_stub(AURORA_APP_STAGE_ADDR, hdr.arm9_load_addr, hdr.arm9_size,
+              hdr.arm9_entry);
+}
+
 void os_main(void) {
+  scan_apps();
+  build_home();
+
   int sel = 0;
   hm_draw_full(sel);
 
@@ -435,8 +716,12 @@ void os_main(void) {
       hm_update(prev, sel);
 
     if (kdown & BUTTON_A) {
-      if (home_apps[sel].action == ACT_POWER)
+      if (home_apps[sel].action == ACT_POWER) {
         os_power_off();
+      } else if (home_apps[sel].action == ACT_LAUNCH) {
+        os_launch_app(home_apps[sel].path);
+        hm_draw_full(sel); /* only reached if the launch failed and returned */
+      }
     }
 
     if (kdown & BUTTON_START) {
