@@ -1,0 +1,29 @@
+// rainbow.aur -- a sample Auric app.
+//
+// Fills the top screen with a ROYGBIV rainbow, then idles. Pressing HOME returns
+// to the AuroraOS home menu instantly (handled automatically by the runtime,
+// which polls HOME inside every built-in call -- here, delay()).
+//
+// Build (from auric-lang/):
+//   python -m compiler.aurc build ../sample/rainbow.aur \
+//       --icon ../sample/rainbow.icon -o ../sample/RAINBOW.BIN
+// then copy RAINBOW.BIN to SD:\Aurora\Apps\ and launch it from the home screen.
+
+fn band(y: int, h: int, color: int) {
+    fill_rect(0, y, 400, h, color);
+}
+
+fn main() {
+    band(0,   34, RED);
+    band(34,  34, ORANGE);
+    band(68,  34, YELLOW);
+    band(102, 34, GREEN);
+    band(136, 34, BLUE);
+    band(170, 35, 0x4B0082);   // indigo
+    band(205, 35, 0x8B00FF);   // violet
+
+    // Idle. delay() polls HOME each pass, so a press returns to Aurora at once.
+    while true {
+        delay(400000);
+    }
+}
