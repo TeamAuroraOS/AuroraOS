@@ -283,7 +283,7 @@ static void settings_draw(int sel) {
   settings_row(SET_WIFI, sel, icon_wifi_bits, "Wi-Fi", "Off");
   settings_row(SET_ACCENT, sel, NULL, "Accent Color", accent_names[g_accent_idx]);
   settings_row(SET_BRIGHTNESS, sel, icon_brightness_bits, "Brightness", "3 / 5");
-  settings_row(SET_ABOUT, sel, icon_settings_bits, "About", "v0.0.6");
+  settings_row(SET_ABOUT, sel, icon_settings_bits, "About", "v0.0.7");
   screen_present_bottom();
 }
 
