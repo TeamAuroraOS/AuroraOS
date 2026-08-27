@@ -1,0 +1,13 @@
+# Auric build output
+build/
+dist/
+*.bin
+*.elf
+*.o
+
+# Python caches
+__pycache__/
+*.pyc
+
+# PyInstaller (Part 2)
+*.spec.bak

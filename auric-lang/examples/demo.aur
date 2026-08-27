@@ -1,0 +1,32 @@
+// demo.aur -- exercises more of the Auric v0.1 language:
+// functions with parameters and a return value, if/else, while, and locals.
+//
+// Draws a column of numbered lines, colouring even rows one way and odd rows
+// another, then waits for B.
+
+fn row_y(i: int) -> int {
+    return 40 + i * 12;
+}
+
+fn is_even(n: int) -> bool {
+    return n % 2 == 0;
+}
+
+fn main() {
+    clear(BLACK);
+    print("Auric demo: counting", 40, 20, AURORA);
+
+    let i: int = 0;
+    while i < 8 {
+        let y: int = row_y(i);
+        if is_even(i) {
+            print("even row", 40, y, GREEN);
+        } else {
+            print("odd row", 40, y, ORANGE);
+        }
+        i = i + 1;
+    }
+
+    print("Press B to exit.", 40, 150, WHITE);
+    wait_key(KEY_B);
+}

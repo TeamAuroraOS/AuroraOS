@@ -1,0 +1,15 @@
+// hello.aur -- the canonical Auric program.
+//
+//   "Coding too hard? Try Auric!"
+//
+// Clears the top screen, prints the tagline plus a prompt, and waits for the
+// A button. Compile with:
+//
+//   python -m compiler.aurc build examples/hello.aur -o hello.bin
+//
+fn main() {
+    clear(BLACK);
+    print("Coding too hard? Try Auric!", 40, 108, AURORA);
+    print("Press A to exit.", 40, 140, WHITE);
+    wait_key(KEY_A);
+}
