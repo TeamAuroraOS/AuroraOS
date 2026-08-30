@@ -6,7 +6,7 @@
 
 void delay(volatile u32 cycles) {
   while (cycles--)
-    __asm__ volatile("nop");
+    __asm__ volatile("nop"); // VS Code gives error: "identifier "__asm__" is undefined" - Ignore it
 }
 
 u32 get_keys(void) { return ~REG_HID_PAD & 0x3FF; }
