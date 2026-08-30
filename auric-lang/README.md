@@ -4,8 +4,8 @@
 
 Auric is a small, statically-typed programming language for the
 [AuroraOS](../README.md) ecosystem on the Nintendo 3DS. You write `.aur` source;
-`aurc` compiles it — by transpiling to freestanding C and reusing AuroraOS's own
-ARM9 toolchain — into a bootable **`AUR1`** app container that runs on the same
+`aurc` compiles it, by transpiling to freestanding C and reusing AuroraOS's own
+ARM9 toolchain, into a bootable **`AUR1`** app container that runs on the same
 loader that boots AuroraOS itself.
 
 ```auric
@@ -33,7 +33,7 @@ fn main() {
  hello.bin                     AUR1 container (36-byte header + ARM9 payload)
 ```
 
-The generated program is linked at `0x22000000` and run in place — exactly like
+The generated program is linked at `0x22000000` and run in place, exactly like
 AuroraOS's own payload (`src/os/os.ld`). The runtime shim maps the four Auric
 built-ins onto AuroraOS's `draw_string` / `clear_screen` / `get_keys_down` /
 `delay`, reusing the real `src/screen.c` for drawing.
@@ -96,11 +96,11 @@ python -m compiler.aurc build examples/hello.aur -o AURORAOS.BIN
 # copy to the SD root, boot Aurora.firm, pick "Boot Aurora"
 ```
 
-> **Historical note.** Before Part 3, the stock loader checked only for `"AOS1"`
+> **Historical note.** The stock loader checked only for `"AOS1"`
 > magic. If you are running an *older* AuroraOS build, use `--magic AOS1` — the
 > `AUR1` and `AOS1` files are byte-identical apart from those four magic bytes.
 >
-> **Press HOME to return** to the Aurora home menu at any time — the runtime
+> **Press HOME to return** to the Aurora home menu at any time, the runtime
 > polls the HOME button inside every built-in, and the Home Menu restores itself
 > when you press it. (This works for apps launched from the home menu; an app
 > booted directly as `AURORAOS.BIN` has no menu to return to, so it ignores HOME.)
@@ -110,7 +110,7 @@ python -m compiler.aurc build examples/hello.aur -o AURORAOS.BIN
 You can package `aurc` as a single Windows `.exe` so end users don't need Python
 installed. The exe bundles the compiler, the runtime shim, the packer, and a
 snapshot of the AuroraOS headers + `screen.c` it compiles against, so it is
-self-contained — it does **not** need an AuroraOS checkout.
+self-contained. It does **not** need an AuroraOS checkout.
 
 **Build it** (needs `pip install pyinstaller`), from `auric-lang/`:
 
@@ -119,7 +119,7 @@ python packaging/build_exe.py
 # -> auric-lang/dist/aurc.exe   (a single self-contained executable)
 ```
 
-**Use it** — the exe takes the same commands as `python -m compiler.aurc`:
+**Use it** The exe takes the same commands as `python -m compiler.aurc`:
 
 ```
 aurc.exe version                        # prints version + toolchain status
@@ -128,7 +128,7 @@ aurc.exe build hello.aur -o AURORAOS.BIN --magic AOS1   # drop-in boot test
 ```
 
 > **Hard dependency:** `arm-none-eabi-gcc` (devkitARM) must still be on `PATH`
-> at *run* time — an ARM cross-compiler cannot be bundled into a Windows exe.
+> at *run* time, an ARM cross-compiler cannot be bundled into a Windows exe.
 > If it is missing, `aurc.exe` fails with a clear message pointing at
 > <https://devkitpro.org/wiki/Getting_Started>. Everything else (the Python
 > runtime, the runtime shim, the AuroraOS sources it needs) is inside the exe.
@@ -143,9 +143,9 @@ can do this for you).
 auric-lang/
   compiler/    lexer, parser, AST, type checker, C codegen, and the aurc driver
   runtime/     C shim (built-ins → AuroraOS API), crt0 (auric_start.s), linker script
-  tools/       aur_pack.py — AUR1 container packer/inspector (forked from aos_pack.py)
+  tools/       aur_pack.py | AUR1 container packer/inspector (forked from aos_pack.py)
   examples/    hello.aur, demo.aur
-  docs/        language.md — the full v0.1 language reference
+  docs/        language.md | the full v0.1 language reference
   tests/       unittest suite for every compiler stage + end-to-end build
   packaging/   PyInstaller spec + build_exe.py for the standalone aurc.exe
 ```
@@ -168,14 +168,3 @@ python tests/run_tests.py
 This covers the lexer, parser, type checker, and code generator, plus an
 end-to-end compile of the examples (that part is skipped automatically if
 `arm-none-eabi-gcc` is not on `PATH`).
-
-## Status
-
-* **Part 1 — language + compiler:** done. `hello.aur` compiles to a bootable
-  container; the compiler stages are tested.
-* **Part 2 — standalone Windows `aurc.exe`:** done. `python packaging/build_exe.py`
-  produces a self-contained `dist/aurc.exe` (runtime toolchain still required).
-* **Part 3 — AuroraOS app loader** (`SD:\Aurora\Apps`): done. The Home Menu
-  scans, sorts, shows each app's **own icon**, and launches `AUR1`/`AOS1` apps via
-  a shared container parser; **HOME returns** to the menu. See
-  [`../docs/apps.md`](../docs/apps.md).
