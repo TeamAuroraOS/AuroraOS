@@ -1,14 +1,3 @@
-/*
- * AuroraOS UI string localization.
- *
- * The setup wizard's Language screen writes cfg->language (English / Espanol /
- * Francais); the OS applies it by pointing `g_lang` at that language and looking
- * every user-facing string up through L(). The saved language is re-applied on
- * every boot from USER.dat, so the whole UI stays in the chosen language.
- *
- * The bitmap font only covers ASCII 0x20..0x7E, so the translations are written
- * without accents (e.g. "Espanol", "Reseau").
- */
 #ifndef AURORA_LANG_H
 #define AURORA_LANG_H
 

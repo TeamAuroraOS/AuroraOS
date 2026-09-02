@@ -1,16 +1,3 @@
-/*
- * AuroraOS user configuration (SD:\Aurora\USER.dat).
- *
- * The first time the OS boots without a valid config it runs the setup wizard
- * (see src/os/os_setup.c) and writes the user's choices here. On every later
- * boot the OS loads this file and applies the saved settings, so setup only
- * happens once.
- *
- * The file starts with the 4-byte magic "ADAT"; the OS ignores any file that
- * does not. On-disk layout is a fixed 64-byte little-endian record (see
- * user_config_load / user_config_save in os_setup.c) -- serialised field by
- * field so struct padding never leaks into the file.
- */
 #ifndef AURORA_USER_H
 #define AURORA_USER_H
 

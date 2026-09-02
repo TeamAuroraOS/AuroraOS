@@ -1,14 +1,3 @@
-/*
- * Minimal read-only SD card driver (ARM9).
- *
- * Register map, TMIO status bits, command encodings and the init/read
- * sequences are referenced from GodMode9's SD driver
- * (arm9/source/nand/sdmmc.{c,h}), originally by Normmatt (c) 2014-2015,
- * MPL-2.0 / GPLv2. This is a trimmed, SD-only rewrite adapted to AuroraOS's
- * MMIO helpers -- NAND/eMMC and the write path were dropped because the loader
- * only needs to read blocks off the SD card.
- *   Reference: https://github.com/d0k3/GodMode9
- */
 #ifndef AURORA_SDMMC_H
 #define AURORA_SDMMC_H
 

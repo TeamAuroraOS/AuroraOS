@@ -4,17 +4,6 @@
 #include "ff.h"
 #include "loader.h"
 
-/*
- * Shared AOS1/AUR1 container parsing.
- *
- * Factored out of boot_aurora() (src/loader.c) so the same tested code is used
- * by both the firm boot path (loads AURORAOS.BIN) and the AuroraOS Home Menu's
- * app launcher (loads AUR1 apps from SD:\Aurora\Apps). Both the "AOS1" (OS) and
- * "AUR1" (Auric app) magics are accepted -- the header layout is identical.
- *
- * These helpers are pure logic: they read from an already-open FIL and never
- * touch the screen, so each caller keeps its own UI.
- */
 typedef enum {
   AURORA_OK = 0,
   AURORA_ERR_READ,     /* header could not be read */

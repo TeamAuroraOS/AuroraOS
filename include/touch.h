@@ -1,14 +1,3 @@
-/*
- * AuroraOS touchscreen (ARM9 <-> ARM11).
- *
- * The 3DS touchscreen is an ADC inside the CTR audio codec, read over the same
- * SPI bus the ARM11 audio core already drives. So the ARM11 core reads raw touch
- * samples and publishes them here in shared FCRAM; the ARM9 converts the raw ADC
- * values to screen pixels (touch_read).
- *
- * The codec touch init + raw-data layout are reimplemented from GodMode9's codec
- * driver (arm11/source/hw/codec.c) -- see the attribution in src/os/audio11.c.
- */
 #ifndef AURORA_TOUCH_H
 #define AURORA_TOUCH_H
 
