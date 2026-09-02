@@ -19,11 +19,9 @@ SECTIONS
 
     .text :
     {
-        /* App icon header first: a branch to _start, then the AURICON1 magic
-           and a 32x32 icon the OS reads at a fixed payload offset. The packed
-           entry address is the payload start, i.e. this branch. */
+        /* App icon header at fixed offset (32x32 icon, branch to _start). */
         KEEP(*(.aurhead))
-        *(.start)       /* _start */
+        *(.start)
         *(.text*)
         *(.rodata*)
         . = ALIGN(4);
@@ -45,7 +43,6 @@ SECTIONS
         _auric_bss_end = .;
     } > FCRAM
 
-    /* Stack grows down from 16 MB above the load address. */
     _auric_stack_top = 0x23000000;
 
     /DISCARD/ :

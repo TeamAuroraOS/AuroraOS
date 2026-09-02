@@ -39,7 +39,6 @@ class CodeGen:
         self.program = program
         self.lines: list[str] = []
 
-    # -- helpers ------------------------------------------------------------
     @staticmethod
     def _mangle(name: str) -> str:
         return "au_" + name
@@ -70,7 +69,6 @@ class CodeGen:
     def _emit(self, line: str, indent: int) -> None:
         self.lines.append("  " * indent + line if line else "")
 
-    # -- entry --------------------------------------------------------------
     def generate(self) -> str:
         self.lines = [HEADER]
 
@@ -96,7 +94,6 @@ class CodeGen:
         self._emit("}", 0)
         self._emit("", 0)
 
-    # -- statements ---------------------------------------------------------
     def _gen_block_body(self, block: ast.Block, indent: int) -> None:
         for stmt in block.statements:
             self._gen_stmt(stmt, indent)
@@ -144,7 +141,6 @@ class CodeGen:
             self._gen_block_body(stmt, indent + 1)
             self._emit("}", indent)
 
-    # -- expressions --------------------------------------------------------
     def _gen_expr(self, expr: ast.Expr) -> str:
         if isinstance(expr, ast.IntLit):
             return str(expr.value)

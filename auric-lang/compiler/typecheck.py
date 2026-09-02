@@ -46,7 +46,7 @@ class TypeChecker:
         self.functions: dict[str, ast.FnDecl] = {}
         self.current_ret: str = "void"
 
-    # -- entry --------------------------------------------------------------
+
     def check(self) -> None:
         for fn in self.program.functions:
             if fn.name in self.functions:
@@ -70,7 +70,6 @@ class TypeChecker:
         for fn in self.program.functions:
             self._check_fn(fn)
 
-    # -- declarations -------------------------------------------------------
     def _check_fn(self, fn: ast.FnDecl) -> None:
         self.current_ret = fn.ret_type
         scope = Scope()
@@ -83,7 +82,6 @@ class TypeChecker:
         for stmt in block.statements:
             self._check_stmt(stmt, scope)
 
-    # -- statements ---------------------------------------------------------
     def _check_stmt(self, stmt: ast.Stmt, scope: Scope) -> None:
         if isinstance(stmt, ast.LetStmt):
             vtype = self._check_expr(stmt.value, scope)
@@ -151,7 +149,6 @@ class TypeChecker:
             raise AuricError(f"{what} must be bool, found {t}", expr.line,
                              stage="type")
 
-    # -- expressions --------------------------------------------------------
     def _check_expr(self, expr: ast.Expr, scope: Scope) -> str:
         t = self._infer(expr, scope)
         expr.type = t

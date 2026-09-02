@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-# --- expressions ---------------------------------------------------------
 @dataclass
 class Expr:
     line: int = field(default=0, kw_only=True)
@@ -61,7 +60,6 @@ class CallExpr(Expr):
     args: list[Expr] = field(default_factory=list)
 
 
-# --- statements ----------------------------------------------------------
 @dataclass
 class Stmt:
     line: int = field(default=0, kw_only=True)

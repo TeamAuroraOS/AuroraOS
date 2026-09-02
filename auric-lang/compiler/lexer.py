@@ -94,7 +94,6 @@ class Lexer:
         self.line = 1
         self.col = 1
 
-    # -- low-level cursor helpers ------------------------------------------
     def _peek(self, ahead: int = 0) -> str:
         j = self.i + ahead
         return self.src[j] if j < len(self.src) else ""
@@ -112,7 +111,6 @@ class Lexer:
     def _err(self, msg: str) -> AuricError:
         return AuricError(msg, self.line, self.col, stage="lex")
 
-    # -- whitespace + comments ---------------------------------------------
     def _skip_trivia(self) -> None:
         while self.i < len(self.src):
             c = self._peek()
@@ -134,7 +132,6 @@ class Lexer:
             else:
                 break
 
-    # -- token producers ----------------------------------------------------
     def _number(self) -> Token:
         line, col = self.line, self.col
         start = self.i
@@ -186,7 +183,6 @@ class Lexer:
         text = self.src[start:self.i]
         return Token(KEYWORDS.get(text, T.IDENT), text, line, col)
 
-    # -- main entry ---------------------------------------------------------
     def tokenize(self) -> list[Token]:
         tokens: list[Token] = []
         # Two-char operators checked before their single-char prefixes.

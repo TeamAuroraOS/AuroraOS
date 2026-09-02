@@ -33,13 +33,6 @@ else:
     from . import AuricError, __version__, compile_to_c
     from . import icon as icon_mod
 
-# --- repository layout ---------------------------------------------------
-# aurc runs in two modes:
-#   * from source (developing inside the AuroraOS repo): resources live in the
-#     real tree, so the runtime shim reuses the *live* ../src/screen.c etc.
-#   * frozen (a standalone PyInstaller aurc.exe): the runtime shim + a snapshot
-#     of the AuroraOS headers and screen.c are bundled under sys._MEIPASS, so
-#     the exe is self-contained and needs no AuroraOS checkout.
 if getattr(sys, "frozen", False):
     BUNDLE = Path(getattr(sys, "_MEIPASS"))
     RUNTIME_DIR = BUNDLE / "runtime"
@@ -67,7 +60,6 @@ RUNTIME_LD = RUNTIME_DIR / "auric.ld"
 
 DEFAULT_LOAD_ADDR = 0x22000000
 
-# --- toolchain -----------------------------------------------------------
 CC = "arm-none-eabi-gcc"
 OBJCOPY = "arm-none-eabi-objcopy"
 
@@ -196,7 +188,6 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     return output
 
 
-# --- CLI -----------------------------------------------------------------
 def _cmd_build(args: argparse.Namespace) -> int:
     src_path = Path(args.source)
     if not src_path.exists():

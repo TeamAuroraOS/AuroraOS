@@ -18,7 +18,6 @@ def bad(src: str) -> AuricError:
 
 
 class TypeCheckTest(unittest.TestCase):
-    # -- valid programs ----------------------------------------------------
     def test_minimal_main(self):
         ok("fn main() {}")
 
@@ -54,7 +53,6 @@ class TypeCheckTest(unittest.TestCase):
     def test_string_equality(self):
         ok('fn main() { let b = "a" == "b"; }')
 
-    # -- rejected programs -------------------------------------------------
     def test_no_main(self):
         self.assertIn("main", bad("fn f() {}").message)
 

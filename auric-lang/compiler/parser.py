@@ -22,7 +22,6 @@ class Parser:
         self.tokens = tokens
         self.pos = 0
 
-    # -- token helpers ------------------------------------------------------
     @property
     def _cur(self) -> Token:
         return self.tokens[self.pos]
@@ -49,7 +48,6 @@ class Parser:
             return "end of file"
         return f"{tok.value!r}"
 
-    # -- entry --------------------------------------------------------------
     def parse(self) -> ast.Program:
         prog = ast.Program()
         while not self._at(T.EOF):
@@ -62,7 +60,6 @@ class Parser:
                     self._cur.line, self._cur.col, stage="parse")
         return prog
 
-    # -- declarations -------------------------------------------------------
     def _type(self) -> str:
         tok = self._cur
         if tok.kind in TYPE_KEYWORDS:
@@ -95,7 +92,6 @@ class Parser:
         ptype = self._type()
         return ast.Param(name.value, ptype, name.line)
 
-    # -- statements ---------------------------------------------------------
     def _block(self) -> ast.Block:
         lb = self._expect(T.LBRACE, "'{'")
         stmts: list[ast.Stmt] = []
@@ -166,7 +162,6 @@ class Parser:
         self._expect(T.SEMI, "';'")
         return ast.ExprStmt(expr, line=expr.line)
 
-    # -- expressions (precedence climbing) ---------------------------------
     # Each tier parses the next-higher tier, then folds left-associatively.
     _BINARY_TIERS: list[dict[T, str]] = [
         {T.OR: "||"},
