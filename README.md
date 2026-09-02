@@ -12,12 +12,10 @@
 
   
 
-Hey there! 👋
-
 Aurora is a custom OS for the Nintendo 3DS.
--  *A lot of this is being learned from GodMode9 and Luma soruce code.*
+-  *Built using knowledge from GodMode9 and Luma source code.*
 
-## How To Install: 
+## How To Install:
 - Place `Aurora.firm` in `SD:\luma\payloads`
 - Place `AURORA.BIN` in root of SD (`SD:\`)
 ## How to Open:
@@ -25,4 +23,3 @@ Aurora is a custom OS for the Nintendo 3DS.
 - With system off, hold `START` while booting
 - Select `Aurora` from the list
 - Select `Boot Aurora`
-*(it may be slow, currently working on fixing it)*
