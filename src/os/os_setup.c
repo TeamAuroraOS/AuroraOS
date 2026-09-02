@@ -16,6 +16,7 @@
 #include "ff.h"
 #include "font.h"
 #include "lang.h"
+#include "touch.h"
 #include "user.h"
 
 /* One row per string id (see lang.h); columns are English / Espanol / Francais.
@@ -359,12 +360,24 @@ static void step_language(UserConfig *cfg) {
       sel--;
     if ((k & BUTTON_DDOWN) && sel < LANG_COUNT - 1)
       sel++;
+
+    int go = 0, tx, ty;
+    if (touch_tap(&tx, &ty)) {
+      int rx = 12, rw = BOT_SCREEN_WIDTH - 24, rh = 40, y0 = 34, step = 48;
+      for (int i = 0; i < LANG_COUNT; i++)
+        if (touch_in(tx, ty, rx, y0 + i * step, rw, rh))
+          sel = i;
+      if (touch_in(tx, ty, (BOT_SCREEN_WIDTH - 200) / 2,
+                   BOT_SCREEN_HEIGHT - 38, 200, 30))
+        go = 1;
+    }
+
     if (sel != prev) {
       cfg->language = (u8)sel;
       g_lang = sel; /* re-render the button etc. in the chosen language */
       lang_bottom(sel, accent);
     }
-    if (k & (BUTTON_A | BUTTON_START)) {
+    if ((k & (BUTTON_A | BUTTON_START)) || go) {
       cfg->language = (u8)sel;
       return; /* Get started -> next step (no Back on the first screen) */
     }
@@ -393,6 +406,10 @@ static Nav step_network(UserConfig *cfg) {
 
   while (1) {
     u32 k = get_keys_down();
+    int tx, ty;
+    if (touch_tap(&tx, &ty) &&
+        touch_in(tx, ty, (BOT_SCREEN_WIDTH - 180) / 2, 110, 180, 40))
+      return NAV_NEXT; /* tapped Skip */
     if (k & (BUTTON_A | BUTTON_START))
       return NAV_NEXT;
     if (k & BUTTON_B)
@@ -503,9 +520,46 @@ static void keyboard_edit(char *name, Color accent) {
       changed = 1;
     }
 
-    int commit = 0; /* pressed a key with A */
+    int commit = 0; /* pressed a key (A or touch) */
     char typed = 0;
-    if (k & BUTTON_A) {
+    int press = (k & BUTTON_A) ? 1 : 0;
+
+    /* Touch: hit-test the on-screen keys (layout mirrors kb_draw). */
+    {
+      int tx, ty;
+      if (touch_tap(&tx, &ty)) {
+        int kw = 27, kh = 26, gap = 3, y0 = 52, ystep = kh + gap, found = 0;
+        for (int r = 0; r < 4 && !found; r++) {
+          int n = kb_row_len(r), roww = n * kw + (n - 1) * gap;
+          int x0 = (BOT_SCREEN_WIDTH - roww) / 2;
+          for (int c = 0; c < n; c++) {
+            if (touch_in(tx, ty, x0 + c * (kw + gap), y0 + r * ystep, kw, kh)) {
+              row = r;
+              col = c;
+              press = 1;
+              changed = 1;
+              found = 1;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          int ay = y0 + 4 * ystep, aw[4] = {56, 96, 56, 56}, ax = 20;
+          for (int c = 0; c < 4; c++) {
+            if (touch_in(tx, ty, ax, ay, aw[c], kh)) {
+              row = 4;
+              col = c;
+              press = 1;
+              changed = 1;
+              break;
+            }
+            ax += aw[c] + 8;
+          }
+        }
+      }
+    }
+
+    if (press) {
       if (row < 4) {
         typed = kb_apply_caps(kb_rows[row][col], caps);
       } else {
@@ -655,6 +709,35 @@ static Nav step_user(UserConfig *cfg) {
         return NAV_NEXT;
       }
     }
+
+    /* Touch: name field -> keyboard; tap a date box's upper half to +1, lower
+     * half to -1; Back / Next buttons. */
+    int tx, ty;
+    if (touch_tap(&tx, &ty)) {
+      if (touch_in(tx, ty, 12, 30, BOT_SCREEN_WIDTH - 24, 34)) {
+        keyboard_edit(cfg->name, accent);
+        setup_top(2, L(STR_USER_L1), L(STR_USER_L2), accent);
+        screen_present_top();
+        redraw = 1;
+      } else if (touch_in(tx, ty, 40, 96, 52, 40)) {
+        cfg->birth_day = (u8)(cfg->birth_day + (ty < 116 ? 1 : -1));
+        clamp_date(cfg);
+        redraw = 1;
+      } else if (touch_in(tx, ty, 120, 96, 52, 40)) {
+        cfg->birth_month = (u8)(cfg->birth_month + (ty < 116 ? 1 : -1));
+        clamp_date(cfg);
+        redraw = 1;
+      } else if (touch_in(tx, ty, 200, 96, 68, 40)) {
+        cfg->birth_year = (u16)(cfg->birth_year + (ty < 116 ? 1 : -1));
+        clamp_date(cfg);
+        redraw = 1;
+      } else if (touch_in(tx, ty, 40, 168, 100, 32)) {
+        return NAV_BACK;
+      } else if (touch_in(tx, ty, 180, 168, 100, 32)) {
+        return NAV_NEXT;
+      }
+    }
+
     if (k & BUTTON_B)
       return NAV_BACK;
     if (k & BUTTON_START)
@@ -675,6 +758,7 @@ static Nav step_user(UserConfig *cfg) {
 #define PROWS ((AURORA_ACCENT_COUNT + PCOLS - 1) / PCOLS)
 
 static void accent_bottom(int sel) {
+  Color accent = aurora_accent_presets[sel];
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
   bottom_title("Home Menu");
   for (int i = 0; i < AURORA_ACCENT_COUNT; i++) {
@@ -688,8 +772,8 @@ static void accent_bottom(int sel) {
     disc(VRAM_BOT_A, x + PSW / 2, y + PSW / 2,
          (i == sel) ? PSW / 2 - 4 : PSW / 2, SH_BOT, aurora_accent_presets[i]);
   }
-  text_center_tr(VRAM_BOT_A, BOT_SCREEN_HEIGHT - 16, BOT_SCREEN_WIDTH, SH_BOT,
-                 L(STR_PERS_HINT), COLOR_HM_TEXT2);
+  button(40, 198, 100, 30, L(STR_BACK), 0, accent);
+  button(180, 198, 100, 30, L(STR_NEXT), 1, accent);
   screen_present_bottom();
 }
 
@@ -711,6 +795,26 @@ static Nav step_personalise(UserConfig *cfg) {
     if ((k & BUTTON_DDOWN) && row < PROWS - 1 &&
         sel + PCOLS < AURORA_ACCENT_COUNT)
       sel += PCOLS;
+    int tx, ty;
+    if (touch_tap(&tx, &ty)) {
+      for (int i = 0; i < AURORA_ACCENT_COUNT; i++) {
+        int c = i % PCOLS, r = i / PCOLS;
+        int x = PX + c * (PSW + PGAP), y = PY + r * (PSW + PGAP);
+        if (touch_in(tx, ty, x, y, PSW, PSW)) {
+          sel = i;
+          break;
+        }
+      }
+      if (touch_in(tx, ty, 40, 198, 100, 30)) {
+        cfg->accent = (u8)sel;
+        return NAV_BACK;
+      }
+      if (touch_in(tx, ty, 180, 198, 100, 30)) {
+        cfg->accent = (u8)sel;
+        return NAV_NEXT;
+      }
+    }
+
     if (sel != prev) {
       cfg->accent = (u8)sel;
       /* Live preview: recolour the progress bar's active step. */
@@ -756,6 +860,9 @@ static Nav step_welcome(UserConfig *cfg) {
 
   while (1) {
     u32 k = get_keys_down();
+    int tx, ty;
+    if (touch_tap(&tx, &ty)) /* tap anywhere to start */
+      return NAV_NEXT;
     if (k & (BUTTON_A | BUTTON_START))
       return NAV_NEXT;
     if (k & BUTTON_B)

@@ -163,10 +163,21 @@ static void crash_power_off(void) {
     __asm__ volatile("mcr p15, 0, r0, c7, c0, 4");
 }
 
-/* Rough ~1 second wait (delay(40000) ~= 1 ms, per the SD driver's calibration). */
-static void wait_1s(void) {
-  for (int i = 0; i < 1000; i++)
+/* Wait ~1 real second using the MCU real-time clock (reg 0x30, first byte =
+ * seconds), which is an actual clock -- busy-loops are not. Returns as soon as
+ * the seconds value changes. The delay(40000) chunk both paces the polling and,
+ * if the RTC never advances, bounds the wait to a ~2 s busy fallback so it can
+ * never hang. */
+static void crash_wait_1s(void) {
+  u8 start = 0, now = 0;
+  I2C_readRegBuf(I2C_DEV_MCU, 0x30, &start, 1);
+  now = start;
+  for (int i = 0; i < 500; i++) {
     delay(40000);
+    I2C_readRegBuf(I2C_DEV_MCU, 0x30, &now, 1);
+    if (now != start)
+      return; /* a real second elapsed */
+  }
 }
 
 /* ------------------------------------------------------------------ entry */
@@ -185,6 +196,8 @@ void crash_handle(CrashDump *d) {
   draw_sad_face();
   draw_dump(d);
 
+  I2C_init(); /* bring up I2C so the RTC-based countdown can read the clock */
+
   /* Count down and auto power off after 10 seconds. */
   for (int s = 10; s >= 1; s--) {
     char line[40], *p;
@@ -199,7 +212,7 @@ void crash_handle(CrashDump *d) {
     }
     scpy(p, "s...");
     draw_string(VRAM_BOT_A, 8, SH_B - 16, SH_B, line, COLOR_WHITE, COLOR_CRASH);
-    wait_1s();
+    crash_wait_1s();
   }
   crash_power_off();
 

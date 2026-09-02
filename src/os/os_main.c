@@ -63,6 +63,24 @@ int touch_read(int *sx, int *sy, int *rawx, int *rawy) {
   return 1;
 }
 
+/* Press-edge tap: fires once when a new touch begins. The shared prev-state
+ * makes a tap that opens a new screen not immediately re-fire there (the finger
+ * must lift and press again), matching the A-button edge behaviour. */
+static int touch_prev = 0;
+int touch_tap(int *x, int *y) {
+  int sx = 0, sy = 0;
+  int pressed = touch_read(&sx, &sy, NULL, NULL);
+  int tapped = pressed && !touch_prev;
+  touch_prev = pressed;
+  if (tapped) {
+    if (x)
+      *x = sx;
+    if (y)
+      *y = sy;
+  }
+  return tapped;
+}
+
 static u32 str_len(const char *s) {
   u32 n = 0;
   while (*s++)
@@ -469,9 +487,23 @@ static void accent_screen(void) {
       sel -= SW_COLS;
     if ((k & BUTTON_DDOWN) && row < rows - 1 && sel + SW_COLS < ACCENT_COUNT)
       sel += SW_COLS;
+    int apply = 0;
+    int tx, ty;
+    if (touch_tap(&tx, &ty)) {
+      for (int i = 0; i < ACCENT_COUNT; i++) {
+        int c = i % SW_COLS, r = i / SW_COLS;
+        int x = SW_X + c * (SW_SIZE + SW_GAP), y = SW_Y + r * (SW_SIZE + SW_GAP);
+        if (touch_in(tx, ty, x, y, SW_SIZE, SW_SIZE)) {
+          sel = i;
+          apply = 1;
+          break;
+        }
+      }
+    }
+
     if (sel != prev)
       accent_draw(sel);
-    if (k & BUTTON_A) {
+    if ((k & BUTTON_A) || apply) {
       g_accent = accent_presets[sel];
       g_accent_idx = sel;
       accent_draw(sel); /* Refresh the active marker. */
@@ -647,6 +679,9 @@ static void touch_test_screen(void) {
     p = snd_cpy(p, "/");
     snd_u32(num, AUDIO_CORE_VERSION);
     p = snd_cpy(p, num);
+    p = snd_cpy(p, "  st");
+    snd_u32(num, audio_status());
+    p = snd_cpy(p, num);
     p = snd_cpy(p, "  seq ");
     snd_u32(num, seq);
     snd_cpy(p, num);
@@ -708,13 +743,34 @@ static void settings_open(void) {
   while (1) {
     u32 k = get_keys_down();
     int prev = sel;
+    int activate = 0;
+
     if ((k & BUTTON_DUP) && sel > 0)
       sel--;
     if ((k & BUTTON_DDOWN) && sel < SET_COUNT - 1)
       sel++;
+
+    /* Touch: tapping a visible row selects and opens it. */
+    int tx, ty;
+    if (touch_tap(&tx, &ty)) {
+      int top = sel - SET_VISIBLE / 2;
+      if (top > SET_COUNT - SET_VISIBLE)
+        top = SET_COUNT - SET_VISIBLE;
+      if (top < 0)
+        top = 0;
+      for (int r = 0; r < SET_VISIBLE && top + r < SET_COUNT; r++) {
+        int y = ROW_Y0 + r * ROW_STEP;
+        if (touch_in(tx, ty, ROW_X - 3, y - 3, ROW_W + 6, ROW_H + 6)) {
+          sel = top + r;
+          activate = 1;
+          break;
+        }
+      }
+    }
+
     if (sel != prev)
       settings_draw(sel);
-    if (k & BUTTON_A) {
+    if ((k & BUTTON_A) || activate) {
       if (sel == SET_WIFI)
         wifi_screen();
       else if (sel == SET_ACCENT)
@@ -1193,12 +1249,34 @@ static void music_player_screen(void) {
       sel--;
     if ((k & BUTTON_DDOWN) && sel < mus_count - 1)
       sel++;
+
+    /* Touch: tapping a track selects and plays it. */
+    int play_now = 0;
+    int tx, ty;
+    if (touch_tap(&tx, &ty) && mus_count > 0) {
+      int top = sel - MUS_VISIBLE / 2;
+      if (top < 0)
+        top = 0;
+      if (top > mus_count - MUS_VISIBLE)
+        top = mus_count - MUS_VISIBLE;
+      if (top < 0)
+        top = 0;
+      for (int r = 0; r < MUS_VISIBLE && top + r < mus_count; r++) {
+        int y = MUS_ROW_Y0 + r * MUS_ROW_STEP;
+        if (touch_in(tx, ty, 10, y - 2, BOT_SCREEN_WIDTH - 20, MUS_ROW_H + 4)) {
+          sel = top + r;
+          play_now = 1;
+          break;
+        }
+      }
+    }
+
     if (sel != prev) {
       music_draw_bottom(sel);
       music_draw_top(sel, playing, accent);
     }
 
-    if ((k & BUTTON_A) && mus_count > 0) {
+    if (((k & BUTTON_A) || play_now) && mus_count > 0) {
       audio_stop(); /* free the buffer before overwriting it */
       draw_string(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 36, BOT_SCREEN_HEIGHT,
                   L(STR_LOADING), COLOR_AURORA, COLOR_HM_BG);
@@ -1224,6 +1302,19 @@ static void music_player_screen(void) {
       return;
     }
     delay(60000);
+  }
+}
+
+/* Activate the selected home tile (shared by the A button and a touch tap). */
+static void home_activate(int sel) {
+  if (home_apps[sel].action == ACT_POWER) {
+    os_power_off();
+  } else if (home_apps[sel].action == ACT_LAUNCH) {
+    os_launch_app(home_apps[sel].path);
+    hm_draw_full(sel); /* only reached if the launch failed and returned */
+  } else if (home_apps[sel].action == ACT_MUSIC) {
+    music_player_screen();
+    hm_draw_full(sel);
   }
 }
 
@@ -1274,21 +1365,34 @@ void os_main(void) {
     if (sel != prev)
       hm_update(prev, sel);
 
-    if (kdown & BUTTON_A) {
-      if (home_apps[sel].action == ACT_POWER) {
-        os_power_off();
-      } else if (home_apps[sel].action == ACT_LAUNCH) {
-        os_launch_app(home_apps[sel].path);
-        hm_draw_full(sel); /* only reached if the launch failed and returned */
-      } else if (home_apps[sel].action == ACT_MUSIC) {
-        music_player_screen();
-        hm_draw_full(sel);
-      }
-    }
+    if (kdown & BUTTON_A)
+      home_activate(sel);
 
     if (kdown & BUTTON_START) {
       settings_open();
       hm_draw_full(sel);
+    }
+
+    /* Touch: the settings icon in the top bar, or an app tile. */
+    int tx, ty;
+    if (touch_tap(&tx, &ty)) {
+      if (ty < 40 && tx > BOT_SCREEN_WIDTH - 46) {
+        settings_open();
+        hm_draw_full(sel);
+      } else {
+        for (int i = 0; i < HOME_COUNT; i++) {
+          int c = i % HOME_COLS, r = i / HOME_COLS;
+          int x = GRID_X + c * SLOT_STEP, y = GRID_Y + r * SLOT_STEP;
+          if (touch_in(tx, ty, x - 3, y - 3, SLOT_SIZE + 6, SLOT_SIZE + 6)) {
+            if (i != sel) {
+              hm_update(sel, i);
+              sel = i;
+            }
+            home_activate(sel);
+            break;
+          }
+        }
+      }
     }
 
     delay(60000);

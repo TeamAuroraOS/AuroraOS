@@ -470,10 +470,13 @@ void audio11_main(void) {
   ct->magic = AUDIO_MAGIC;
   dcache_clean();
 
-  crash11_init(); /* catch ARM11 faults -> cross-core crash block */
+  /* NOTE: crash11_init() (ARM11 exception-vector install) is DISABLED for now.
+   * Its vector write is untested register territory and is the prime suspect
+   * for hanging the core before the main loop (seq stuck at 0, no audio). Bring
+   * it back only once the vector page is confirmed writable on ARM11. */
+  (void)crash11_init;
 
   codec_init();
-  touch_init(); /* configure the codec's touchscreen ADC */
   /* Diagnostics: read back codec ID/rev registers and one register we wrote.
    * All-0x00 or all-0xFF here means the codec SPI link is not working. */
   ct->diag0 = cdc_read_word(CDC_0_2); /* raw 32-bit read: shows byte lane */
@@ -490,6 +493,10 @@ void audio11_main(void) {
   ct->diag2 = MMIO32(CSND_MAIN); /* readback: did the master write stick? */
   ct->status = AUDIO_ST_READY;
   dcache_clean();
+
+  /* Configure the codec touchscreen ADC after audio is fully up, so a problem
+   * here can't stop audio/CSND from initialising. */
+  touch_init();
 
   for (;;) {
     dcache_clean_inval();
