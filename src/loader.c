@@ -92,7 +92,6 @@ void boot_aurora(void) {
     return;
   }
 
-  /* Header + magic: shared with the Home Menu app launcher (container.c). */
   aos_header_t hdr;
   aurora_status_t st = aurora_parse_header(&loader_file, &hdr);
   if (st == AURORA_ERR_READ) {
@@ -108,8 +107,6 @@ void boot_aurora(void) {
     return;
   }
 
-  /* ARM9 payload. The firm runs low in memory, so it can read the payload
-   * straight to its final load address. */
   p = lcpy(line, "ARM9 ");
   p = ldec(p, (int)hdr.arm9_size);
   p = lcpy(p, "B -> ");
@@ -128,7 +125,6 @@ void boot_aurora(void) {
   lhex32(p, *(volatile u32 *)hdr.arm9_load_addr);
   loader_line(line, COLOR_LIGHT_GRAY);
 
-  /* Optional ARM11 payload. */
   if (hdr.arm11_size) {
     p = lcpy(line, "ARM11 ");
     p = ldec(p, (int)hdr.arm11_size);
@@ -155,7 +151,7 @@ void boot_aurora(void) {
   p = lcpy(line, "Jumping -> ");
   lhex32(p, hdr.arm9_entry);
   loader_line(line, COLOR_GREEN);
-  delay(20000000); /* Keep the status on screen briefly. */
+  delay(20000000);
 
-  aurora_jump_arm9(hdr.arm9_entry); /* Never returns. */
+  aurora_jump_arm9(hdr.arm9_entry);
 }

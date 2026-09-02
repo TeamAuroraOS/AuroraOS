@@ -12,11 +12,12 @@
  *
  * Untested-on-hardware caveats (flagged inline): the codec calibration values
  * (driver gains / analog volumes) normally come from the console's HWCAL block,
- * which we don't read here -- we use neutral defaults. Headphone-jack detection
+ * which isn't don't read here -- we use neutral defaults. Headphone-jack detection
  * is skipped (output forced to the speaker path). EQ-filter upload is skipped
  * (codec defaults). Per-unit "depop" GPIO pulsing is skipped.
  */
 #include "audio.h"
+#include "touch.h"
 
 typedef volatile uint8_t  vu8;
 typedef volatile uint16_t vu16;
@@ -188,6 +189,15 @@ static uint32_t cdc_read_word(uint16_t reg) {
   return out;
 }
 
+/* Burst-read `size` bytes starting at `reg` (the codec auto-increments the
+ * register). `buf` must be 4-byte aligned. */
+static void cdc_read_buf(uint16_t reg, uint8_t *buf, uint32_t size) {
+  cdc_switch_page(reg);
+  uint8_t in[4] __attribute__((aligned(4)));
+  in[0] = (uint8_t)(((reg << 1) & 0xFF) | 1u);
+  nspi_sendrecv(CODEC_DEV, in, buf, 1, size);
+}
+
 /* ---- codec registers (page<<8 | offset), from libn3ds codec_regmap.h ---- */
 #define CDC_SOFT_RST ((100u << 8) | 1u)
 #define CDC_0_2      ((0u << 8) | 2u)
@@ -301,6 +311,58 @@ static void codec_init(void) {
   sleep_ms(38);
 }
 
+/* ========================== touchscreen (via codec) ==================== */
+/* The touchscreen + circle-pad ADC live inside the same CTR codec. The register
+ * init sequence (page 0x67) and the raw-data layout (page 0xFB, byte offsets)
+ * below are REIMPLEMENTED from the hardware facts in GodMode9's codec driver:
+ *   arm11/source/hw/codec.c
+ *   Copyright (C) 2017 Sergi Granell, Paul LaMendola
+ *   Copyright (C) 2019 Wolfvak    -- licensed GPL v2-or-later.
+ * Only the register addresses / init sequence / data layout are used (hardware
+ * facts); the code here is Aurora's own, built on its existing SPI helpers. */
+
+#define CDC(page, off) (((uint16_t)(page) << 8) | (uint16_t)(off))
+
+static void touch_init(void) {
+  cdc_write(CDC(0x67, 0x24), 0x98);
+  cdc_write(CDC(0x67, 0x26), 0x00);
+  cdc_write(CDC(0x67, 0x25), 0x43);
+  cdc_write(CDC(0x67, 0x24), 0x18);
+  cdc_write(CDC(0x67, 0x17), 0x43);
+  cdc_write(CDC(0x67, 0x19), 0x69);
+  cdc_write(CDC(0x67, 0x1B), 0x80);
+  cdc_write(CDC(0x67, 0x27), 0x11);
+  cdc_write(CDC(0x67, 0x26), 0xEC);
+  cdc_write(CDC(0x67, 0x24), 0x18);
+  cdc_write(CDC(0x67, 0x25), 0x53);
+  cdc_mask(CDC(0x67, 0x26), 0x80, 0x80);
+  cdc_mask(CDC(0x67, 0x24), 0x00, 0x80);
+  cdc_mask(CDC(0x67, 0x25), 0x10, 0x3C);
+}
+
+/* Read one raw sample block from the codec and publish touch state. */
+static uint32_t g_touch_seq = 0;
+static void touch_poll(void) {
+  uint8_t buf[52] __attribute__((aligned(4)));
+  cdc_read_buf(CDC(0xFB, 1), buf, 52);
+
+  TouchShared *ts = (TouchShared *)TOUCH_SHARED_ADDR;
+  ts->d_b0 = buf[0]; /* diagnostics: raw sample bytes, always */
+  ts->d_b1 = buf[1];
+  ts->d_b10 = buf[10];
+  ts->d_b11 = buf[11];
+  int pressed = !(buf[0] & 0x10); /* byte0 bit4 low => pen down */
+  if (pressed) {
+    ts->raw_x = (uint32_t)(((buf[0] << 8) | buf[1]) & 0xFFF);
+    ts->raw_y = (uint32_t)(((buf[10] << 8) | buf[11]) & 0xFFF);
+    ts->pressed = 1;
+  } else {
+    ts->pressed = 0;
+  }
+  ts->seq = ++g_touch_seq;
+  dcache_clean(); /* publish to the ARM9 */
+}
+
 /* ============================ CSND (GBATEK) ============================= */
 /* CSND master control (0x10103000, u32): bits0-15 vol, bit16 mute (0=on),
  * bit30 = normal, bit31 = allow channel writes (required before ch start). */
@@ -411,6 +473,7 @@ void audio11_main(void) {
   crash11_init(); /* catch ARM11 faults -> cross-core crash block */
 
   codec_init();
+  touch_init(); /* configure the codec's touchscreen ADC */
   /* Diagnostics: read back codec ID/rev registers and one register we wrote.
    * All-0x00 or all-0xFF here means the codec SPI link is not working. */
   ct->diag0 = cdc_read_word(CDC_0_2); /* raw 32-bit read: shows byte lane */
@@ -455,6 +518,7 @@ void audio11_main(void) {
       ct->ack_seq = ct->cmd_seq;
       dcache_clean();
     }
+    touch_poll(); /* sample the touchscreen every loop */
     spin(20000);
   }
 }

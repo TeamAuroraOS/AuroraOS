@@ -126,15 +126,8 @@ clean:
 
 rebuild: clean all
 
-# ---- AuroraOS payload (AURORAOS.BIN) ----------------------------------------
-# The real OS: the Home Menu, built standalone at 0x22000000 and packed into
-# AURORAOS.BIN (repo root, so `make clean` doesn't wipe it). Copy it to the SD
-# card root; the launcher firm's "Boot" tile loads it.
 OS_DIR  := src/os
 OS_LD   := $(OS_DIR)/os.ld
-# The OS payload now also loads AUR1 apps from the SD card, so it links the
-# SD/FatFs stack, the shared AOS1/AUR1 container parser, and the app hand-off
-# stub -- the same sources the launcher firm uses.
 OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_setup.o $(BUILD_DIR)/os_audio9.o \
            $(BUILD_DIR)/os_crash.o $(BUILD_DIR)/os_crashasm.o \
@@ -144,9 +137,6 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_ff.o $(BUILD_DIR)/os_ffunicode.o \
            $(BUILD_DIR)/os_launch.o
 
-# ARM11 audio core: built separately, linked to run at 0x23000000, then embedded
-# in the ARM9 OS as a byte blob (build/audio11_blob.h) that audio9.c copies into
-# place and wakes the ARM11 into. See src/os/audio11.c.
 AUDIO11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/audio11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
 AUDIO11_BLOB := $(BUILD_DIR)/audio11_blob.h
@@ -171,7 +161,6 @@ $(BUILD_DIR)/os_crashasm.o: $(OS_DIR)/crash.s | dirs
 	@echo [AS9 ] Assembling $<
 	$(AS) $(ARM9_ASFLAGS) -c $< -o $@
 
-# ---- ARM11 audio core -> embedded blob --------------------------------------
 $(BUILD_DIR)/audio11_start.o: $(OS_DIR)/audio11_start.s | dirs
 	@echo [AS11] Assembling $<
 	$(AS) $(ARM11_ASFLAGS) -c $< -o $@
@@ -240,8 +229,6 @@ os: $(OS_OBJS)
 	python tools/aos_pack.py pack $(BUILD_DIR)/os.bin -o AURORAOS.BIN --arm9-load 0x22000000
 	@echo "  -> AURORAOS.BIN (copy this to the SD card root)"
 
-# Debug filler payload (fills the screen green) -- handy for isolating loader
-# problems from OS problems. Outputs greentest.bin; rename to AURORAOS.BIN to boot it.
 greentest: dirs
 	$(AS) $(ARM9_ASFLAGS) -c tools/testpayload/payload.s -o $(BUILD_DIR)/payload.o
 	$(LD) -T tools/testpayload/payload.ld -nostdlib -nostartfiles -Wl,--build-id=none $(BUILD_DIR)/payload.o -o $(BUILD_DIR)/payload.elf

@@ -33,7 +33,7 @@
  * resident core is current. FCRAM survives a warm reboot, so a stale core can
  * linger unless the console is fully powered off -- the Sound Test screen shows
  * this version so a mismatch is visible. */
-#define AUDIO_CORE_VERSION 9
+#define AUDIO_CORE_VERSION 11
 
 /* Max PCM the shared buffer holds (10 MB, clear of the app-stage at 0x24000000).
  * Longer tracks are truncated to this. */

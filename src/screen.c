@@ -18,10 +18,7 @@ void screen_init(void) {
   Color top_bg = {0x05, 0x0A, 0x15};
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, top_bg);
 
-  
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BG_DARK);
-  
-  
   screen_present_top();
   screen_present_bottom();
 }
@@ -31,7 +28,6 @@ void screen_present_top(void) {}
 void screen_present_bottom(void) {}
 
 void clear_screen(volatile u8 *fb, u32 fb_size, Color color) {
-  /* Fill the framebuffer with a repeating 32-bit pattern. */
   u32 b = color.b, g = color.g, r = color.r;
   u32 w0 = b | (g << 8) | (r << 16) | (b << 24);
   u32 w1 = g | (r << 8) | (b << 16) | (g << 24);
@@ -50,7 +46,6 @@ void draw_pixel(volatile u8 *fb, int x, int y, int screen_height, Color color) {
   if (x < 0 || y < 0 || y >= screen_height)
     return;
 
-  
   u32 offset =
       ((x * screen_height) + (screen_height - 1 - y)) * BYTES_PER_PIXEL;
   fb[offset + 0] = color.b;
@@ -60,7 +55,6 @@ void draw_pixel(volatile u8 *fb, int x, int y, int screen_height, Color color) {
 
 void draw_char(volatile u8 *fb, int x, int y, int screen_height, char c,
                Color fg, Color bg) {
-  
   if (c < 0x20 || c > 0x7E)
     return;
 
@@ -115,7 +109,6 @@ void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h,
     return;
 
   u8 b = color.b, g = color.g, r = color.r;
-  /* Store one offset per column to avoid multiplying inside the inner loop. */
   for (int px = x; px < x + w; px++) {
     volatile u8 *p = fb + ((px * screen_height) + (screen_height - 1 - y)) * 3;
     for (int i = 0; i < h; i++) {
@@ -127,7 +120,6 @@ void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h,
   }
 }
 
-/* Fill one rounded corner using a simple circle test. */
 static void fill_corner(volatile u8 *fb, int bx, int by, int r, int cx0,
                         int cy0, int screen_height, Color color) {
   int r2 = r * r;

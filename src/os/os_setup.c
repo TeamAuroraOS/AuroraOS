@@ -100,6 +100,7 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_STOPPED      */ {"Stopped", "Detenido", "Arrete"},
     /* STR_DEBUG_CRASH  */
     {"Force Debug Crash", "Forzar Fallo", "Forcer un Crash"},
+    /* STR_TOUCH_TEST   */ {"Touch Test", "Tactil", "Tactile"},
 };
 
 const char *L(StringId id) {

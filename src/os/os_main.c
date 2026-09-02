@@ -6,22 +6,61 @@
 #include "i2c.h"
 #include "icons.h"
 #include "lang.h"
+#include "touch.h"
 #include "user.h"
 
 void delay(volatile u32 cycles) {
   while (cycles--)
-    __asm__ volatile("nop"); // VS Code gives error: "identifier "__asm__" is undefined" - Ignore it
+    __asm__ volatile("nop");
 }
 
 u32 get_keys(void) { return ~REG_HID_PAD & 0x3FF; }
 
 static u32 prev_keys = 0;
 u32 get_keys_down(void) {
-  crash_poll_arm11(); /* surface an ARM11 audio-core fault on the crash screen */
+  crash_poll_arm11();
   u32 cur = get_keys();
   u32 down = cur & ~prev_keys;
   prev_keys = cur;
   return down;
+}
+
+/* Touchscreen raw-ADC -> screen-pixel calibration. Defaults are a first guess;
+ * the Touch Test shows raw values so these can be tuned (flip min/max to invert
+ * an axis). Raw ADC is 12-bit. */
+#define TS_X_MIN 0x0D0
+#define TS_X_MAX 0xF00
+#define TS_Y_MIN 0x0F0
+#define TS_Y_MAX 0xF00
+
+int touch_read(int *sx, int *sy, int *rawx, int *rawy) {
+  volatile TouchShared *ts = (volatile TouchShared *)TOUCH_SHARED_ADDR;
+  __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(TOUCH_SHARED_ADDR)
+                   : "memory");
+  if (!ts->pressed)
+    return 0;
+
+  int rx = (int)ts->raw_x, ry = (int)ts->raw_y;
+  if (rawx)
+    *rawx = rx;
+  if (rawy)
+    *rawy = ry;
+
+  int x = (rx - (TS_X_MIN)) * 320 / ((TS_X_MAX) - (TS_X_MIN));
+  int y = (ry - (TS_Y_MIN)) * 240 / ((TS_Y_MAX) - (TS_Y_MIN));
+  if (x < 0)
+    x = 0;
+  if (x > 319)
+    x = 319;
+  if (y < 0)
+    y = 0;
+  if (y > 239)
+    y = 239;
+  if (sx)
+    *sx = x;
+  if (sy)
+    *sy = y;
+  return 1;
 }
 
 static u32 str_len(const char *s) {
@@ -33,9 +72,9 @@ static u32 str_len(const char *s) {
 
 static void os_power_off(void) {
   I2C_init();
-  I2C_writeReg(I2C_DEV_MCU, 0x22, 1 << 0); /* LCDs off first */
+  I2C_writeReg(I2C_DEV_MCU, 0x22, 1 << 0);
   __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
-  I2C_writeReg(I2C_DEV_MCU, 0x20, 1 << 0); /* system power off */
+  I2C_writeReg(I2C_DEV_MCU, 0x20, 1 << 0);
   while (1)
     __asm__ volatile("mcr p15, 0, r0, c7, c0, 4");
 }
@@ -107,7 +146,6 @@ static void hm_battery(int x, int y) {
 static void hm_top_static(void) {
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_HM_BG);
 
-  /* faint faceted diamond texture */
   for (int o = -TOP_SCREEN_HEIGHT; o < TOP_SCREEN_WIDTH; o += 46) {
     for (int t = 0; t < TOP_SCREEN_HEIGHT; t++) {
       int a = o + t;
@@ -170,14 +208,14 @@ static void hm_bottom_static(void) {
 
   draw_filled_round_rect(VRAM_BOT_A, 8, 8, BOT_SCREEN_WIDTH - 16, 30, 10,
                          BOT_SCREEN_HEIGHT, COLOR_HM_BAR);
-  int sx = BOT_SCREEN_WIDTH - 62, sy = 16; /* search magnifier */
+  int sx = BOT_SCREEN_WIDTH - 62, sy = 16;
   draw_filled_round_rect(VRAM_BOT_A, sx, sy, 11, 11, 5, BOT_SCREEN_HEIGHT,
                          COLOR_HM_TEXT2);
   draw_filled_round_rect(VRAM_BOT_A, sx + 2, sy + 2, 7, 7, 3, BOT_SCREEN_HEIGHT,
                          COLOR_HM_BAR);
   draw_filled_rect(VRAM_BOT_A, sx + 10, sy + 10, 4, 2, BOT_SCREEN_HEIGHT,
                    COLOR_HM_TEXT2);
-  int gx = BOT_SCREEN_WIDTH - 34, gy = 18; /* settings sliders */
+  int gx = BOT_SCREEN_WIDTH - 34, gy = 18;
   draw_filled_round_rect(VRAM_BOT_A, gx, gy, 16, 4, 2, BOT_SCREEN_HEIGHT,
                          COLOR_HM_TEXT2);
   draw_filled_round_rect(VRAM_BOT_A, gx + 9, gy - 2, 5, 8, 2, BOT_SCREEN_HEIGHT,
@@ -214,15 +252,12 @@ static void hm_draw_full(int sel) {
   screen_present_bottom();
 }
 
-/* Selection moved: repaint only the two affected slots and the top item. */
 static void hm_update(int old_sel, int new_sel) {
   hm_slot(old_sel, 0);
   hm_slot(new_sel, 1);
   screen_present_bottom();
   hm_top_item(new_sel);
 }
-
-/* ============================== Settings ================================= */
 
 /* Accent palette + names now live in os_setup.c, shared with the first-time
  * setup's Personalise screen so the saved accent index means the same thing
@@ -248,6 +283,7 @@ typedef enum {
   SET_ACCENT,
   SET_BRIGHTNESS,
   SET_SOUND,
+  SET_TOUCH,
   SET_ABOUT,
   SET_CRASH,
   SET_COUNT
@@ -255,26 +291,57 @@ typedef enum {
 
 #define ROW_X    12
 #define ROW_W    (BOT_SCREEN_WIDTH - 24)
-#define ROW_H    32
-#define ROW_STEP (ROW_H + 6)
-#define ROW_Y0   6
+#define ROW_H    34
+#define ROW_STEP 42
+#define ROW_Y0   8
+#define SET_VISIBLE 5 /* rows shown at once; the list scrolls past this */
 
-static void settings_row(int i, int sel, const unsigned char *icon,
-                         const char *name, const char *value) {
-  int y = ROW_Y0 + i * ROW_STEP;
+/* Icon / name / value for a settings item. icon == NULL means "draw the accent
+ * swatch" (the accent row). */
+static void settings_content(int id, const unsigned char **icon,
+                             const char **name, const char **value) {
+  switch (id) {
+    case SET_WIFI:
+      *icon = icon_wifi_bits; *name = L(STR_WIFI); *value = L(STR_OFF); break;
+    case SET_ACCENT:
+      *icon = NULL; *name = L(STR_ACCENT_COLOR);
+      *value = accent_names[g_accent_idx]; break;
+    case SET_BRIGHTNESS:
+      *icon = icon_brightness_bits; *name = L(STR_BRIGHTNESS);
+      *value = "3 / 5"; break;
+    case SET_SOUND:
+      *icon = icon_boot_bits; *name = L(STR_SOUND_TEST);
+      *value = audio_alive() ? "Ready" : "---"; break;
+    case SET_TOUCH:
+      *icon = icon_boot_bits; *name = L(STR_TOUCH_TEST); *value = ""; break;
+    case SET_ABOUT:
+      *icon = icon_settings_bits; *name = L(STR_ABOUT); *value = "v0.0.8"; break;
+    default: /* SET_CRASH */
+      *icon = icon_power_bits; *name = L(STR_DEBUG_CRASH); *value = ""; break;
+  }
+}
+
+/* Draw settings item `id` at display row `drow` (0..SET_VISIBLE-1). */
+static void settings_row(int drow, int id, int sel) {
+  const unsigned char *icon;
+  const char *name, *value;
+  settings_content(id, &icon, &name, &value);
+
+  int y = ROW_Y0 + drow * ROW_STEP;
   draw_filled_round_rect(VRAM_BOT_A, ROW_X - 3, y - 3, ROW_W + 6, ROW_H + 6, 10,
-                         BOT_SCREEN_HEIGHT, (i == sel) ? g_accent : COLOR_HM_BG);
+                         BOT_SCREEN_HEIGHT,
+                         (id == sel) ? g_accent : COLOR_HM_BG);
   draw_filled_round_rect(VRAM_BOT_A, ROW_X, y, ROW_W, ROW_H, 8,
                          BOT_SCREEN_HEIGHT, COLOR_HM_SLOT);
   if (icon)
     draw_icon_32(VRAM_BOT_A, ROW_X + 6, y + (ROW_H - ICON_SIZE) / 2,
                  BOT_SCREEN_HEIGHT, icon, COLOR_WHITE);
-  else /* accent row: show a swatch of the current accent colour */
+  else
     draw_filled_round_rect(VRAM_BOT_A, ROW_X + 11, y + 9, 16, 16, 4,
                            BOT_SCREEN_HEIGHT, g_accent);
   draw_string(VRAM_BOT_A, ROW_X + 44, y + (ROW_H - FONT_HEIGHT) / 2,
               BOT_SCREEN_HEIGHT, name, COLOR_WHITE, COLOR_HM_SLOT);
-  if (value)
+  if (value && value[0])
     draw_string(VRAM_BOT_A, ROW_X + ROW_W - 16 - (int)str_len(value) * FONT_WIDTH,
                 y + (ROW_H - FONT_HEIGHT) / 2, BOT_SCREEN_HEIGHT, value,
                 COLOR_HM_TEXT2, COLOR_HM_SLOT);
@@ -285,15 +352,14 @@ static void settings_row(int i, int sel, const unsigned char *icon,
 static void settings_draw(int sel) {
   /* Title is shown on the top screen by settings_header(). */
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
-  settings_row(SET_WIFI, sel, icon_wifi_bits, L(STR_WIFI), L(STR_OFF));
-  settings_row(SET_ACCENT, sel, NULL, L(STR_ACCENT_COLOR),
-               accent_names[g_accent_idx]);
-  settings_row(SET_BRIGHTNESS, sel, icon_brightness_bits, L(STR_BRIGHTNESS),
-               "3 / 5");
-  settings_row(SET_SOUND, sel, icon_boot_bits, L(STR_SOUND_TEST),
-               audio_alive() ? "Ready" : "---");
-  settings_row(SET_ABOUT, sel, icon_settings_bits, L(STR_ABOUT), "v0.0.8");
-  settings_row(SET_CRASH, sel, icon_power_bits, L(STR_DEBUG_CRASH), "");
+
+  int top = sel - SET_VISIBLE / 2; /* keep the selection roughly centred */
+  if (top > SET_COUNT - SET_VISIBLE)
+    top = SET_COUNT - SET_VISIBLE;
+  if (top < 0)
+    top = 0;
+  for (int r = 0; r < SET_VISIBLE && top + r < SET_COUNT; r++)
+    settings_row(r, top + r, sel);
   screen_present_bottom();
 }
 
@@ -546,6 +612,95 @@ static void sound_test_screen(void) {
   }
 }
 
+/* ============================== Touch Test ============================== */
+/* Diagnostics + crosshair. Shows the ARM11 core version, a heartbeat (seq), and
+ * the raw codec sample bytes, so we can see whether touch is being read at all
+ * and tune the calibration (TS_*_MIN/MAX). */
+static void snd_hex2(char *out, u32 v) {
+  static const char d[] = "0123456789ABCDEF";
+  out[0] = d[(v >> 4) & 0xF];
+  out[1] = d[v & 0xF];
+  out[2] = '\0';
+}
+
+static void touch_test_screen(void) {
+  settings_header(icon_boot_bits, L(STR_TOUCH_TEST), COLOR_WHITE);
+  char line[48], num[16], *p;
+  while (1) {
+    u32 k = get_keys_down();
+    if (k & BUTTON_B)
+      return;
+
+    volatile TouchShared *ts = (volatile TouchShared *)TOUCH_SHARED_ADDR;
+    __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(TOUCH_SHARED_ADDR)
+                     : "memory");
+    u32 seq = ts->seq, pressed = ts->pressed;
+    u32 b0 = ts->d_b0, b1 = ts->d_b1, b10 = ts->d_b10, b11 = ts->d_b11;
+    u32 rx = ts->raw_x, ry = ts->raw_y;
+
+    clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+
+    u32 ver = audio_version();
+    p = snd_cpy(line, "core v");
+    snd_u32(num, ver);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, "/");
+    snd_u32(num, AUDIO_CORE_VERSION);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, "  seq ");
+    snd_u32(num, seq);
+    snd_cpy(p, num);
+    draw_string(VRAM_BOT_A, 8, 8, BOT_SCREEN_HEIGHT, line,
+                (ver == AUDIO_CORE_VERSION) ? COLOR_AURORA : COLOR_ORANGE,
+                COLOR_HM_BG);
+
+    p = snd_cpy(line, "b0:");
+    snd_hex2(num, b0);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " b1:");
+    snd_hex2(num, b1);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " b10:");
+    snd_hex2(num, b10);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " b11:");
+    snd_hex2(num, b11);
+    snd_cpy(p, num);
+    draw_string(VRAM_BOT_A, 8, 24, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
+                COLOR_HM_BG);
+
+    p = snd_cpy(line, "pressed: ");
+    snd_u32(num, pressed);
+    if (pressed) {
+      p = snd_cpy(p, num);
+      p = snd_cpy(p, "  raw ");
+      snd_u32(num, rx);
+      p = snd_cpy(p, num);
+      p = snd_cpy(p, ",");
+      snd_u32(num, ry);
+      snd_cpy(p, num);
+    } else {
+      snd_cpy(p, num);
+    }
+    draw_string(VRAM_BOT_A, 8, 40, BOT_SCREEN_HEIGHT, line, COLOR_WHITE,
+                COLOR_HM_BG);
+
+    if (pressed) {
+      int sx = 0, sy = 0;
+      touch_read(&sx, &sy, NULL, NULL);
+      draw_filled_rect(VRAM_BOT_A, sx - 8, sy - 1, 17, 3, BOT_SCREEN_HEIGHT,
+                       g_accent);
+      draw_filled_rect(VRAM_BOT_A, sx - 1, sy - 8, 3, 17, BOT_SCREEN_HEIGHT,
+                       g_accent);
+    }
+
+    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 16, BOT_SCREEN_HEIGHT,
+                "B: Back", COLOR_HM_TEXT2, COLOR_HM_BG);
+    screen_present_bottom();
+    delay(30000);
+  }
+}
+
 static void settings_open(void) {
   settings_header(icon_settings_bits, L(STR_SETTINGS), COLOR_WHITE);
   int sel = 0;
@@ -566,6 +721,8 @@ static void settings_open(void) {
         accent_screen();
       else if (sel == SET_SOUND)
         sound_test_screen();
+      else if (sel == SET_TOUCH)
+        touch_test_screen();
       else if (sel == SET_CRASH)
         crash_force(); /* never returns: shows the crash screen */
       settings_header(icon_settings_bits, L(STR_SETTINGS), COLOR_WHITE);
