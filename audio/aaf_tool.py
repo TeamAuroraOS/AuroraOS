@@ -10,9 +10,28 @@ HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
 def convert_to_aaf(input_path: str, output_path: str, sample_rate: int, bit_depth: int = 16):
     from pydub import AudioSegment
+    from pydub.utils import which
+
+    # Only WAV can be read via Python's stdlib; every other format needs ffmpeg.
+    ext = Path(input_path).suffix.lower()
+    have_ffmpeg = which("ffmpeg") is not None or which("avconv") is not None
+    if ext != ".wav" and not have_ffmpeg:
+        raise SystemExit(
+            f"ffmpeg is required to read '{ext or input_path}' files, but it was not\n"
+            "found on your PATH. Fix it one of these ways:\n"
+            "  * Install ffmpeg, then reopen your terminal:\n"
+            "      winget install Gyan.FFmpeg      (or)   choco install ffmpeg\n"
+            "  * Or convert the source to .wav first and pass that (WAV needs no ffmpeg)."
+        )
 
     print(f"Loading {input_path} ...")
-    audio = AudioSegment.from_file(input_path)
+    try:
+        audio = AudioSegment.from_file(input_path)
+    except FileNotFoundError:
+        raise SystemExit(
+            "Could not launch ffmpeg (needed to decode this file). Install it with\n"
+            "  winget install Gyan.FFmpeg   (then reopen the terminal), or use a .wav input."
+        )
 
     print(f"Converting to mono, {sample_rate} Hz, {bit_depth}-bit ...")
     audio = audio.set_channels(1)
