@@ -18,9 +18,6 @@
 #include "lang.h"
 #include "user.h"
 
-/* From os_main.c (declared in aurora.h): delay(), get_keys_down(). */
-
-/* ============================ localization ============================== */
 /* One row per string id (see lang.h); columns are English / Espanol / Francais.
  * Font is ASCII-only, so translations drop accents. */
 int g_lang = 0;
@@ -112,31 +109,28 @@ const char *L(StringId id) {
   return T[id][l];
 }
 
-/* ============================ shared accent palette ====================== */
 /* Index 0 is Aurora teal, the default. Ordered to roughly match the swatch
  * grid in mockup/setup6.png. Also used by the Settings accent picker. */
 const Color aurora_accent_presets[AURORA_ACCENT_COUNT] = {
-    {0x64, 0xE8, 0xC8}, /* Aurora     */
-    {0xFF, 0x3B, 0x30}, /* Red        */
-    {0xFF, 0x9F, 0x0A}, /* Orange     */
-    {0xFF, 0xD6, 0x0A}, /* Yellow     */
-    {0x34, 0xC8, 0x3A}, /* Green      */
-    {0x1E, 0x8A, 0x3B}, /* Forest     */
-    {0x32, 0xD6, 0xE2}, /* Cyan       */
-    {0x3B, 0x82, 0xF6}, /* Blue       */
-    {0x28, 0x2F, 0xE6}, /* Indigo     */
-    {0xA0, 0x5C, 0xE2}, /* Purple     */
-    {0xFF, 0x2D, 0xB8}, /* Magenta    */
-    {0xFF, 0x2D, 0x55}, /* Rose       */
-    {0xB0, 0xB8, 0xE8}, /* Periwinkle */
-    {0x9A, 0x9A, 0x9A}, /* Gray       */
+    {0x64, 0xE8, 0xC8},
+    {0xFF, 0x3B, 0x30},
+    {0xFF, 0x9F, 0x0A},
+    {0xFF, 0xD6, 0x0A},
+    {0x34, 0xC8, 0x3A},
+    {0x1E, 0x8A, 0x3B},
+    {0x32, 0xD6, 0xE2},
+    {0x3B, 0x82, 0xF6},
+    {0x28, 0x2F, 0xE6},
+    {0xA0, 0x5C, 0xE2},
+    {0xFF, 0x2D, 0xB8},
+    {0xFF, 0x2D, 0x55},
+    {0xB0, 0xB8, 0xE8},
+    {0x9A, 0x9A, 0x9A},
 };
 const char *aurora_accent_names[AURORA_ACCENT_COUNT] = {
     "Aurora", "Red",    "Orange",  "Yellow", "Green",      "Forest", "Cyan",
     "Blue",   "Indigo", "Purple",  "Magenta", "Rose",      "Periwinkle", "Gray",
 };
-
-/* ============================ small utilities =========================== */
 
 static u32 slen(const char *s) {
   u32 n = 0;
@@ -208,8 +202,6 @@ static void thick_line(volatile u8 *fb, int x0, int y0, int x1, int y1, int t,
     draw_filled_rect(fb, x, y, t, t, sh, c);
   }
 }
-
-/* ============================ top-screen chrome ========================= */
 
 #define SH_TOP TOP_SCREEN_HEIGHT
 
@@ -284,8 +276,6 @@ static void setup_top(int step, const char *l1, const char *l2, Color accent) {
   step_bar(step, accent);
 }
 
-/* ============================ bottom-screen widgets ===================== */
-
 #define SH_BOT BOT_SCREEN_HEIGHT
 
 static void button(int x, int y, int w, int h, const char *label, int sel,
@@ -302,7 +292,6 @@ static void bottom_title(const char *s) {
   draw_string(VRAM_BOT_A, 12, 12, SH_BOT, s, COLOR_HM_TEXT2, COLOR_HM_BG);
 }
 
-/* ============================ step 1: Language ========================== */
 /* Branded welcome screen (mockup/setup1.png): green glow, AURORA wordmark and
  * version on top; language list + Get started on the bottom. */
 
@@ -383,7 +372,6 @@ static void step_language(UserConfig *cfg) {
   }
 }
 
-/* ============================ step 2: Network =========================== */
 /* Wi-Fi is not implemented yet, so per the brief this screen offers only a Skip
  * button (B still steps back). */
 
@@ -413,7 +401,6 @@ static Nav step_network(UserConfig *cfg) {
   }
 }
 
-/* ============================ on-screen keyboard ======================== */
 /* D-pad navigable QWERTY for the user-name field (no touch driver yet). */
 
 static const char *kb_rows[4] = {
@@ -562,7 +549,6 @@ static void keyboard_edit(char *name, Color accent) {
   }
 }
 
-/* ============================ step 3: User Details ====================== */
 /* Focus order: 0 Name, 1 Day, 2 Month, 3 Year, 4 Back, 5 Next.
  * Left/Right move focus; Up/Down adjust the focused date field. */
 
@@ -680,8 +666,6 @@ static Nav step_user(UserConfig *cfg) {
   }
 }
 
-/* ============================ step 4: Personalise ====================== */
-
 #define PSW 36
 #define PGAP 10
 #define PCOLS 6
@@ -744,8 +728,6 @@ static Nav step_personalise(UserConfig *cfg) {
   }
 }
 
-/* ============================ step 5: Welcome ========================== */
-
 static void console_icon(int cx, int cy, Color color) {
   volatile u8 *fb = VRAM_TOP_LA;
   draw_filled_round_rect(fb, cx - 34, cy - 44, 68, 40, 8, SH_TOP, color);
@@ -782,8 +764,6 @@ static Nav step_welcome(UserConfig *cfg) {
   }
 }
 
-/* ============================ wizard driver ============================ */
-
 void setup_run(UserConfig *cfg) {
   g_lang = cfg->language;
   int step = 0;
@@ -817,8 +797,6 @@ void setup_run(UserConfig *cfg) {
   cfg->setup_done = 1;
   cfg->valid = 1;
 }
-
-/* ============================ USER.dat load / save ===================== */
 
 static FATFS s_fs;
 static FIL s_fil;
