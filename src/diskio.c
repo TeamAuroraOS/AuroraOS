@@ -1,10 +1,3 @@
-/*
- * FatFs <-> AuroraOS SD driver glue (diskio.c).
- *
- * Implements the low-level disk functions FatFs (ff.c) calls. A single SD
- * volume (pdrv 0) is supported, backed by src/sdmmc.c. Both read and write are
- * wired up (ffconf.h sets FF_FS_READONLY = 0) so the OS can persist USER.dat.
- */
 #include "ff.h"
 #include "diskio.h"
 #include "sdmmc.h"

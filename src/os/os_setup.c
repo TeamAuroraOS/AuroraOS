@@ -1,16 +1,3 @@
-/*
- * AuroraOS first-time setup wizard + USER.dat persistence.
- *
- * Built and laid out from the mockup PNGs. The flow has five steps, shown on the
- * top screen's progress bar: Language -> Network -> User Details -> Personalise
- * -> Welcome. Everything is driven with the D-pad and A/B/START (the 3DS has no
- * touch driver yet), and Wi-Fi is not implemented, so the Network step only
- * offers a Skip button as requested.
- *
- * The user's selections are written to SD:\Aurora\USER.dat, a fixed 64-byte
- * record beginning with the magic "ADAT". On later boots os_main() loads this
- * file and applies it, so setup only runs once.
- */
 #include "aurora.h"
 #include "aurora_logo.h"
 #include "ff.h"
