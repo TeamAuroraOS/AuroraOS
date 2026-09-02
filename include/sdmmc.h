@@ -103,6 +103,10 @@ int sdmmc_sdcard_init(void);
 int sdmmc_sdcard_readsectors(u32 sector_no, u32 numsectors, u8 *out);
 int sdmmc_sdcard_readsector(u32 sector_no, u8 *out);
 
+/* Write numsectors 512-byte sectors starting at sector_no from in.
+   Returns 0 on success, non-zero on error. */
+int sdmmc_sdcard_writesectors(u32 sector_no, u32 numsectors, const u8 *in);
+
 /* Total capacity of the SD card in 512-byte sectors (valid after init). */
 u32 sdmmc_sdcard_size(void);
 
