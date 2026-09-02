@@ -51,6 +51,15 @@ ARM9_LDFLAGS := -T $(ARM9_LD) -nostdlib -nostartfiles -Wl,--build-id=none -Wl,--
 
 ARM11_ARCH := -mcpu=mpcore -march=armv6k -marm
 ARM11_ASFLAGS := $(ARM11_ARCH) -mthumb-interwork
+ARM11_CFLAGS := $(ARM11_ARCH) \
+                -mthumb-interwork \
+                -ffreestanding \
+                -fno-builtin \
+                -nostdlib \
+                -nostartfiles \
+                -Wall -Wextra \
+                -g -O2 \
+                -I$(INC_DIR)
 ARM11_LDFLAGS := -T $(ARM11_LD) -nostdlib -nostartfiles -Wl,--build-id=none
 
 ARM9_LOAD_ADDR  := 0x08006800
@@ -127,11 +136,20 @@ OS_LD   := $(OS_DIR)/os.ld
 # SD/FatFs stack, the shared AOS1/AUR1 container parser, and the app hand-off
 # stub -- the same sources the launcher firm uses.
 OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
+           $(BUILD_DIR)/os_setup.o $(BUILD_DIR)/os_audio9.o \
+           $(BUILD_DIR)/os_crash.o $(BUILD_DIR)/os_crashasm.o \
            $(BUILD_DIR)/os_screen.o $(BUILD_DIR)/os_i2c.o \
            $(BUILD_DIR)/os_string.o $(BUILD_DIR)/os_container.o \
            $(BUILD_DIR)/os_sdmmc.o $(BUILD_DIR)/os_diskio.o \
            $(BUILD_DIR)/os_ff.o $(BUILD_DIR)/os_ffunicode.o \
            $(BUILD_DIR)/os_launch.o
+
+# ARM11 audio core: built separately, linked to run at 0x23000000, then embedded
+# in the ARM9 OS as a byte blob (build/audio11_blob.h) that audio9.c copies into
+# place and wakes the ARM11 into. See src/os/audio11.c.
+AUDIO11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/audio11.o
+AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
+AUDIO11_BLOB := $(BUILD_DIR)/audio11_blob.h
 
 $(BUILD_DIR)/os_start.o: $(OS_DIR)/os_start.s | dirs
 	@echo [AS9 ] Assembling $<
@@ -140,6 +158,43 @@ $(BUILD_DIR)/os_start.o: $(OS_DIR)/os_start.s | dirs
 $(BUILD_DIR)/os_main.o: $(OS_DIR)/os_main.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $<
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_setup.o: $(OS_DIR)/os_setup.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $<
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_crash.o: $(OS_DIR)/crash.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $<
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_crashasm.o: $(OS_DIR)/crash.s | dirs
+	@echo [AS9 ] Assembling $<
+	$(AS) $(ARM9_ASFLAGS) -c $< -o $@
+
+# ---- ARM11 audio core -> embedded blob --------------------------------------
+$(BUILD_DIR)/audio11_start.o: $(OS_DIR)/audio11_start.s | dirs
+	@echo [AS11] Assembling $<
+	$(AS) $(ARM11_ASFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/audio11.o: $(OS_DIR)/audio11.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC11] Compiling $<
+	$(CC) $(ARM11_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/audio11.elf: $(AUDIO11_OBJS) $(OS_DIR)/audio11.ld
+	@echo [LD11] Linking ARM11 audio core
+	$(LD) -T $(OS_DIR)/audio11.ld -nostdlib -nostartfiles -Wl,--build-id=none -Wl,--gc-sections $(AUDIO11_OBJS) -o $@ -lgcc
+
+$(AUDIO11_BIN): $(BUILD_DIR)/audio11.elf
+	@echo [BIN11] Creating $@
+	$(OBJCOPY) -O binary $< $@
+
+$(AUDIO11_BLOB): $(AUDIO11_BIN)
+	@echo [BLOB] Embedding $< '->' $@
+	python tools/bin2c.py $< audio11_bin > $@
+
+$(BUILD_DIR)/os_audio9.o: $(OS_DIR)/audio9.c $(wildcard $(INC_DIR)/*.h) $(AUDIO11_BLOB) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -I$(BUILD_DIR) -c $< -o $@
 
 $(BUILD_DIR)/os_screen.o: $(SRC_DIR)/screen.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
