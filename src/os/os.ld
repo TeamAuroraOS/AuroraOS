@@ -1,6 +1,5 @@
-/* Coded By DisLoPik for the AuroraOS Project. */
-/* Links the AuroraOS payload to run in place at AOS_ARM9_LOAD_ADDR (0x22000000).
-   Stack lives higher up in FCRAM, well clear of the code/bss. */
+/* Links the AuroraOS payload to run in place at 0x22000000 (FCRAM).
+   Stack lives higher up in FCRAM, well clear of code/bss. */
 OUTPUT_FORMAT("elf32-littlearm")
 OUTPUT_ARCH(arm)
 ENTRY(_os_start)
@@ -16,7 +15,7 @@ SECTIONS
 
     .text :
     {
-        *(.start)       /* _os_start must be first */
+        *(.start)
         *(.text*)
         *(.rodata*)
         . = ALIGN(4);
@@ -44,7 +43,6 @@ SECTIONS
         _os_bss_end = .;
     } > FCRAM
 
-    /* Stack grows down from here (16 MB above the load address). */
     _os_stack_top = 0x23000000;
 
     /DISCARD/ :

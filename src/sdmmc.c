@@ -293,6 +293,22 @@ int sdmmc_sdcard_readsector(u32 sector_no, u8 *out) {
     return sdmmc_sdcard_readsectors(sector_no, 1, out);
 }
 
+int sdmmc_sdcard_writesectors(u32 sector_no, u32 numsectors, const u8 *in) {
+    /* Mirror of readsectors using CMD25 WRITE_MULTIPLE_BLOCK. Non-SDHC cards
+       are byte-addressed, SDHC cards are sector-addressed. -- from GodMode9. */
+    if (handleSD.isSDHC == 0)
+        sector_no <<= 9;
+    set_target(&handleSD);
+    sdmmc_write16(REG_SDSTOP, 0x100);
+    sdmmc_write16(REG_SDBLKCOUNT32, (u16)numsectors);
+    sdmmc_write16(REG_SDBLKLEN32, 0x200);
+    sdmmc_write16(REG_SDBLKCOUNT, (u16)numsectors);
+    handleSD.tData = in;
+    handleSD.size = numsectors << 9;
+    sdmmc_send_command(&handleSD, 0x52C19, sector_no); /* CMD25 WRITE_MULTIPLE_BLOCK */
+    return get_error(&handleSD);
+}
+
 u32 sdmmc_sdcard_size(void) {
     return handleSD.total_size;
 }

@@ -1,9 +1,9 @@
 /*
  * FatFs <-> AuroraOS SD driver glue (diskio.c).
  *
- * Implements the low-level disk functions FatFs (ff.c) calls. Only a single
- * read-only SD volume (pdrv 0) is supported, backed by src/sdmmc.c. The write
- * path is stubbed because ffconf.h sets FF_FS_READONLY = 1.
+ * Implements the low-level disk functions FatFs (ff.c) calls. A single SD
+ * volume (pdrv 0) is supported, backed by src/sdmmc.c. Both read and write are
+ * wired up (ffconf.h sets FF_FS_READONLY = 0) so the OS can persist USER.dat.
  */
 #include "ff.h"
 #include "diskio.h"
@@ -42,14 +42,15 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
   return RES_ERROR;
 }
 
-/* Read-only volume: writing is never allowed. (FF_FS_READONLY = 1 means FatFs
-   never calls this, but keep it defined so flipping that flag still links.) */
 DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
-  (void)pdrv;
-  (void)buff;
-  (void)sector;
-  (void)count;
-  return RES_WRPRT;
+  if (pdrv != 0)
+    return RES_PARERR;
+  if (sd_status & STA_NOINIT)
+    return RES_NOTRDY;
+
+  if (sdmmc_sdcard_writesectors((u32)sector, (u32)count, buff) == 0)
+    return RES_OK;
+  return RES_ERROR;
 }
 
 DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
