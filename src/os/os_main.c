@@ -292,7 +292,7 @@ static void settings_draw(int sel) {
                "3 / 5");
   settings_row(SET_SOUND, sel, icon_boot_bits, L(STR_SOUND_TEST),
                audio_alive() ? "Ready" : "---");
-  settings_row(SET_ABOUT, sel, icon_settings_bits, L(STR_ABOUT), "v0.0.7");
+  settings_row(SET_ABOUT, sel, icon_settings_bits, L(STR_ABOUT), "v0.0.8");
   settings_row(SET_CRASH, sel, icon_power_bits, L(STR_DEBUG_CRASH), "");
   screen_present_bottom();
 }
