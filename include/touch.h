@@ -34,4 +34,13 @@ typedef struct {
  * values are returned through rawx/rawy when non-NULL (handy for calibration). */
 int touch_read(int *sx, int *sy, int *rawx, int *rawy);
 
+/* Press-edge "tap": returns 1 once at the moment a new touch begins, filling the
+ * tap position. Call once per input-loop iteration (like get_keys_down). */
+int touch_tap(int *x, int *y);
+
+/* True if point (tx,ty) is inside the rect (x,y,w,h). */
+static inline int touch_in(int tx, int ty, int x, int y, int w, int h) {
+  return tx >= x && tx < x + w && ty >= y && ty < y + h;
+}
+
 #endif /* AURORA_TOUCH_H */
