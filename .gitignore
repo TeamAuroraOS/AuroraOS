@@ -2,6 +2,10 @@
 build/
 output/
 mockup/
+
+# Dumped copyright material (NWM Wi-Fi sysmodule + extracted Atheros firmware).
+# Must NOT be committed -- users dump these from their own console.
+exclude/
 *.bin
 *.elf
 *.firm
