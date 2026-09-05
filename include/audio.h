@@ -33,7 +33,7 @@
  * resident core is current. FCRAM survives a warm reboot, so a stale core can
  * linger unless the console is fully powered off -- the Sound Test screen shows
  * this version so a mismatch is visible. */
-#define AUDIO_CORE_VERSION 12
+#define AUDIO_CORE_VERSION 31
 
 /* Max PCM the shared buffer holds (10 MB, clear of the app-stage at 0x24000000).
  * Longer tracks are truncated to this. */
@@ -47,6 +47,7 @@ enum {
   AUDIO_CMD_PCM  = 3, /* play PCM already loaded at AUDIO_PCM_ADDR:
                        * arg1 = sample count, arg2 = sample rate (Hz),
                        * arg3 = bit depth (8 or 16). One-shot.               */
+  AUDIO_CMD_WIFI = 4, /* run the Wi-Fi SDIO probe (results in WifiShared)    */
 };
 
 /* ARM11 progress codes, surfaced on-screen to debug the bring-up. */
@@ -90,7 +91,7 @@ typedef struct {
   volatile uint32_t diag7;
 } AudioCtrl;
 
-/* ---- ARM9-side API (src/os/audio9.c) ---- */
+/* ARM9-side API (src/os/audio9.c). */
 
 /* Copy the ARM11 core into place and wake the ARM11. Idempotent: does nothing
  * if the core is already reporting alive. Blocks briefly for the handshake. */

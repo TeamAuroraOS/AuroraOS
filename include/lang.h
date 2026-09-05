@@ -57,6 +57,7 @@ typedef enum {
   STR_STOPPED,
   STR_DEBUG_CRASH,
   STR_TOUCH_TEST,
+  STR_WIFI_TEST,
 
   STR_COUNT
 } StringId;
