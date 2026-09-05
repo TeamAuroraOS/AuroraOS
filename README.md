@@ -15,6 +15,11 @@
 Aurora is a custom OS for the Nintendo 3DS.
 -  *Built using knowledge from GodMode9 and Luma source code.*
 
+## License
+Aurora is licensed **GPL-3.0** (see `LICENSE`). The **Wi-Fi driver** is a separate
+**GPL-2.0** component (see `LICENSE.wifi` and `docs/wifi.md` "License and credits"):
+it derives from the ath6kl legacy driver as ported to the 3DS by **Octoblimp**.
+
 ## How To Install:
 - Place `Aurora.firm` in `SD:\luma\payloads`
 - Place `AURORA.BIN` in root of SD (`SD:\`)
