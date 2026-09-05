@@ -8,6 +8,7 @@
 #include "lang.h"
 #include "touch.h"
 #include "user.h"
+#include "wifi.h"
 
 void delay(volatile u32 cycles) {
   while (cycles--)
@@ -302,6 +303,7 @@ typedef enum {
   SET_BRIGHTNESS,
   SET_SOUND,
   SET_TOUCH,
+  SET_WIFITEST,
   SET_ABOUT,
   SET_CRASH,
   SET_COUNT
@@ -332,6 +334,8 @@ static void settings_content(int id, const unsigned char **icon,
       *value = audio_alive() ? "Ready" : "---"; break;
     case SET_TOUCH:
       *icon = icon_boot_bits; *name = L(STR_TOUCH_TEST); *value = ""; break;
+    case SET_WIFITEST:
+      *icon = icon_wifi_bits; *name = L(STR_WIFI_TEST); *value = ""; break;
     case SET_ABOUT:
       *icon = icon_settings_bits; *name = L(STR_ABOUT); *value = "v0.0.8"; break;
     default: /* SET_CRASH */
@@ -514,7 +518,7 @@ static void accent_screen(void) {
   }
 }
 
-/* ============================== Sound Test ============================== */
+/* Sound Test */
 /* Drives the ARM11 audio core: shows whether it is alive + its status code, and
  * plays a test tone through CSND. This is the on-device bring-up harness. */
 
@@ -644,7 +648,7 @@ static void sound_test_screen(void) {
   }
 }
 
-/* ============================== Touch Test ============================== */
+/* Touch Test */
 /* Diagnostics + crosshair. Shows the ARM11 core version, a heartbeat (seq), and
  * the raw codec sample bytes, so we can see whether touch is being read at all
  * and tune the calibration (TS_*_MIN/MAX). */
@@ -736,6 +740,181 @@ static void touch_test_screen(void) {
   }
 }
 
+/* Wi-Fi Test: triggers the ARM11 SDIO probe and shows the results. */
+static void wifi_hex4(char *out, u32 v) {
+  static const char d[] = "0123456789ABCDEF";
+  for (int i = 0; i < 4; i++)
+    out[i] = d[(v >> ((3 - i) * 4)) & 0xF];
+  out[4] = '\0';
+}
+
+static void wifi_run_probe(WifiShared *w) {
+  wifi_get(w);
+  u32 last = w->seq;
+  wifi_probe();
+  for (int t = 0; t < 150; t++) { /* wait for the ARM11 to finish (~3s max) */
+    delay(200000);
+    wifi_get(w);
+    if (w->seq != last)
+      break;
+  }
+}
+
+static void wifitest_draw(const WifiShared *w) {
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+  draw_string(VRAM_BOT_A, 8, 6, BOT_SCREEN_HEIGHT, L(STR_WIFI_TEST),
+              COLOR_HM_TEXT2, COLOR_HM_BG);
+
+  char line[48], num[16], *p;
+  int alive = audio_alive();
+
+  p = snd_cpy(line, alive ? "core v" : "core? v");
+  snd_u32(num, audio_version());
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, " ph ");
+  snd_u32(num, w->phase);
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, " clk ");
+  wifi_hex4(num, w->clk);
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, " t/o ");
+  snd_u32(num, w->timeouts);
+  snd_cpy(p, num);
+  Color pc = (w->phase == WIFI_PH_DONE) ? COLOR_AURORA : COLOR_ORANGE;
+  draw_string(VRAM_BOT_A, 8, 22, BOT_SCREEN_HEIGHT, line, pc, COLOR_HM_BG);
+
+  draw_string(VRAM_BOT_A, 8, 38, BOT_SCREEN_HEIGHT,
+              "idx  arg      resp      s0/s1", COLOR_HM_TEXT2, COLOR_HM_BG);
+
+  /* One row per logged SDIO command; green when the response is non-zero. */
+  u32 n = w->nlog;
+  if (n > WIFI_LOG_MAX)
+    n = WIFI_LOG_MAX;
+  for (u32 i = 0; i < n; i++) {
+    const WifiCmd *e = &w->log[i];
+    p = snd_cpy(line, "C");
+    snd_u32(num, (u32)(e->cmd & 0x3F));
+    if ((e->cmd & 0x3F) < 10) {
+      *p++ = '0';
+      *p = '\0';
+    }
+    p = snd_cpy(p, num);
+    *p++ = ' ';
+    wifi_hex4(num, (u16)(e->arg >> 16));
+    p = snd_cpy(p, num);
+    wifi_hex4(num, (u16)e->arg);
+    p = snd_cpy(p, num);
+    *p++ = ' ';
+    snd_hex(num, e->resp);
+    p = snd_cpy(p, num);
+    *p++ = ' ';
+    wifi_hex4(num, e->stat0);
+    p = snd_cpy(p, num);
+    *p++ = '/';
+    wifi_hex4(num, e->stat1);
+    snd_cpy(p, num);
+    int good = (e->ok == 1) && (e->resp != 0) && (e->resp != 0xFFFFFFFF);
+    draw_string(VRAM_BOT_A, 8, 52 + (int)i * 13, BOT_SCREEN_HEIGHT, line,
+                good ? COLOR_AURORA : (e->ok == 2 ? COLOR_ORANGE : COLOR_HM_TEXT2),
+                COLOR_HM_BG);
+  }
+
+  /* Parse the CIS for the CISTPL_MANFID (0x20) tuple: manufacturer + card ID.
+   * Atheros vendor = 0x0271. */
+  {
+    u32 manf = 0, card = 0;
+    int found = 0, pos = 0;
+    for (int g = 0; g < 24 && pos + 1 < 48; g++) {
+      u8 code = w->cis[pos];
+      if (code == 0xFF)
+        break; /* end of CIS */
+      if (code == 0x00) {
+        pos++;
+        continue;
+      } /* null tuple */
+      u8 link = w->cis[pos + 1];
+      if (code == 0x20 && pos + 5 < 48) { /* CISTPL_MANFID */
+        manf = w->cis[pos + 2] | ((u32)w->cis[pos + 3] << 8);
+        card = w->cis[pos + 4] | ((u32)w->cis[pos + 5] << 8);
+        found = 1;
+        break;
+      }
+      pos += 2 + link;
+    }
+    if (found && manf == 0x0271)
+      p = snd_cpy(line, "ATHEROS ");
+    else
+      p = snd_cpy(line, "id ");
+    wifi_hex4(num, manf);
+    p = snd_cpy(p, num);
+    *p++ = ':';
+    wifi_hex4(num, card);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, "  fn1 ");
+    p = snd_cpy(p, (w->ior & 0x02) ? "RDY" : "no");
+    Color mc = (found && manf == 0x0271) ? COLOR_AURORA : COLOR_WHITE;
+    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 58, BOT_SCREEN_HEIGHT, line,
+                mc, COLOR_HM_BG);
+  }
+
+  /* COUNT registers 0x420..0x43F (credit counters, low byte each). */
+  p = snd_cpy(line, "CNT ");
+  for (int i = 0; i < 8; i++) {
+    snd_hex2(num, w->cnt[i]);
+    p = snd_cpy(p, num);
+    *p++ = ' ';
+  }
+  *p = '\0';
+  {
+    int any = 0;
+    for (int i = 0; i < 8; i++)
+      if (w->cnt[i])
+        any = 1;
+    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 44, BOT_SCREEN_HEIGHT, line,
+                any ? COLOR_AURORA : COLOR_ORANGE, COLOR_HM_BG);
+  }
+  /* HOST_INT_STATUS(0x400) + consumed credit + BMI target version. */
+  p = snd_cpy(line, "400 ");
+  snd_hex2(num, w->bmi_look & 0xFF);
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, " cr");
+  snd_hex2(num, w->bmi_credit & 0xFF);
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, " rs0 ");
+  wifi_hex4(num, w->bmi_s0);
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, " ver ");
+  snd_hex(num, w->bmi_ver);
+  snd_cpy(p, num);
+  {
+    int bmi_ok = w->bmi_ver != 0 && w->bmi_ver != 0xFFFFFFFF;
+    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 30, BOT_SCREEN_HEIGHT, line,
+                bmi_ok ? COLOR_AURORA : COLOR_HM_TEXT2, COLOR_HM_BG);
+  }
+
+  draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 15, BOT_SCREEN_HEIGHT,
+              "A / tap: Re-probe    B: Back", COLOR_HM_TEXT2, COLOR_HM_BG);
+  screen_present_bottom();
+}
+
+static void wifi_test_screen(void) {
+  settings_header(icon_wifi_bits, L(STR_WIFI_TEST), COLOR_WHITE);
+  static WifiShared w;
+  wifi_run_probe(&w);
+  wifitest_draw(&w);
+  while (1) {
+    u32 k = get_keys_down();
+    int tx, ty;
+    if ((k & BUTTON_A) || touch_tap(&tx, &ty)) {
+      wifi_run_probe(&w);
+      wifitest_draw(&w);
+    }
+    if (k & BUTTON_B)
+      return;
+    delay(60000);
+  }
+}
+
 static void settings_open(void) {
   settings_header(icon_settings_bits, L(STR_SETTINGS), COLOR_WHITE);
   int sel = 0;
@@ -779,6 +958,8 @@ static void settings_open(void) {
         sound_test_screen();
       else if (sel == SET_TOUCH)
         touch_test_screen();
+      else if (sel == SET_WIFITEST)
+        wifi_test_screen();
       else if (sel == SET_CRASH)
         crash_force(); /* never returns: shows the crash screen */
       settings_header(icon_settings_bits, L(STR_SETTINGS), COLOR_WHITE);
@@ -790,7 +971,7 @@ static void settings_open(void) {
   }
 }
 
-/* ============================== App scanning ============================ */
+/* App scanning */
 
 static char *hm_str_copy(char *dst, const char *src) {
   while ((*dst = *src)) {
@@ -947,7 +1128,7 @@ static void build_home(void) {
   }
 }
 
-/* ============================== App launch ============================== */
+/* App launch */
 
 static void launch_msg(const char *msg, Color color) {
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
@@ -1056,7 +1237,7 @@ static void os_launch_app(const char *path) {
               hdr.arm9_entry);
 }
 
-/* ============================== Audio Player ============================ */
+/* Audio Player */
 /* Plays .aaf files (mono PCM, see audio/aaf_tool.py) from SD:\Aurora\Music,
  * which is created if missing. The ARM9 loads the PCM into AUDIO_PCM_ADDR and
  * the ARM11 core plays it through CSND. */

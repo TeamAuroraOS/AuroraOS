@@ -26,7 +26,7 @@ extern void os_cache_sync(void);
 #define SH_T TOP_SCREEN_HEIGHT
 #define SH_B BOT_SCREEN_HEIGHT
 
-/* ------------------------------------------------------------ formatting */
+/* Formatting */
 
 static char *scpy(char *d, const char *s) {
   while ((*d = *s)) {
@@ -53,7 +53,7 @@ static const char *reason_name(u32 exc) {
   }
 }
 
-/* --------------------------------------------------------- drawing helpers */
+/* Drawing helpers */
 
 static void disc(int cx, int cy, int r, Color c) {
   draw_filled_round_rect(VRAM_TOP_LA, cx - r, cy - r, 2 * r, 2 * r, r, SH_T, c);
@@ -180,7 +180,7 @@ static void crash_wait_1s(void) {
   }
 }
 
-/* ------------------------------------------------------------------ entry */
+/* Entry */
 
 void crash_handle(CrashDump *d) {
   /* Mask IRQ + FIQ so nothing disturbs the final screen. */
