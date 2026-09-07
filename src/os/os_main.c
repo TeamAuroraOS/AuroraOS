@@ -740,13 +740,17 @@ static void touch_test_screen(void) {
   }
 }
 
-/* Wi-Fi Test: triggers the ARM11 SDIO probe and shows the results. */
+/* Wi-Fi Test: triggers the ARM11 SDIO probe and shows the results.
+ * GPL-2.0: this Wi-Fi test UI is part of the GPL-2.0 Wi-Fi driver (ath6kl-
+ * derived; credit Octoblimp). See docs/wifi.md "License and credits". */
 static void wifi_hex4(char *out, u32 v) {
   static const char d[] = "0123456789ABCDEF";
   for (int i = 0; i < 4; i++)
     out[i] = d[(v >> ((3 - i) * 4)) & 0xF];
   out[4] = '\0';
 }
+
+static void wifitest_draw(const WifiShared *w); /* defined below */
 
 static void wifi_run_probe(WifiShared *w) {
   wifi_get(w);
@@ -758,6 +762,70 @@ static void wifi_run_probe(WifiShared *w) {
     if (w->seq != last)
       break;
   }
+}
+
+/* Stage one copyright firmware blob from SD into a shared-FCRAM slot. The blob
+ * is loaded at runtime and never embedded (Nintendo copyright). */
+static int wifi_load_blob(const char *path, u32 dst, u32 maxlen,
+                          volatile u32 *len_out) {
+  static FIL f;
+  UINT br = 0;
+  if (f_open(&f, path, FA_READ) != FR_OK)
+    return 0;
+  u32 sz = (u32)f_size(&f);
+  if (sz == 0 || sz > maxlen) {
+    f_close(&f);
+    return 0;
+  }
+  FRESULT fr = f_read(&f, (void *)dst, sz, &br);
+  f_close(&f);
+  *len_out = br;
+  return (fr == FR_OK && br == sz) ? 1 : 0;
+}
+
+/* Load the four NWM firmware blobs from SD:/Aurora/wifi into the WIFI_FW slots
+ * and set the WifiFw header so the ARM11 can upload them. Returns 1 if all four
+ * loaded. Files use 8.3 names (FatFs has no long-filename support here). */
+static int wifi_load_firmware(void) {
+  static FATFS fwfs;
+  if (f_mount(&fwfs, "", 1) != FR_OK)
+    return 0;
+  WifiFw *fw = (WifiFw *)WIFI_FW_ADDR;
+  fw->magic = 0;
+  int ok = 1;
+  ok &= wifi_load_blob("Aurora/wifi/STUBDATA.BIN", WIFI_FW_STUBDATA, 0x1000,
+                       &fw->stubdata_len);
+  ok &= wifi_load_blob("Aurora/wifi/STUBCODE.BIN", WIFI_FW_STUBCODE, 0x1000,
+                       &fw->stubcode_len);
+  ok &= wifi_load_blob("Aurora/wifi/DATABASE.BIN", WIFI_FW_DATABASE, 0x1000,
+                       &fw->database_len);
+  ok &= wifi_load_blob("Aurora/wifi/MAINTYP4.BIN", WIFI_FW_MAIN4, 0x60000,
+                       &fw->main4_len);
+  f_mount(NULL, "", 0);
+  if (ok)
+    fw->magic = WIFI_FW_MAGIC; /* signal the ARM11 that all blobs are staged */
+  return ok;
+}
+
+/* Load the firmware from SD, then have the ARM11 upload and boot it. Returns 0
+ * if the SD load failed. The upload takes several seconds. */
+static int wifi_run_boot(WifiShared *w) {
+  if (!wifi_load_firmware())
+    return 0;
+  wifi_get(w);
+  u32 last = w->seq;
+  wifi_boot();
+  for (int t = 0; t < 3000; t++) { /* upload of the ~42 KB image is slow */
+    delay(200000);
+    wifi_get(w);
+    if (w->seq != last)
+      break;
+    if ((t % 6) == 0)
+      wifitest_draw(w); /* live progress: boot step + send count climbing */
+    if (get_keys_down() & BUTTON_B)
+      break; /* escape hatch: never leave the user stuck on a long wait */
+  }
+  return 1;
 }
 
 static void wifitest_draw(const WifiShared *w) {
@@ -786,10 +854,11 @@ static void wifitest_draw(const WifiShared *w) {
   draw_string(VRAM_BOT_A, 8, 38, BOT_SCREEN_HEIGHT,
               "idx  arg      resp      s0/s1", COLOR_HM_TEXT2, COLOR_HM_BG);
 
-  /* One row per logged SDIO command; green when the response is non-zero. */
+  /* One row per logged SDIO command; green when the response is non-zero. Capped
+   * so the table cannot run into the status lines at the bottom of the screen. */
   u32 n = w->nlog;
-  if (n > WIFI_LOG_MAX)
-    n = WIFI_LOG_MAX;
+  if (n > 8)
+    n = 8;
   for (u32 i = 0; i < n; i++) {
     const WifiCmd *e = &w->log[i];
     p = snd_cpy(line, "C");
@@ -853,38 +922,80 @@ static void wifitest_draw(const WifiShared *w) {
     p = snd_cpy(p, "  fn1 ");
     p = snd_cpy(p, (w->ior & 0x02) ? "RDY" : "no");
     Color mc = (found && manf == 0x0271) ? COLOR_AURORA : COLOR_WHITE;
-    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 58, BOT_SCREEN_HEIGHT, line,
+    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 72, BOT_SCREEN_HEIGHT, line,
                 mc, COLOR_HM_BG);
   }
 
-  /* COUNT registers 0x420..0x43F (credit counters, low byte each). */
-  p = snd_cpy(line, "CNT ");
-  for (int i = 0; i < 8; i++) {
-    snd_hex2(num, w->cnt[i]);
+  /* When a firmware boot has run, show its progress here; otherwise show the
+   * diagnostic-window reads of target SOC memory (probe mode). */
+  if (w->boot_step != WIFI_BOOT_NONE) {
+    static const char *const bl[] = {"NONE", "NOFW", "BADVER", "HI",
+                                     "STUB", "MAIN", "DONE"};
+    u32 bs = w->boot_step;
+    p = snd_cpy(line, "FW ");
+    p = snd_cpy(p, bs <= WIFI_BOOT_DONE ? bl[bs] : "?");
+    p = snd_cpy(p, " rdy ");
+    snd_u32(num, w->boot_ready);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " s ");
+    snd_u32(num, w->bmi_sends);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " nc ");
+    snd_u32(num, w->bmi_nocred);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " p ");   /* no-credit per phase: byte0 HI, byte1 STUB, byte2 MAIN */
+    snd_hex(num, w->fw_chk);
+    snd_cpy(p, num);
+    Color bc = w->boot_ready == 1  ? COLOR_AURORA
+               : (bs == WIFI_BOOT_NOFW || bs == WIFI_BOOT_BADVER) ? COLOR_ORANGE
+                                                                  : COLOR_HM_TEXT2;
+    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 58, BOT_SCREEN_HEIGHT, line,
+                bc, COLOR_HM_BG);
+
+    /* HTC handoff: message ID (1 = HTC_READY) + credit count/size. On no message,
+     * show the raw HIF interrupt regs (his/counter/frame/lookahead-valid) + the
+     * lookahead header, so the mailbox state is visible for debugging. */
+    if (w->htc_ready) {
+      p = snd_cpy(line, "HTC id ");
+      wifi_hex4(num, w->htc_msgid);
+      p = snd_cpy(p, num);
+      p = snd_cpy(p, " cr ");
+      snd_u32(num, w->htc_credits);
+      p = snd_cpy(p, num);
+      p = snd_cpy(p, " sz ");
+      snd_u32(num, w->htc_credsz);
+      snd_cpy(p, num);
+    } else {
+      /* No HTC message: r = HOST_INT(0x400)|CPU(0x401)<<8|ERR(0x402)<<16|
+       * LAV(0x405)<<24; mb = a direct 4-byte peek of mailbox 0 (0x800) -- if the
+       * firmware posted but the lookahead didn't flag it, an HTC frame shows here. */
+      p = snd_cpy(line, "r ");
+      snd_hex(num, w->htc_regs);
+      p = snd_cpy(p, num);
+      p = snd_cpy(p, " mb ");
+      snd_hex(num, w->fw_dbrd);
+      snd_cpy(p, num);
+    }
+    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 44, BOT_SCREEN_HEIGHT, line,
+                (w->htc_msgid == 1) ? COLOR_AURORA : COLOR_HM_TEXT2, COLOR_HM_BG);
+  } else {
+    p = snd_cpy(line, "diag ");
+    snd_hex(num, w->diag_a);
     p = snd_cpy(p, num);
     *p++ = ' ';
-  }
-  *p = '\0';
-  {
-    int any = 0;
-    for (int i = 0; i < 8; i++)
-      if (w->cnt[i])
-        any = 1;
+    snd_hex(num, w->diag_b);
+    snd_cpy(p, num);
+    int ok = (w->diag_a != 0 && w->diag_a != 0xFFFFFFFF) ||
+             (w->diag_b != 0 && w->diag_b != 0xFFFFFFFF);
     draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 44, BOT_SCREEN_HEIGHT, line,
-                any ? COLOR_AURORA : COLOR_ORANGE, COLOR_HM_BG);
+                ok ? COLOR_AURORA : COLOR_ORANGE, COLOR_HM_BG);
   }
-  /* HOST_INT_STATUS(0x400) + consumed credit + BMI target version. */
-  p = snd_cpy(line, "400 ");
-  snd_hex2(num, w->bmi_look & 0xFF);
-  p = snd_cpy(p, num);
-  p = snd_cpy(p, " cr");
-  snd_hex2(num, w->bmi_credit & 0xFF);
-  p = snd_cpy(p, num);
-  p = snd_cpy(p, " rs0 ");
-  wifi_hex4(num, w->bmi_s0);
-  p = snd_cpy(p, num);
-  p = snd_cpy(p, " ver ");
+  /* RX_LOOKAHEAD_VALID(0x405) + consumed credit + BMI target version. */
+  p = snd_cpy(line, "BMI ver ");
   snd_hex(num, w->bmi_ver);
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, " ty ");
+  snd_hex(num, w->bmi_type);
   snd_cpy(p, num);
   {
     int bmi_ok = w->bmi_ver != 0 && w->bmi_ver != 0xFFFFFFFF;
@@ -893,7 +1004,7 @@ static void wifitest_draw(const WifiShared *w) {
   }
 
   draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 15, BOT_SCREEN_HEIGHT,
-              "A / tap: Re-probe    B: Back", COLOR_HM_TEXT2, COLOR_HM_BG);
+              "A: Probe   R: Boot FW   B: Back", COLOR_HM_TEXT2, COLOR_HM_BG);
   screen_present_bottom();
 }
 
@@ -907,6 +1018,10 @@ static void wifi_test_screen(void) {
     int tx, ty;
     if ((k & BUTTON_A) || touch_tap(&tx, &ty)) {
       wifi_run_probe(&w);
+      wifitest_draw(&w);
+    }
+    if (k & BUTTON_R) { /* upload the SD firmware and boot the chip */
+      wifi_run_boot(&w);
       wifitest_draw(&w);
     }
     if (k & BUTTON_B)

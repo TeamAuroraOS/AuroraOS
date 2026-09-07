@@ -91,9 +91,20 @@ void audio_play_tone(uint32_t freq_hz) { post(AUDIO_CMD_TONE, freq_hz); }
 
 void audio_stop(void) { post(AUDIO_CMD_STOP, 0); }
 
+/* Wi-Fi (GPL-2.0): wifi_probe/wifi_get are part of the GPL-2.0 Wi-Fi driver
+ * (ath6kl-derived; credit Octoblimp). See docs/wifi.md "License and credits". */
 void wifi_probe(void) {
   os_cache_sync();
   ctrl->cmd = AUDIO_CMD_WIFI;
+  ctrl->cmd_seq = ctrl->cmd_seq + 1;
+  os_cache_sync();
+}
+
+/* Trigger the firmware upload + boot. The caller (os_main) must have staged the
+ * SD firmware into the WIFI_FW slots and set the WifiFw header first. */
+void wifi_boot(void) {
+  os_cache_sync();
+  ctrl->cmd = AUDIO_CMD_WIFI_BOOT;
   ctrl->cmd_seq = ctrl->cmd_seq + 1;
   os_cache_sync();
 }
