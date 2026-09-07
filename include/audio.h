@@ -33,7 +33,7 @@
  * resident core is current. FCRAM survives a warm reboot, so a stale core can
  * linger unless the console is fully powered off -- the Sound Test screen shows
  * this version so a mismatch is visible. */
-#define AUDIO_CORE_VERSION 31
+#define AUDIO_CORE_VERSION 69
 
 /* Max PCM the shared buffer holds (10 MB, clear of the app-stage at 0x24000000).
  * Longer tracks are truncated to this. */
@@ -48,6 +48,7 @@ enum {
                        * arg1 = sample count, arg2 = sample rate (Hz),
                        * arg3 = bit depth (8 or 16). One-shot.               */
   AUDIO_CMD_WIFI = 4, /* run the Wi-Fi SDIO probe (results in WifiShared)    */
+  AUDIO_CMD_WIFI_BOOT = 5, /* upload the SD-staged firmware and boot the chip */
 };
 
 /* ARM11 progress codes, surfaced on-screen to debug the bring-up. */
