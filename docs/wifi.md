@@ -150,9 +150,25 @@ flat `.dec.code`. Load with `-a arm -b 16` (Thumb-2); vaddr equals file offset; 
 address equals vaddr plus `0x100000`. `aa` finds ~2371 functions; `aac` builds call
 xrefs; `axt` lists xrefs to the current seek. Load flat (no `-B`).
 
+## License and credits
+
+The Wi-Fi driver code (the SDIO/BMI/HIF bring-up in `src/os/audio11.c`, plus the
+Wi-Fi parts of `src/os/audio9.c` and `src/os/os_main.c`, and `include/wifi.h`) is
+licensed **GPL-2.0**, separately from the rest of AuroraOS. It derives register
+facts and the BMI/HIF bring-up sequence from the **ath6kl legacy driver**
+(GPL-2.0) as ported to the Nintendo 3DS by **Octoblimp**. Because GPL-2.0 is
+copyleft, any binary that links this Wi-Fi code is covered by GPL-2.0.
+
+Specific facts sourced from Octoblimp's ath6kl 3DS port: the BMI command-credit
+register `COUNT_DEC + (HTC_MAILBOX_NUM_MAX + ENDPOINT1)*4 = 0x450`; mailbox 0 at
+`0x800` (byte-increment, no end-address adjustment); `RX_LOOKAHEAD_VALID` at
+`0x405`; the function-1 SDIO block size of 128; and the firmware target-address
+map (`main_type1` -> `0x524C00`, `database` -> `0x53FE18`, host interest
+`0x00500400`).
+
 ## Sources
 
-Reference PDF and driver-plan notes in `exclude/`; GBATEK "3DS Files: Module NWM",
-"3DS GPIO Registers", "3DS I2C MCU Register Summary"; 3dbrew NWM_Services, FIRM,
-I2C_Registers; nesdev.org thread t=18490; Linux ath6kl driver (AR6003/AR6004, a
-functional reference, not register-exact for AR6014).
+Octoblimp's ath6kl legacy 3DS port (GPL-2.0); reference PDF and driver-plan notes
+in `exclude/`; GBATEK "3DS Files: Module NWM", "3DS GPIO Registers", "3DS I2C MCU
+Register Summary"; 3dbrew NWM_Services, FIRM, I2C_Registers; nesdev.org thread
+t=18490; Linux ath6kl driver.
