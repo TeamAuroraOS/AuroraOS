@@ -113,7 +113,7 @@ def main():
     convert_parser.add_argument("output", help="Output .aaf file path")
     convert_parser.add_argument(
         "--rate", type=int, default=8000,
-        help="Sample rate in Hz (default: 8000 -- low, for small file size)"
+        help="Sample rate in Hz (default: 8000; low, for small file size)"
     )
     convert_parser.add_argument(
         "--bit-depth", type=int, default=16, choices=[8, 16],
