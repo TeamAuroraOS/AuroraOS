@@ -3,9 +3,11 @@
 #include "container.h"
 #include "crash.h"
 #include "font.h"
+#include "gpu.h"
 #include "i2c.h"
 #include "icons.h"
 #include "lang.h"
+#include "power.h"
 #include "touch.h"
 #include "user.h"
 #include "wifi.h"
@@ -15,7 +17,8 @@ void delay(volatile u32 cycles) {
     __asm__ volatile("nop");
 }
 
-u32 get_keys(void) { return ~REG_HID_PAD & 0x3FF; }
+/* HID pad bits 0..9 are A/B/Select/Start/D-pad/R/L; 10 and 11 are X and Y. */
+u32 get_keys(void) { return ~REG_HID_PAD & 0xFFF; }
 
 static u32 prev_keys = 0;
 u32 get_keys_down(void) {
@@ -153,13 +156,78 @@ static void hm_grid_icon(int x, int y) {
       draw_filled_rect(VRAM_TOP_LA, x + c * 5, y + r * 5, 3, 3, TOP_SCREEN_HEIGHT,
                        COLOR_WHITE);
 }
-static void hm_battery(int x, int y) {
+/* Battery pill. The shell is 15x9 with a 2x3 nub, leaving 11 px of usable fill
+ * between x+2 and x+13. A charging or low battery recolours the fill rather than
+ * needing its own glyph. pct < 0 means the MCU did not answer. */
+static void hm_battery(int x, int y, int pct, int charging) {
   draw_filled_rect(VRAM_TOP_LA, x, y, 15, 9, TOP_SCREEN_HEIGHT, COLOR_WHITE);
   draw_filled_rect(VRAM_TOP_LA, x + 1, y + 1, 13, 7, TOP_SCREEN_HEIGHT,
                    COLOR_HM_BAR);
-  draw_filled_rect(VRAM_TOP_LA, x + 2, y + 2, 8, 5, TOP_SCREEN_HEIGHT, g_accent);
+
+  if (pct >= 0) {
+    int w = pct * 11 / 100;
+    if (w < 1 && pct > 0)
+      w = 1; /* never show an empty cell for a battery that still has charge */
+    if (w > 11)
+      w = 11;
+    Color fill = charging > 0 ? COLOR_GREEN
+                 : (pct <= 15 ? COLOR_DARK_RED : g_accent);
+    if (w > 0)
+      draw_filled_rect(VRAM_TOP_LA, x + 2, y + 2, w, 5, TOP_SCREEN_HEIGHT, fill);
+  }
+
   draw_filled_rect(VRAM_TOP_LA, x + 15, y + 3, 2, 3, TOP_SCREEN_HEIGHT,
                    COLOR_WHITE);
+}
+
+/* The top status bar: clock, date, indicators, battery. Split out so the home
+ * menu can refresh it when the minute changes without repainting the whole top
+ * screen. Does not present, the caller decides when to. */
+static void hm_status_bar(void) {
+  RtcTime now;
+  char tbuf[8], dbuf[12];
+
+  if (rtc_read(&now)) {
+    rtc_format_time(&now, tbuf);
+    rtc_format_date(&now, dbuf);
+  } else {
+    tbuf[0] = '-'; tbuf[1] = '-'; tbuf[2] = ':';
+    tbuf[3] = '-'; tbuf[4] = '-'; tbuf[5] = '\0';
+    dbuf[0] = '\0';
+  }
+
+  int pct = battery_percent();
+  int chg = battery_charging();
+
+  draw_filled_rect(VRAM_TOP_LA, 0, 0, TOP_SCREEN_WIDTH, 22, TOP_SCREEN_HEIGHT,
+                   COLOR_HM_BAR);
+  draw_string(VRAM_TOP_LA, 10, 7, TOP_SCREEN_HEIGHT, tbuf, COLOR_WHITE,
+              COLOR_HM_BAR);
+  draw_string(VRAM_TOP_LA, 60, 7, TOP_SCREEN_HEIGHT, dbuf, COLOR_HM_TEXT2,
+              COLOR_HM_BAR);
+
+  if (pct >= 0) { /* charge percentage, in the gap before the indicators */
+    char pbuf[6];
+    int n = 0;
+    if (pct >= 100) {
+      pbuf[n++] = '1'; pbuf[n++] = '0'; pbuf[n++] = '0';
+    } else if (pct >= 10) {
+      pbuf[n++] = (char)('0' + pct / 10);
+      pbuf[n++] = (char)('0' + pct % 10);
+    } else {
+      pbuf[n++] = (char)('0' + pct);
+    }
+    pbuf[n++] = '%';
+    pbuf[n] = '\0';
+    draw_string(VRAM_TOP_LA, 276, 7, TOP_SCREEN_HEIGHT, pbuf, COLOR_HM_TEXT2,
+                COLOR_HM_BAR);
+  }
+
+  hm_wifi(322, 7);
+  draw_string(VRAM_TOP_LA, 340, 7, TOP_SCREEN_HEIGHT, "|", COLOR_HM_TEXT2,
+              COLOR_HM_BAR);
+  hm_grid_icon(352, 7);
+  hm_battery(371, 7, pct, chg);
 }
 
 static void hm_top_static(void) {
@@ -176,17 +244,7 @@ static void hm_top_static(void) {
     }
   }
 
-  draw_filled_rect(VRAM_TOP_LA, 0, 0, TOP_SCREEN_WIDTH, 22, TOP_SCREEN_HEIGHT,
-                   COLOR_HM_BAR);
-  draw_string(VRAM_TOP_LA, 10, 7, TOP_SCREEN_HEIGHT, "12:08", COLOR_WHITE,
-              COLOR_HM_BAR);
-  draw_string(VRAM_TOP_LA, 60, 7, TOP_SCREEN_HEIGHT, "Tue 25 Aug",
-              COLOR_HM_TEXT2, COLOR_HM_BAR);
-  hm_wifi(322, 7);
-  draw_string(VRAM_TOP_LA, 340, 7, TOP_SCREEN_HEIGHT, "|", COLOR_HM_TEXT2,
-              COLOR_HM_BAR);
-  hm_grid_icon(352, 7);
-  hm_battery(371, 7);
+  hm_status_bar();
   screen_present_top();
 }
 
@@ -304,6 +362,7 @@ typedef enum {
   SET_SOUND,
   SET_TOUCH,
   SET_WIFITEST,
+  SET_GPUTEST,
   SET_ABOUT,
   SET_CRASH,
   SET_COUNT
@@ -336,8 +395,11 @@ static void settings_content(int id, const unsigned char **icon,
       *icon = icon_boot_bits; *name = L(STR_TOUCH_TEST); *value = ""; break;
     case SET_WIFITEST:
       *icon = icon_wifi_bits; *name = L(STR_WIFI_TEST); *value = ""; break;
+    case SET_GPUTEST:
+      *icon = icon_boot_bits; *name = L(STR_GPU_TEST);
+      *value = gpu_alive() ? "Ready" : "---"; break;
     case SET_ABOUT:
-      *icon = icon_settings_bits; *name = L(STR_ABOUT); *value = "v0.0.8"; break;
+      *icon = icon_settings_bits; *name = L(STR_ABOUT); *value = "v0.0.9"; break;
     default: /* SET_CRASH */
       *icon = icon_power_bits; *name = L(STR_DEBUG_CRASH); *value = ""; break;
   }
@@ -650,7 +712,7 @@ static void sound_test_screen(void) {
 
 /* Touch Test */
 /* Diagnostics + crosshair. Shows the ARM11 core version, a heartbeat (seq), and
- * the raw codec sample bytes, so we can see whether touch is being read at all
+ * the raw codec sample bytes, so it is visible whether touch is being read at all
  * and tune the calibration (TS_*_MIN/MAX). */
 static void snd_hex2(char *out, u32 v) {
   static const char d[] = "0123456789ABCDEF";
@@ -786,12 +848,14 @@ static int wifi_load_blob(const char *path, u32 dst, u32 maxlen,
 /* Load the four NWM firmware blobs from SD:/Aurora/wifi into the WIFI_FW slots
  * and set the WifiFw header so the ARM11 can upload them. Returns 1 if all four
  * loaded. Files use 8.3 names (FatFs has no long-filename support here). */
-static int wifi_load_firmware(void) {
+static int wifi_load_firmware(u32 main_type) {
   static FATFS fwfs;
   if (f_mount(&fwfs, "", 1) != FR_OK)
     return 0;
   WifiFw *fw = (WifiFw *)WIFI_FW_ADDR;
   fw->magic = 0;
+  fw->main_len = 0;
+  fw->main_type = 0;
   int ok = 1;
   ok &= wifi_load_blob("Aurora/wifi/STUBDATA.BIN", WIFI_FW_STUBDATA, 0x1000,
                        &fw->stubdata_len);
@@ -799,18 +863,22 @@ static int wifi_load_firmware(void) {
                        &fw->stubcode_len);
   ok &= wifi_load_blob("Aurora/wifi/DATABASE.BIN", WIFI_FW_DATABASE, 0x1000,
                        &fw->database_len);
-  ok &= wifi_load_blob("Aurora/wifi/MAINTYP4.BIN", WIFI_FW_MAIN4, 0x60000,
-                       &fw->main4_len);
+  const char *main_path = main_type == WIFI_FW_TYPE4
+                            ? "Aurora/wifi/MAINTYP4.BIN"
+                            : "Aurora/wifi/MAINTYP1.BIN";
+  ok &= wifi_load_blob(main_path, WIFI_FW_MAIN, 0x60000, &fw->main_len);
   f_mount(NULL, "", 0);
-  if (ok)
+  if (ok) {
+    fw->main_type = main_type;
     fw->magic = WIFI_FW_MAGIC; /* signal the ARM11 that all blobs are staged */
+  }
   return ok;
 }
 
 /* Load the firmware from SD, then have the ARM11 upload and boot it. Returns 0
  * if the SD load failed. The upload takes several seconds. */
-static int wifi_run_boot(WifiShared *w) {
-  if (!wifi_load_firmware())
+static int wifi_run_boot(WifiShared *w, u32 main_type) {
+  if (!wifi_load_firmware(main_type))
     return 0;
   wifi_get(w);
   u32 last = w->seq;
@@ -932,7 +1000,10 @@ static void wifitest_draw(const WifiShared *w) {
     static const char *const bl[] = {"NONE", "NOFW", "BADVER", "HI",
                                      "STUB", "MAIN", "DONE"};
     u32 bs = w->boot_step;
-    p = snd_cpy(line, "FW ");
+    p = snd_cpy(line, "FW T");
+    snd_u32(num, w->fw_type);
+    p = snd_cpy(p, num);
+    *p++ = ' ';
     p = snd_cpy(p, bs <= WIFI_BOOT_DONE ? bl[bs] : "?");
     p = snd_cpy(p, " rdy ");
     snd_u32(num, w->boot_ready);
@@ -967,7 +1038,7 @@ static void wifitest_draw(const WifiShared *w) {
       snd_cpy(p, num);
     } else {
       /* No HTC message: r = HOST_INT(0x400)|CPU(0x401)<<8|ERR(0x402)<<16|
-       * LAV(0x405)<<24; mb = a direct 4-byte peek of mailbox 0 (0x800) -- if the
+       * LAV(0x405)<<24; mb = a direct 4-byte peek of mailbox 0 (0x800), if the
        * firmware posted but the lookahead didn't flag it, an HTC frame shows here. */
       p = snd_cpy(line, "r ");
       snd_hex(num, w->htc_regs);
@@ -1004,7 +1075,7 @@ static void wifitest_draw(const WifiShared *w) {
   }
 
   draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 15, BOT_SCREEN_HEIGHT,
-              "A: Probe   R: Boot FW   B: Back", COLOR_HM_TEXT2, COLOR_HM_BG);
+              "A: Probe  R:T4  L:T1  B:Back", COLOR_HM_TEXT2, COLOR_HM_BG);
   screen_present_bottom();
 }
 
@@ -1020,13 +1091,161 @@ static void wifi_test_screen(void) {
       wifi_run_probe(&w);
       wifitest_draw(&w);
     }
-    if (k & BUTTON_R) { /* upload the SD firmware and boot the chip */
-      wifi_run_boot(&w);
+    if (k & BUTTON_R) {
+      wifi_run_boot(&w, WIFI_FW_TYPE4);
+      wifitest_draw(&w);
+    }
+    if (k & BUTTON_L) {
+      wifi_run_boot(&w, WIFI_FW_TYPE1);
       wifitest_draw(&w);
     }
     if (k & BUTTON_B)
       return;
     delay(60000);
+  }
+}
+
+/* GPU Test: drives the PICA200 PSC (fill) and PPF (blit) engines and reports
+ * what the hardware said. GPL-2.0: this screen is part of the GPL-2.0 PICA200
+ * driver (see docs/gpu.md "License and credits").
+ *
+ * Results land on the TOP screen so the bottom screen keeps showing the readout.
+ * VRAM runs 0x18000000..0x18600000 and the framebuffers start at 0x18300000, so
+ * the first bank is free to use as a scratch source for the blit test. */
+#define GPU_SCRATCH 0x18000000u
+
+static const char *const gpu_step_names[] = {
+    "NONE", "CLOCK", "QUIESCE", "IDLE", "ID", "ARMED", "STARTED", "DONE"};
+static const char *const gpu_err_names[] = {"ok", "NOINIT", "BADARG", "TIMEOUT",
+                                            "BUSY"};
+
+/* Paint a gradient into the scratch bank so the blit has something recognisable
+ * to move. The framebuffer is column-major: memory runs down a screen column
+ * (240 px) before stepping to the next column (400 of them). */
+static void gpu_paint_scratch(void) {
+  volatile u8 *s = (volatile u8 *)GPU_SCRATCH;
+  for (int col = 0; col < TOP_SCREEN_WIDTH; col++) {
+    u8 r = (u8)(col * 255 / (TOP_SCREEN_WIDTH - 1));
+    for (int row = 0; row < TOP_SCREEN_HEIGHT; row++) {
+      u32 o = (u32)(col * TOP_SCREEN_HEIGHT + row) * BYTES_PER_PIXEL;
+      s[o + 0] = (u8)(row * 255 / (TOP_SCREEN_HEIGHT - 1)); /* b */
+      s[o + 1] = 0x30;                                      /* g */
+      s[o + 2] = r;                                         /* r */
+    }
+  }
+}
+
+static void gputest_draw(const GpuShared *g, const char *last, int lastok) {
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+  draw_string(VRAM_BOT_A, 8, 6, BOT_SCREEN_HEIGHT, L(STR_GPU_TEST),
+              COLOR_HM_TEXT2, COLOR_HM_BG);
+
+  char line[48], num[16], *p;
+  int y = 28;
+
+  p = snd_cpy(line, "core v");
+  snd_u32(num, audio_version());
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, "  gpu ");
+  p = snd_cpy(p, gpu_alive() ? (g->ready ? "ready" : "seen") : "---");
+  draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line,
+              g->ready ? COLOR_AURORA : COLOR_ORANGE, COLOR_HM_BG);
+  y += 18;
+
+  /* The hardware ID proves the GPU block is reachable at all: a plausible
+   * non-zero, non-0xFFFFFFFF value means the register read landed. */
+  p = snd_cpy(line, "HW ID ");
+  snd_hex(num, g->hw_id);
+  p = snd_cpy(p, num);
+  int id_ok = g->hw_id != 0 && g->hw_id != 0xFFFFFFFF;
+  draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line,
+              id_ok ? COLOR_AURORA : COLOR_ORANGE, COLOR_HM_BG);
+  y += 18;
+
+  p = snd_cpy(line, "step ");
+  p = snd_cpy(p, g->step < 8 ? gpu_step_names[g->step] : "?");
+  p = snd_cpy(p, "  err ");
+  p = snd_cpy(p, g->err < 5 ? gpu_err_names[g->err] : "?");
+  draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line,
+              g->err ? COLOR_ORANGE : COLOR_HM_TEXT2, COLOR_HM_BG);
+  y += 18;
+
+  p = snd_cpy(line, "busy ");
+  snd_hex(num, g->busy_before);
+  p = snd_cpy(p, num);
+  *p++ = '>';
+  snd_hex(num, g->busy_after);
+  snd_cpy(p, num);
+  draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
+              COLOR_HM_BG);
+  y += 18;
+
+  p = snd_cpy(line, "ctl ");
+  snd_hex(num, g->ctl_after);
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, " wait ");
+  snd_u32(num, g->waits);
+  p = snd_cpy(p, num);
+  p = snd_cpy(p, " ops ");
+  snd_u32(num, g->ops);
+  snd_cpy(p, num);
+  draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
+              COLOR_HM_BG);
+  y += 18;
+
+  if (last) {
+    p = snd_cpy(line, "last: ");
+    snd_cpy(p, last);
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line,
+                lastok ? COLOR_AURORA : COLOR_ORANGE, COLOR_HM_BG);
+  }
+
+  draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 15, BOT_SCREEN_HEIGHT,
+              "A:Init  X:Fill  Y:Blit  B:Back", COLOR_HM_TEXT2, COLOR_HM_BG);
+  screen_present_bottom();
+}
+
+static void gpu_test_screen(void) {
+  settings_header(icon_boot_bits, L(STR_GPU_TEST), COLOR_WHITE);
+  static GpuShared g;
+  const char *last = 0;
+  int lastok = 0;
+  static const u32 fill_colors[] = {0x00301060u, 0x00104030u, 0x00603010u};
+  int fill_idx = 0;
+
+  int ok = gpu_init();
+  gpu_get(&g);
+  last = ok ? "init" : "init failed";
+  lastok = ok;
+  gputest_draw(&g, last, lastok);
+
+  while (1) {
+    u32 k = get_keys_down();
+
+    if (k & BUTTON_A) {
+      lastok = gpu_init();
+      last = lastok ? "init" : "init failed";
+    } else if (k & BUTTON_X) {
+      /* PSC fill of the whole top framebuffer: the fastest possible clear.
+       * Targets the panel directly so the result is visible without a present. */
+      lastok = gpu_clear_fb((u32)VRAM_TOP_PHYS, TOP_FB_SIZE,
+                            fill_colors[fill_idx]);
+      fill_idx = (fill_idx + 1) % 3;
+      last = lastok ? "PSC fill" : "PSC fill failed";
+    } else if (k & BUTTON_Y) {
+      /* PPF raw blit: CPU paints the scratch bank, the GPU moves it on screen. */
+      gpu_paint_scratch();
+      lastok = gpu_texcopy(GPU_SCRATCH, (u32)VRAM_TOP_PHYS, TOP_FB_SIZE);
+      last = lastok ? "PPF blit" : "PPF blit failed";
+    } else if (k & BUTTON_B) {
+      return;
+    } else {
+      delay(60000);
+      continue;
+    }
+
+    gpu_get(&g);
+    gputest_draw(&g, last, lastok);
   }
 }
 
@@ -1075,6 +1294,8 @@ static void settings_open(void) {
         touch_test_screen();
       else if (sel == SET_WIFITEST)
         wifi_test_screen();
+      else if (sel == SET_GPUTEST)
+        gpu_test_screen();
       else if (sel == SET_CRASH)
         crash_force(); /* never returns: shows the crash screen */
       settings_header(icon_settings_bits, L(STR_SETTINGS), COLOR_WHITE);
@@ -1619,6 +1840,37 @@ void os_main(void) {
    * the Aurora crash screen instead of a silent hang. */
   crash_init();
 
+  /* MCU access, for the clock and battery in the status bars. */
+  I2C_init();
+
+  /* Clear the touch block before the ARM11 starts filling it. It lives in FCRAM,
+   * which holds garbage on a cold boot, and a stray "pressed" would fire a
+   * phantom tap at a random position on the first screen setup draws. */
+  {
+    volatile TouchShared *ts = (volatile TouchShared *)TOUCH_SHARED_ADDR;
+    ts->seq = 0;
+    ts->pressed = 0;
+    ts->raw_x = 0;
+    ts->raw_y = 0;
+    os_cache_sync();
+  }
+
+  /* Bring up the ARM11 core before anything draws a screen. It owns the
+   * touchscreen (it is what fills TouchShared), so touch input is dead in every
+   * screen drawn before this point, including the setup wizard. Idempotent
+   * across HOME returns. */
+  audio_boot();
+
+  /* With the ARM11 alive, switch to backbuffered rendering: the UI rasterises
+   * into cached FCRAM and the GPU moves each finished screen to the panel in one
+   * blit, instead of every glyph pixel being stored straight into uncached VRAM.
+   * Only enabled once the GPU can actually do the present; if init fails,
+   * drawing stays direct-to-VRAM and behaves exactly as before. */
+  if (gpu_init()) {
+    g_screen_blit = gpu_texcopy;
+    screen_use_backbuffer(1);
+  }
+
   /* Load SD:\Aurora\USER.dat. If it is missing, not an "ADAT" file, or setup
    * never finished, run the first-time setup wizard and save the result so the
    * user only sees setup once. */
@@ -1634,14 +1886,13 @@ void os_main(void) {
   g_accent = aurora_accent_presets[cfg.accent];
   g_lang = cfg.language;
 
-  /* Bring up the ARM11 audio core (idempotent across HOME returns). */
-  audio_boot();
-
   scan_apps();
   build_home();
 
   int sel = 0;
   hm_draw_full(sel);
+
+  int clock_tick = 0, last_min = -1;
 
   while (1) {
     u32 kdown = get_keys_down();
@@ -1688,6 +1939,19 @@ void os_main(void) {
             break;
           }
         }
+      }
+    }
+
+    /* Keep the clock and battery live. The MCU is on a slow I2C bus, so only
+     * sample it every so often, and only repaint when the displayed minute
+     * actually changes, which with the GPU present costs one blit a minute. */
+    if (++clock_tick >= 96) {
+      clock_tick = 0;
+      RtcTime now;
+      if (rtc_read(&now) && now.min != last_min) {
+        last_min = now.min;
+        hm_status_bar();
+        screen_present_top();
       }
     }
 

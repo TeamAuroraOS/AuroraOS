@@ -95,7 +95,7 @@ crash_capture:
     str   r1, [r0, #56]
     bx    lr
 
-/* Landing pad for the vectors we don't handle (they don't occur while the OS
+/* Landing pad for the unhandled vectors (they don't occur while the OS
  * runs: IRQ/FIQ are masked and SWI/reset are unused). */
 .type crash_hang, %function
 crash_hang:

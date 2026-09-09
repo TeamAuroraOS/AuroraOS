@@ -5,8 +5,8 @@
  * where AUR1 apps load, so it cannot copy an app onto itself in place. Instead
  * os_main.c relocates os_launch_stub to scratch (AURORA_APP_TRAMPOLINE_ADDR),
  * calls os_cache_sync() so the copy is fetchable, then jumps into the relocated
- * stub. The stub -- now running clear of both the staged payload and the load
- * region -- performs the final copy, flushes caches, and branches into the app.
+ * stub. The stub, now running clear of both the staged payload and the load
+ * region, performs the final copy, flushes caches, and branches into the app.
  *
  * os_launch_stub is position-independent: it uses only registers and immediate
  * operands (no literal pool with absolute addresses), so it runs correctly from

@@ -1,10 +1,10 @@
 /*
- * AuroraOS audio -- ARM9 side.
+ * AuroraOS audio: ARM9 side.
  *
  * Starts the ARM11 audio core and posts commands to it through the shared block
  * at AUDIO_CTRL_ADDR. The ARM11 core binary is embedded here as a byte blob
  * (build/audio11_blob.h, generated from audio11.bin) so the OS can copy it into
- * place and wake the ARM11 itself -- no firm changes and cache coherency stays
+ * place and wake the ARM11 itself, no firm changes and cache coherency stays
  * under the OS's control via os_cache_sync().
  */
 #include "aurora.h"
@@ -12,7 +12,7 @@
 #include "audio11_blob.h" /* generated: audio11_bin[], audio11_bin_len */
 #include "wifi.h"
 
-/* Clean+invalidate the ARM9 caches (src/os/os_launch.s). Used both to push our
+/* Clean+invalidate the ARM9 caches (src/os/os_launch.s). Used both to push
  * writes to physical RAM for the ARM11/CSND and to re-read the ARM11's replies. */
 extern void os_cache_sync(void);
 

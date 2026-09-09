@@ -29,7 +29,7 @@ SECTIONS
 
     /* End of the loadable image (text+rodata+data). The Home Menu snapshots
        [_os_start .. _os_image_end) so it can restore itself when an app exits
-       via HOME. .bss is NOLOAD, so it is not part of the snapshot -- the OS
+       via HOME. .bss is NOLOAD, so it is not part of the snapshot; the OS
        re-clears it on restart. */
     _os_image_end = .;
 

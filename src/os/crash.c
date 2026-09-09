@@ -164,7 +164,7 @@ static void crash_power_off(void) {
 }
 
 /* Wait ~1 real second using the MCU real-time clock (reg 0x30, first byte =
- * seconds), which is an actual clock -- busy-loops are not. Returns as soon as
+ * seconds), which is an actual clock; busy-loops are not. Returns as soon as
  * the seconds value changes. The delay(40000) chunk both paces the polling and,
  * if the RTC never advances, bounds the wait to a ~2 s busy fallback so it can
  * never hang. */
@@ -190,6 +190,11 @@ void crash_handle(CrashDump *d) {
                    :
                    :
                    : "r0", "memory");
+
+  /* Draw straight to the panels from here on. The fault may well be the ARM11
+   * core or the GPU, so the crash screen must not depend on a backbuffer that
+   * something else has to present. */
+  screen_use_backbuffer(0);
 
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_CRASH);
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_CRASH);

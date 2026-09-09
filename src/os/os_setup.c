@@ -3,6 +3,7 @@
 #include "ff.h"
 #include "font.h"
 #include "lang.h"
+#include "power.h"
 #include "touch.h"
 #include "user.h"
 
@@ -87,6 +88,7 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     {"Force Debug Crash", "Forzar Fallo", "Forcer un Crash"},
     /* STR_TOUCH_TEST   */ {"Touch Test", "Tactil", "Tactile"},
     /* STR_WIFI_TEST    */ {"Wi-Fi Test", "Wi-Fi", "Wi-Fi"},
+    /* STR_GPU_TEST     */ {"GPU Test", "GPU", "GPU"},
 };
 
 const char *L(StringId id) {
@@ -195,11 +197,22 @@ static void thick_line(volatile u8 *fb, int x0, int y0, int x1, int y1, int t,
 #define SH_TOP TOP_SCREEN_HEIGHT
 
 static void status_bar(void) {
+  RtcTime now;
+  char tbuf[8], dbuf[12];
+
+  if (rtc_read(&now)) {
+    rtc_format_time(&now, tbuf);
+    rtc_format_date(&now, dbuf);
+  } else {
+    tbuf[0] = '-'; tbuf[1] = '-'; tbuf[2] = ':';
+    tbuf[3] = '-'; tbuf[4] = '-'; tbuf[5] = '\0';
+    dbuf[0] = '\0';
+  }
+
   draw_filled_rect(VRAM_TOP_LA, 0, 0, TOP_SCREEN_WIDTH, 22, SH_TOP,
                    COLOR_HM_BAR);
-  draw_string(VRAM_TOP_LA, 10, 7, SH_TOP, "12:08", COLOR_WHITE, COLOR_HM_BAR);
-  draw_string(VRAM_TOP_LA, 60, 7, SH_TOP, "Fri 28 Aug", COLOR_HM_TEXT2,
-              COLOR_HM_BAR);
+  draw_string(VRAM_TOP_LA, 10, 7, SH_TOP, tbuf, COLOR_WHITE, COLOR_HM_BAR);
+  draw_string(VRAM_TOP_LA, 60, 7, SH_TOP, dbuf, COLOR_HM_TEXT2, COLOR_HM_BAR);
 }
 
 /* One progress icon centred at (cx,cy) in the given colour. */

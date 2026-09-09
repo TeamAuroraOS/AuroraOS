@@ -12,13 +12,16 @@
  *
  * Untested-on-hardware caveats (flagged inline): the codec calibration values
  * (driver gains / analog volumes) normally come from the console's HWCAL block,
- * which isn't read here -- we use neutral defaults. Headphone-jack detection is
- * skipped (output forced to the speaker path). EQ-filter upload is skipped
- * (codec defaults). Per-unit "depop" GPIO pulsing is skipped.
+ * which isn't read here, neutral defaults are used instead. Headphone-jack
+ * detection is skipped (output forced to the speaker path). EQ-filter upload is
+ * skipped (codec defaults). Per-unit "depop" GPIO pulsing is skipped.
  */
 #include "audio.h"
 #include "touch.h"
 #include "wifi.h"
+
+/* PICA200 GPU operations live in gpu11.c (GPL-2.0), linked into this core. */
+void gpu11_run(void);
 
 typedef volatile uint8_t  vu8;
 typedef volatile uint16_t vu16;
@@ -69,7 +72,7 @@ static void sleep_ms(uint32_t ms) { spin(ms * 300000u); }
 #define I2S2_MCLK2_16MHZ (1u << 14)
 #define I2S2_FREQ_47KHZ  (1u << 13)
 
-/* NSPI bus 2 (0x10142800) -- the CTR audio codec lives here (CS0, 16 MHz). */
+/* NSPI bus 2 (0x10142800), the CTR audio codec lives here (CS0, 16 MHz). */
 #define NSPI2 (IO_BASE + 0x42800u)
 #define NSPI_CNT       (NSPI2 + 0x00) /* u32 */
 #define NSPI_CS        (NSPI2 + 0x04) /* u32 */
@@ -316,7 +319,7 @@ static void codec_init(void) {
  * below are REIMPLEMENTED from the hardware facts in GodMode9's codec driver:
  *   arm11/source/hw/codec.c
  *   Copyright (C) 2017 Sergi Granell, Paul LaMendola
- *   Copyright (C) 2019 Wolfvak    -- licensed GPL v2-or-later.
+ *   Copyright (C) 2019 Wolfvak, licensed GPL v2-or-later.
  * Only the register addresses / init sequence / data layout are used (hardware
  * facts); the code here is Aurora's own, built on its existing SPI helpers. */
 
@@ -461,7 +464,7 @@ static uint32_t gen_tone(uint32_t freq, uint32_t rate) {
 #define WMASK_GW          0x807Fu /* sdmmc.h TMIO_MASK_GW; ILL_FUNC is not fatal */
 #define WMASK_ALL         0x837F031Du
 
-/* Write divider, then divider|enable(bit8) -- mirrors sdmmc.c setckl(). */
+/* Write divider, then divider|enable(bit8), mirrors sdmmc.c setckl(). */
 static void wifi_setckl(uint32_t data) {
   WB16(WR_CLKCTL) = (uint16_t)(data & 0xFF);
   WB16(WR_CLKCTL) = (uint16_t)((1u << 8) | (data & 0x2FF));
@@ -566,7 +569,7 @@ static WifiCmd *wifi_logcmd(WifiShared *w, uint16_t cmd16, uint32_t arg) {
  * "Wifi Enable (0=Reset, need re-upload wifi firmware, 1=On)", wired to the
  * chip's RESET/SYS_RST_L. Setting bit0 brings the Atheros chip out of reset so
  * it powers up and answers on the SDIO bus. This is the piece NWM gets done via
- * the mcu::NWM / GPIO OS services; bare-metal we set it directly. */
+ * the mcu::NWM / GPIO OS services; bare-metal it is set directly. */
 #define WIFI_GPIO_WIFI 0x10147028u
 
 #define WR_FIFO     0x30  /* SD_FIFO (16-bit data port) */
@@ -785,7 +788,7 @@ static void wifi_bmi_send(WifiShared *w, const uint8_t *buf, int len) {
     /* Abort before too many un-credited writes accumulate: a healthy boot has
      * only ~8 (structural, harmless); more than ~25 means credits have stalled
      * (bad chip state) and continuing would corrupt the firmware. Clean abort
-     * (no freeze, no silent corruption) -- power-cycle and retry. */
+     * (no freeze, no silent corruption), power-cycle and retry. */
     if (w->bmi_nocred > 25) {
       g_bmi_abort = 1;
       w->bmi_sends++;
@@ -1156,8 +1159,6 @@ static void wifi_htc_wait_ready(WifiShared *w) {
   w->htc_regs = 0;
   w->boot_ready = 0;
 
-  wifi_htc_enable_ints(w);
-
   /* Watch mailbox 0 for a pending message from the very start (no settle first):
    * poll RX_LOOKAHEAD_VALID(0x405) bit0 or HOST_INT_STATUS(0x400) mbox-data bits.
    * Occasionally sample the NWM ready flag (HI+0x58) via the diag window. Bail if
@@ -1209,7 +1210,7 @@ static void wifi_htc_wait_ready(WifiShared *w) {
                 ((uint32_t)hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
   if (!have) {
     /* Nothing flagged: peek mailbox 0 directly (CMD52) and grab mbox_frame(0x404)
-     * -- in case the firmware posted but the lookahead register isn't showing it. */
+     * in case the firmware posted but the lookahead register isn't showing it. */
     uint32_t mb = 0;
     for (int i = 0; i < 4; i++) {
       wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, WIFI_MBOX0 + i));
@@ -1246,6 +1247,13 @@ static void wifi_boot_firmware(WifiShared *w) {
     dcache_clean();
     return;
   }
+  if ((fw->main_type != WIFI_FW_TYPE1 && fw->main_type != WIFI_FW_TYPE4) ||
+      fw->main_len == 0) {
+    w->boot_step = WIFI_BOOT_NOFW;
+    dcache_clean();
+    return;
+  }
+  w->fw_type = fw->main_type;
 
   wifi_bmi_target_info(w);
   if (w->bmi_ver != AR6014_VERSION || w->bmi_type != AR6014_TYPE) {
@@ -1279,8 +1287,8 @@ static void wifi_boot_firmware(WifiShared *w) {
                      fw->stubcode_len);
   /* Verify the raw upload landed byte-for-byte: read the stub_code start back
    * via the diag window now, before it runs and before anything overwrites it.
-   * fw_dbrd should equal fw_dbex (the first word of the blob we sent). This is
-   * the conclusive test of whether byte-CMD52 mailbox writes deliver intact. */
+   * fw_dbrd should equal fw_dbex (the first word of the blob just sent). This
+   * is the conclusive test of whether mailbox writes deliver intact. */
   {
     const uint32_t *sc = (const uint32_t *)WIFI_FW_STUBCODE;
     w->fw_dbrd = wifi_diag_read(w, AR6014_PARTC_DST);
@@ -1300,8 +1308,8 @@ static void wifi_boot_firmware(WifiShared *w) {
    *    the database, then set the host-interest pointers NWM expects. */
   w->boot_step = WIFI_BOOT_MAIN;
   dcache_clean();
-  wifi_bmi_fast_download(w, AR6014_PARTA_DST, (const uint8_t *)WIFI_FW_MAIN4,
-                         fw->main4_len);
+  wifi_bmi_fast_download(w, AR6014_PARTA_DST, (const uint8_t *)WIFI_FW_MAIN,
+                         fw->main_len);
   wifi_bmi_write_mem(w, AR6014_PARTD_DST, (const uint8_t *)WIFI_FW_STUBDATA,
                      fw->stubdata_len);
   wifi_bmi_write_mem(w, AR6014_PARTB_DST, (const uint8_t *)WIFI_FW_DATABASE,
@@ -1314,9 +1322,14 @@ static void wifi_boot_firmware(WifiShared *w) {
     return;
   }
 
-  /* 4. Hand off from BMI, then IMMEDIATELY watch the mailbox for HTC_READY. The
+  /* 4. Arm target mailbox interrupts before the handoff, then watch for HTC_READY.
+   * The AR6K driver applies this target-side configuration before unmasking its
+   * host-side SDIO event loop. */
+  wifi_htc_enable_ints(w);
+
+  /* Hand off from BMI, then IMMEDIATELY watch the mailbox for HTC_READY. The
    *    firmware posts HTC_READY and, on the AR6014, asserts / aborts if the host
-   *    is slow to answer the HTC handshake -- a message posted-then-cleared would
+   *    is slow to answer the HTC handshake, a message posted-then-cleared would
    *    be missed by a delayed poll, so start watching the instant BMIDone lands
    *    (the NWM ready flag is polled inside, occasionally, via the diag window). */
   wifi_bmi_done(w);
@@ -1339,6 +1352,7 @@ static void wifi_boot_run(void) {
   w->fw_chk = 0;
   w->fw_dbrd = 0;
   w->fw_dbex = 0;
+  w->fw_type = 0;
   w->htc_ready = 0;
   w->htc_look = 0;
   w->htc_msgid = 0;
@@ -1401,7 +1415,7 @@ void audio11_main(void) {
   (void)crash11_init;
 
   codec_init();
-  /* Diagnostics: read back codec ID/rev registers and one register we wrote.
+  /* Diagnostics: read back codec ID/rev registers and one written register.
    * All-0x00 or all-0xFF here means the codec SPI link is not working. */
   ct->diag0 = cdc_read_word(CDC_0_2); /* raw 32-bit read: shows byte lane */
   /* Write-then-read-back verify on reg 101.11 (isolates write vs read). */
@@ -1449,6 +1463,8 @@ void audio11_main(void) {
         wifi_probe_run();
       } else if (cmd == AUDIO_CMD_WIFI_BOOT) {
         wifi_boot_run();
+      } else if (cmd == AUDIO_CMD_GPU) {
+        gpu11_run();
       }
       ct->ack_seq = ct->cmd_seq;
       dcache_clean();
