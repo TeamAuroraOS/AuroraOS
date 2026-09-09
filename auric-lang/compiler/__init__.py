@@ -15,7 +15,7 @@ from .lexer import Lexer
 from .parser import Parser
 from .typecheck import TypeChecker
 
-__version__ = "0.0.8"
+__version__ = "0.2"
 
 __all__ = ["AuricError", "Program", "parse_source", "check_source", "compile_to_c",
            "__version__"]

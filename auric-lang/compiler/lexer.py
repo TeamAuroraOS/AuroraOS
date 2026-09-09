@@ -1,6 +1,6 @@
 """Auric lexer: source text -> token stream.
 
-Hand-written scanner, deliberately small to match the v0.1 language scope. It
+Hand-written scanner, deliberately small to match the language's scope. It
 tracks 1-based line/column on every token so later stages can report precise
 errors. Whitespace and `//` / `/* */` comments are skipped.
 """
@@ -26,6 +26,8 @@ class T(Enum):
     ELSE = auto()
     WHILE = auto()
     RETURN = auto()
+    BREAK = auto()
+    CONTINUE = auto()
     TRUE = auto()
     FALSE = auto()
     KW_INT = auto()
@@ -37,6 +39,8 @@ class T(Enum):
     RPAREN = auto()
     LBRACE = auto()
     RBRACE = auto()
+    LBRACKET = auto()
+    RBRACKET = auto()
     COMMA = auto()
     COLON = auto()
     SEMI = auto()
@@ -57,6 +61,11 @@ class T(Enum):
     AND = auto()        # &&
     OR = auto()         # ||
     NOT = auto()        # !
+    BITAND = auto()     # &
+    BITOR = auto()      # |
+    BITXOR = auto()     # ^
+    SHL = auto()        # <<
+    SHR = auto()        # >>
     EOF = auto()
 
 
@@ -67,6 +76,8 @@ KEYWORDS = {
     "else": T.ELSE,
     "while": T.WHILE,
     "return": T.RETURN,
+    "break": T.BREAK,
+    "continue": T.CONTINUE,
     "true": T.TRUE,
     "false": T.FALSE,
     "int": T.KW_INT,
@@ -188,13 +199,15 @@ class Lexer:
         # Two-char operators checked before their single-char prefixes.
         two = {
             "->": T.ARROW, "==": T.EQ, "!=": T.NE, "<=": T.LE, ">=": T.GE,
-            "&&": T.AND, "||": T.OR,
+            "&&": T.AND, "||": T.OR, "<<": T.SHL, ">>": T.SHR,
         }
         one = {
             "(": T.LPAREN, ")": T.RPAREN, "{": T.LBRACE, "}": T.RBRACE,
+            "[": T.LBRACKET, "]": T.RBRACKET,
             ",": T.COMMA, ":": T.COLON, ";": T.SEMI, "=": T.ASSIGN,
             "+": T.PLUS, "-": T.MINUS, "*": T.STAR, "/": T.SLASH,
             "%": T.PERCENT, "<": T.LT, ">": T.GT, "!": T.NOT,
+            "&": T.BITAND, "|": T.BITOR, "^": T.BITXOR,
         }
         while True:
             self._skip_trivia()

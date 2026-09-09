@@ -3,7 +3,7 @@
 Each compiled app embeds a 32x32, 1-bit icon at a fixed offset in its payload,
 which the AuroraOS Home Menu reads and draws. This module parses a simple text
 icon into the 128-byte packed form AuroraOS expects (ICON_SIZE=32,
-ICON_ROW_BYTES=4, most-significant-bit first within each row byte -- matching
+ICON_ROW_BYTES=4, most-significant-bit first within each row byte, matching
 draw_icon_32 in ../../src/screen.c) and emits the little assembly header that
 places the branch-to-entry + "AURICON1" magic + icon at the payload start.
 

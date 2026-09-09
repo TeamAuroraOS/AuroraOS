@@ -1,4 +1,4 @@
-"""The Auric v0.1 prelude: built-in functions and predefined constants.
+"""The Auric prelude: built-in functions and predefined constants.
 
 Kept in one place so the type checker and the code generator agree on names,
 signatures, and the C spellings they lower to. Everything here is backed by the
@@ -24,11 +24,22 @@ class Builtin:
 #   delay(cycles)             -> delay()
 BUILTINS: dict[str, Builtin] = {
     "print":     Builtin(("string", "int", "int", "int"), "void", "aur_print"),
+    "print_int": Builtin(("int", "int", "int", "int"), "void", "aur_print_int"),
     "clear":     Builtin(("int",), "void", "aur_clear"),
     "fill_rect": Builtin(("int", "int", "int", "int", "int"), "void",
                          "aur_fill_rect"),
     "wait_key":  Builtin(("int",), "void", "aur_wait_key"),
     "delay":     Builtin(("int",), "void", "aur_delay"),
+    # Polling input, for games that cannot block on a single button.
+    "keys_down": Builtin((), "int", "aur_keys_down"),
+    "keys_held": Builtin((), "int", "aur_keys_held"),
+    # Frame control: buffered(true) defers drawing until present().
+    "buffered":  Builtin(("bool",), "void", "aur_buffered"),
+    "present":   Builtin((), "void", "aur_present"),
+    # Pseudo-random integer in [0, n), seeded from the console clock.
+    "rand":      Builtin(("int",), "int", "aur_rand"),
+    # Milliseconds since startup, from an ARM9 hardware timer.
+    "millis":    Builtin((), "int", "aur_millis"),
 }
 
 

@@ -53,9 +53,11 @@ class Parser:
         while not self._at(T.EOF):
             if self._at(T.FN):
                 prog.functions.append(self._fn_decl())
+            elif self._at(T.LET):
+                prog.globals.append(self._let_stmt())
             else:
                 raise AuricError(
-                    f"expected a function declaration, found "
+                    f"expected a function or global declaration, found "
                     f"{self._describe(self._cur)}",
                     self._cur.line, self._cur.col, stage="parse")
         return prog
@@ -109,6 +111,14 @@ class Parser:
             return self._while_stmt()
         if self._at(T.RETURN):
             return self._return_stmt()
+        if self._at(T.BREAK):
+            kw = self._advance()
+            self._expect(T.SEMI, "';'")
+            return ast.BreakStmt(line=kw.line)
+        if self._at(T.CONTINUE):
+            kw = self._advance()
+            self._expect(T.SEMI, "';'")
+            return ast.ContinueStmt(line=kw.line)
         # assignment (IDENT '=' ...) or a bare expression statement
         if self._at(T.IDENT) and self.tokens[self.pos + 1].kind == T.ASSIGN:
             return self._assign_stmt()
@@ -118,13 +128,28 @@ class Parser:
         kw = self._advance()
         name = self._expect(T.IDENT, "variable name")
         decl_type: str | None = None
+        array_size: int | None = None
         if self._at(T.COLON):
             self._advance()
             decl_type = self._type()
+            if self._at(T.LBRACKET):  # `let board: int[200];`
+                self._advance()
+                size_tok = self._expect(T.INT, "array length")
+                array_size = int(size_tok.value)
+                if array_size <= 0:
+                    raise AuricError("array length must be at least 1",
+                                     size_tok.line, size_tok.col, stage="parse")
+                self._expect(T.RBRACKET, "']'")
+                decl_type = decl_type + "[]"
+        if array_size is not None:
+            # Arrays are always zero-filled; there is no initializer syntax.
+            self._expect(T.SEMI, "';'")
+            return ast.LetStmt(name.value, decl_type, None, array_size,
+                               line=kw.line)
         self._expect(T.ASSIGN, "'='")
         value = self._expr()
         self._expect(T.SEMI, "';'")
-        return ast.LetStmt(name.value, decl_type, value, line=kw.line)
+        return ast.LetStmt(name.value, decl_type, value, None, line=kw.line)
 
     def _assign_stmt(self) -> ast.AssignStmt:
         name = self._advance()
@@ -157,17 +182,30 @@ class Parser:
         self._expect(T.SEMI, "';'")
         return ast.ReturnStmt(value, line=kw.line)
 
-    def _expr_stmt(self) -> ast.ExprStmt:
+    def _expr_stmt(self) -> ast.Stmt:
         expr = self._expr()
+        # `name[i] = value;`, only detectable after parsing the index, since
+        # the parser looks just one token ahead.
+        if isinstance(expr, ast.IndexExpr) and self._at(T.ASSIGN):
+            self._advance()
+            value = self._expr()
+            self._expect(T.SEMI, "';'")
+            return ast.IndexAssignStmt(expr, value, line=expr.line)
         self._expect(T.SEMI, "';'")
         return ast.ExprStmt(expr, line=expr.line)
 
     # Each tier parses the next-higher tier, then folds left-associatively.
+    # Ordered low to high, matching C's precedence so a reader coming from C is
+    # never surprised: || && | ^ & ==/!= relational shifts +- */%
     _BINARY_TIERS: list[dict[T, str]] = [
         {T.OR: "||"},
         {T.AND: "&&"},
+        {T.BITOR: "|"},
+        {T.BITXOR: "^"},
+        {T.BITAND: "&"},
         {T.EQ: "==", T.NE: "!="},
         {T.LT: "<", T.LE: "<=", T.GT: ">", T.GE: ">="},
+        {T.SHL: "<<", T.SHR: ">>"},
         {T.PLUS: "+", T.MINUS: "-"},
         {T.STAR: "*", T.SLASH: "/", T.PERCENT: "%"},
     ]
@@ -216,6 +254,11 @@ class Parser:
             self._advance()
             if self._at(T.LPAREN):
                 return self._call(tok.value, tok.line)
+            if self._at(T.LBRACKET):
+                self._advance()
+                index = self._expr()
+                self._expect(T.RBRACKET, "']'")
+                return ast.IndexExpr(tok.value, index, line=tok.line)
             return ast.VarExpr(tok.value, line=tok.line)
         raise AuricError(f"expected an expression, found {self._describe(tok)}",
                          tok.line, tok.col, stage="parse")

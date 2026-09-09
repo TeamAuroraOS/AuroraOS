@@ -91,9 +91,22 @@ class ParserTest(unittest.TestCase):
             parse_source("fn main() { let x = 1 }")
         self.assertEqual(cm.exception.stage, "parse")
 
-    def test_top_level_must_be_fn(self):
+    def test_top_level_must_be_fn_or_let(self):
+        # Globals are allowed at the top level; anything else is not.
         with self.assertRaises(AuricError):
-            parse_source("let x = 1;")
+            parse_source("x = 1;")
+        with self.assertRaises(AuricError):
+            parse_source("print(\"hi\", 0, 0, 0);")
+
+    def test_top_level_let_is_a_global(self):
+        prog = parse_source("let x = 1;\nfn main() {}")
+        self.assertEqual(len(prog.globals), 1)
+        self.assertEqual(prog.globals[0].name, "x")
+
+    def test_array_declaration(self):
+        prog = parse_source("let a: int[8];\nfn main() {}")
+        self.assertEqual(prog.globals[0].array_size, 8)
+        self.assertEqual(prog.globals[0].decl_type, "int[]")
 
 
 if __name__ == "__main__":

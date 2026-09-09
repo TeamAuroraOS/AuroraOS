@@ -40,12 +40,59 @@ class Scope:
         return None
 
 
+def is_array(t: str) -> bool:
+    return t.endswith("[]")
+
+
+def element_type(t: str) -> str:
+    return t[:-2]
+
+
 class TypeChecker:
     def __init__(self, program: ast.Program) -> None:
         self.program = program
         self.functions: dict[str, ast.FnDecl] = {}
         self.current_ret: str = "void"
+        self.globals = Scope()
+        self.loop_depth = 0
 
+    def _check_globals(self) -> None:
+        """Module-level `let`s. Their initializers become C file-scope
+        initializers, so they must be constant expressions."""
+        for g in self.program.globals:
+            if g.name in self.functions:
+                raise AuricError(f"'{g.name}' is already declared as a function",
+                                 g.line, stage="type")
+            if g.array_size is not None:
+                self.globals.declare(g.name, g.decl_type, g.line)
+                continue
+            vtype = self._check_expr(g.value, self.globals)
+            if vtype == "void":
+                raise AuricError("cannot bind a void value to a global",
+                                 g.line, stage="type")
+            if g.decl_type is not None and g.decl_type != vtype:
+                raise AuricError(
+                    f"global '{g.name}' declared as {g.decl_type} but "
+                    f"initialized with {vtype}", g.line, stage="type")
+            if not self._is_const_expr(g.value):
+                raise AuricError(
+                    f"global '{g.name}' must be initialized with a constant "
+                    f"expression (literals, predefined constants, and "
+                    f"arithmetic on them)", g.line, stage="type")
+            self.globals.declare(g.name, g.decl_type or vtype, g.line)
+
+    def _is_const_expr(self, expr: ast.Expr) -> bool:
+        if isinstance(expr, (ast.IntLit, ast.FloatLit, ast.BoolLit,
+                             ast.StringLit)):
+            return True
+        if isinstance(expr, ast.VarExpr):
+            return expr.name in CONSTANTS
+        if isinstance(expr, ast.UnaryExpr):
+            return self._is_const_expr(expr.operand)
+        if isinstance(expr, ast.BinaryExpr):
+            return (self._is_const_expr(expr.left)
+                    and self._is_const_expr(expr.right))
+        return False
 
     def check(self) -> None:
         for fn in self.program.functions:
@@ -67,13 +114,21 @@ class TypeChecker:
             raise AuricError("'fn main' must not return a value", main.line,
                              stage="type")
 
+        self._check_globals()
+
         for fn in self.program.functions:
             self._check_fn(fn)
 
     def _check_fn(self, fn: ast.FnDecl) -> None:
         self.current_ret = fn.ret_type
-        scope = Scope()
+        self.loop_depth = 0
+        scope = Scope(self.globals)
         for p in fn.params:
+            if is_array(p.type):
+                raise AuricError(
+                    f"parameter '{p.name}': arrays cannot be passed to "
+                    f"functions; declare the array as a global instead",
+                    p.line, stage="type")
             scope.declare(p.name, p.type, p.line)
         self._check_block(fn.body, scope)
 
@@ -83,7 +138,25 @@ class TypeChecker:
             self._check_stmt(stmt, scope)
 
     def _check_stmt(self, stmt: ast.Stmt, scope: Scope) -> None:
-        if isinstance(stmt, ast.LetStmt):
+        if isinstance(stmt, ast.LetStmt) and stmt.array_size is not None:
+            scope.declare(stmt.name, stmt.decl_type, stmt.line)
+
+        elif isinstance(stmt, ast.IndexAssignStmt):
+            etype = self._check_index_target(stmt.target, scope)
+            vtype = self._check_expr(stmt.value, scope)
+            if vtype != etype:
+                raise AuricError(
+                    f"cannot assign {vtype} to an element of "
+                    f"'{stmt.target.name}' of type {etype}",
+                    stmt.line, stage="type")
+
+        elif isinstance(stmt, (ast.BreakStmt, ast.ContinueStmt)):
+            if self.loop_depth == 0:
+                word = "break" if isinstance(stmt, ast.BreakStmt) else "continue"
+                raise AuricError(f"'{word}' outside of a loop", stmt.line,
+                                 stage="type")
+
+        elif isinstance(stmt, ast.LetStmt):
             vtype = self._check_expr(stmt.value, scope)
             if vtype == "void":
                 raise AuricError("cannot bind a void value to a variable",
@@ -115,7 +188,9 @@ class TypeChecker:
 
         elif isinstance(stmt, ast.WhileStmt):
             self._require_bool(stmt.cond, scope, "while condition")
+            self.loop_depth += 1
             self._check_block(stmt.body, scope)
+            self.loop_depth -= 1
 
         elif isinstance(stmt, ast.ReturnStmt):
             if stmt.value is None:
@@ -142,6 +217,22 @@ class TypeChecker:
         else:  # pragma: no cover - guards against a new node type
             raise AuricError(f"internal: unhandled statement {type(stmt).__name__}",
                              getattr(stmt, "line", 0), stage="type")
+
+    def _check_index_target(self, target: ast.IndexExpr, scope: Scope) -> str:
+        """Resolve `name[index]` as an lvalue and return its element type."""
+        declared = scope.lookup(target.name)
+        if declared is None:
+            raise AuricError(f"use of undeclared name '{target.name}'",
+                             target.line, stage="type")
+        if not is_array(declared):
+            raise AuricError(f"'{target.name}' is {declared}, not an array, so "
+                             f"it cannot be indexed", target.line, stage="type")
+        itype = self._check_expr(target.index, scope)
+        if itype != "int":
+            raise AuricError(f"array index must be int, found {itype}",
+                             target.line, stage="type")
+        target.type = element_type(declared)
+        return target.type
 
     def _require_bool(self, expr: ast.Expr, scope: Scope, what: str) -> None:
         t = self._check_expr(expr, scope)
@@ -189,6 +280,9 @@ class TypeChecker:
             raise AuricError(f"unknown unary operator '{expr.op}'", expr.line,
                              stage="type")
 
+        if isinstance(expr, ast.IndexExpr):
+            return self._check_index_target(expr, scope)
+
         if isinstance(expr, ast.BinaryExpr):
             return self._infer_binary(expr, scope)
 
@@ -220,6 +314,13 @@ class TypeChecker:
                 raise AuricError(f"'{op}' expects two ints or two floats, "
                                  f"found {lt} and {rt}", expr.line, stage="type")
             return "bool"
+
+        # Bitwise and shifts are int-only, matching C's semantics.
+        if op in ("&", "|", "^", "<<", ">>"):
+            if lt != "int" or rt != "int":
+                raise AuricError(f"'{op}' expects two ints, found {lt} and {rt}",
+                                 expr.line, stage="type")
+            return "int"
 
         # arithmetic: + - * / %
         if lt != rt or lt not in NUMERIC:

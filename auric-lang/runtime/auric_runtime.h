@@ -1,7 +1,7 @@
-/* Auric runtime shim -- public surface for generated programs.
+/* Auric runtime shim: public surface for generated programs.
  *
  * Generated C (`#include "auric_runtime.h"`) only ever touches the names here:
- * the four built-in helpers and the predefined colour/button constants. The
+ * the built-in helpers and the predefined colour/button constants. The
  * implementation (auric_runtime.c) maps them onto AuroraOS's own screen/input
  * API (draw_string, clear_screen, get_keys_down, delay).
  *
@@ -22,6 +22,20 @@ void aur_fill_rect(int x, int y, int w, int h, int color);
 void aur_wait_key(int button);
 /* delay(cycles): busy-wait for roughly `cycles` iterations. */
 void aur_delay(int cycles);
+/* print_int(value, x, y, color): draw a signed decimal number at (x, y). */
+void aur_print_int(int value, int x, int y, int color);
+/* keys_down(): buttons newly pressed since the last call (edge). */
+int aur_keys_down(void);
+/* keys_held(): buttons currently held down (level). */
+int aur_keys_held(void);
+/* buffered(on): when on, drawing accumulates off-screen until present(). */
+void aur_buffered(int on);
+/* present(): push the off-screen frame to the panel. */
+void aur_present(void);
+/* rand(n): pseudo-random integer in [0, n). */
+int aur_rand(int n);
+/* millis(): milliseconds since the app started, from an ARM9 hardware timer. */
+int aur_millis(void);
 
 /* Poll the HOME button; if pressed (and launched from the Home Menu), returns
  * control to AuroraOS and never comes back. Called from every built-in. */

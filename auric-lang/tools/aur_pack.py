@@ -41,7 +41,7 @@ assert HEADER_SIZE == 36
 # not sit here or it clobbers the code doing the copy. Soft warning only.
 LOADER_ARM9_RANGE = (0x08006800, 0x08100000)
 
-# Default ARM9 payload address in FCRAM, well clear of the loader -- the same
+# Default ARM9 payload address in FCRAM, well clear of the loader, the same
 # address AuroraOS itself is packed at.
 DEFAULT_ARM9_LOAD = 0x22000000
 

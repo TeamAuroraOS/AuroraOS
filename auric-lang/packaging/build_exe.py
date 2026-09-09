@@ -9,7 +9,7 @@ Produces a single self-contained executable at:
     auric-lang/dist/aurc.exe
 
 The exe still requires arm-none-eabi-gcc (devkitARM) on PATH at *run* time --
-that ARM cross-compiler can't be bundled -- but no Python install is needed.
+that ARM cross-compiler can't be bundled, but no Python install is needed.
 """
 import sys
 from pathlib import Path

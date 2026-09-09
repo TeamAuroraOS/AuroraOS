@@ -61,6 +61,13 @@ class CallExpr(Expr):
 
 
 @dataclass
+class IndexExpr(Expr):
+    """`name[index]`: reading one element of an array variable."""
+    name: str = ""
+    index: Expr | None = None
+
+
+@dataclass
 class Stmt:
     line: int = field(default=0, kw_only=True)
 
@@ -70,12 +77,32 @@ class LetStmt(Stmt):
     name: str = ""
     decl_type: str | None = None   # explicit annotation, or None to infer
     value: Expr | None = None
+    # Element count for an array declaration (`let a: int[8];`), else None.
+    # Arrays have no initializer: they are zero-filled.
+    array_size: int | None = None
 
 
 @dataclass
 class AssignStmt(Stmt):
     name: str = ""
     value: Expr | None = None
+
+
+@dataclass
+class IndexAssignStmt(Stmt):
+    """`name[index] = value;`"""
+    target: IndexExpr | None = None
+    value: Expr | None = None
+
+
+@dataclass
+class BreakStmt(Stmt):
+    pass
+
+
+@dataclass
+class ContinueStmt(Stmt):
+    pass
 
 
 @dataclass
@@ -126,3 +153,5 @@ class FnDecl:
 @dataclass
 class Program:
     functions: list[FnDecl] = field(default_factory=list)
+    # Module-level `let` declarations, visible to every function.
+    globals: list[LetStmt] = field(default_factory=list)

@@ -34,14 +34,15 @@ fn main() {
 ```
 
 The generated program is linked at `0x22000000` and run in place, exactly like
-AuroraOS's own payload (`src/os/os.ld`). The runtime shim maps the four Auric
-built-ins onto AuroraOS's `draw_string` / `clear_screen` / `get_keys_down` /
-`delay`, reusing the real `src/screen.c` for drawing.
+AuroraOS's own payload (`src/os/os.ld`). The runtime shim maps the Auric
+built-ins onto AuroraOS's own API, reusing the real `src/screen.c` for drawing,
+`src/i2c.c` for the HOME button, and `src/os/gpu9.c` so that a buffered app
+presents each frame with a GPU blit instead of a full-screen CPU copy.
 
 ## Prerequisites
 
 * **Python 3.10+** (for `aurc`; no third-party packages needed).
-* **devkitARM** (`arm-none-eabi-gcc` + `arm-none-eabi-objcopy`) on your `PATH` —
+* **devkitARM** (`arm-none-eabi-gcc` + `arm-none-eabi-objcopy`) on your `PATH`:
   the standard 3DS-homebrew cross-compiler. Get it from
   <https://devkitpro.org/wiki/Getting_Started>. `aurc` detects it and prints an
   install pointer if it is missing.
@@ -84,7 +85,7 @@ the selected one (see [`../docs/apps.md`](../docs/apps.md)):
 
 ```
 python -m compiler.aurc build examples/hello.aur -o HELLO.BIN
-# copy HELLO.BIN to SD:\Aurora\Apps\ , boot Aurora, pick it on the home grid
+# copy HELLO.BIN to SD:\Aurora\Apps\, boot Aurora, pick it on the home grid
 ```
 
 **2. As `AURORAOS.BIN` (the boot payload).** The loader's shared parser now
@@ -97,7 +98,7 @@ python -m compiler.aurc build examples/hello.aur -o AURORAOS.BIN
 ```
 
 > **Historical note.** The stock loader checked only for `"AOS1"`
-> magic. If you are running an *older* AuroraOS build, use `--magic AOS1` — the
+> magic. If you are running an *older* AuroraOS build, use `--magic AOS1`; the
 > `AUR1` and `AOS1` files are byte-identical apart from those four magic bytes.
 >
 > **Press HOME to return** to the Aurora home menu at any time, the runtime
@@ -145,7 +146,7 @@ auric-lang/
   runtime/     C shim (built-ins → AuroraOS API), crt0 (auric_start.s), linker script
   tools/       aur_pack.py | AUR1 container packer/inspector (forked from aos_pack.py)
   examples/    hello.aur, demo.aur
-  docs/        language.md | the full v0.1 language reference
+  docs/        language.md | the full v0.2 language reference
   tests/       unittest suite for every compiler stage + end-to-end build
   packaging/   PyInstaller spec + build_exe.py for the standalone aurc.exe
 ```
@@ -153,9 +154,18 @@ auric-lang/
 ## Language
 
 See [`docs/language.md`](docs/language.md) for the complete reference. In brief:
-`fn` functions, `let` bindings, `if`/`else`, `while`, the types `int` / `float`
-/ `bool` / `string`, the usual arithmetic/comparison/logical operators, and the
-four built-ins above.
+
+* `fn` functions, `let` bindings (local **and** global), fixed-length arrays,
+  `if`/`else`, `while`, `break`/`continue`.
+* Types `int` / `float` / `bool` / `string`, with no implicit conversions.
+* Arithmetic, comparison, logical, and bitwise operators (`& | ^ << >>`), at C's
+  precedence.
+* Built-ins for drawing (`print`, `print_int`, `clear`, `fill_rect`), input
+  (`keys_down`, `keys_held`, `wait_key`), frame control (`buffered`, `present`),
+  and timing (`millis`, `rand`, `delay`).
+
+A complete game built on all of this lives in
+[`../Games/Tetris_Source/Tetris.aur`](../Games/Tetris_Source/Tetris.aur).
 
 ## Tests
 

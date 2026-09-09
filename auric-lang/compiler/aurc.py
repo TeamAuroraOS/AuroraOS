@@ -1,4 +1,4 @@
-"""aurc -- the Auric compiler driver.
+"""aurc: the Auric compiler driver.
 
 Ties the whole pipeline together:
 
@@ -53,6 +53,10 @@ else:
 # AuroraOS sources the runtime reuses/links against.
 AURORA_SCREEN = AURORA_SRC / "screen.c"
 AURORA_I2C = AURORA_SRC / "i2c.c"
+# The ARM9 side of the GPU driver, so buffered apps present with a GPU blit
+# instead of a full-screen CPU copy. The ARM11 core stays resident while an app
+# runs, so it is there to service the request.
+AURORA_GPU9 = AURORA_SRC / "os" / "gpu9.c"
 
 RUNTIME_C = RUNTIME_DIR / "auric_runtime.c"
 RUNTIME_START = RUNTIME_DIR / "auric_start.s"
@@ -155,6 +159,7 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     runtime_o = work / "auric_runtime.o"
     screen_o = work / "screen.o"
     i2c_o = work / "i2c.o"
+    gpu9_o = work / "gpu9.o"
     start_o = work / "auric_start.o"
     elf = work / f"{stem}.elf"
     payload = work / f"{stem}.payload.bin"
@@ -166,12 +171,13 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(RUNTIME_C), "-o", str(runtime_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_SCREEN), "-o", str(screen_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_I2C), "-o", str(i2c_o)], verbose)
+    _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_GPU9), "-o", str(gpu9_o)], verbose)
     _run([cc, *ARM9_ASFLAGS, "-c", str(RUNTIME_START), "-o", str(start_o)], verbose)
 
     # Link. Section placement (icon header first, then _start) is fixed by the
     # linker script, so object order here is not significant.
     _run([cc, *ARM9_LDFLAGS, str(head_o), str(start_o), str(prog_o), str(runtime_o),
-          str(screen_o), str(i2c_o), "-o", str(elf), "-lgcc"], verbose)
+          str(screen_o), str(i2c_o), str(gpu9_o), "-o", str(elf), "-lgcc"], verbose)
 
     # objcopy -> raw binary payload.
     _run([objcopy, "-O", "binary", str(elf), str(payload)], verbose)
@@ -181,8 +187,8 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     _pack(payload, output, load_addr, magic)
 
     if not keep:
-        for f in (head_o, head_s, prog_o, runtime_o, screen_o, i2c_o, start_o,
-                  elf, payload):
+        for f in (head_o, head_s, prog_o, runtime_o, screen_o, i2c_o, gpu9_o,
+                  start_o, elf, payload):
             f.unlink(missing_ok=True)
 
     return output

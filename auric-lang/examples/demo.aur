@@ -1,4 +1,4 @@
-// demo.aur -- exercises more of the Auric v0.1 language:
+// demo.aur: exercises more of the Auric v0.1 language:
 // functions with parameters and a return value, if/else, while, and locals.
 //
 // Draws a column of numbered lines, colouring even rows one way and odd rows
