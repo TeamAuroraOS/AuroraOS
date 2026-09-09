@@ -9,7 +9,7 @@
  * Boot path (see audio9.c): the firm leaves the ARM11 spinning on the wake
  * mailbox (src/arm11_start.s). The ARM9 OS copies the audio core to
  * AUDIO_CORE_ADDR, flushes its cache, and writes the core's entry to the
- * mailbox -- waking the ARM11 into the core. No firm changes required.
+ * mailbox, waking the ARM11 into the core. No firm changes required.
  *
  * NOTE: the CSND/codec register programming in audio11.c is a documented best
  * effort (3dbrew / GBATEK / ctrulib) and has not been validated on hardware yet.
@@ -31,9 +31,9 @@
 
 /* Bumped every time the ARM11 core changes, so the OS can tell whether the
  * resident core is current. FCRAM survives a warm reboot, so a stale core can
- * linger unless the console is fully powered off -- the Sound Test screen shows
+ * linger unless the console is fully powered off; the Sound Test screen shows
  * this version so a mismatch is visible. */
-#define AUDIO_CORE_VERSION 69
+#define AUDIO_CORE_VERSION 71
 
 /* Max PCM the shared buffer holds (10 MB, clear of the app-stage at 0x24000000).
  * Longer tracks are truncated to this. */
@@ -49,6 +49,7 @@ enum {
                        * arg3 = bit depth (8 or 16). One-shot.               */
   AUDIO_CMD_WIFI = 4, /* run the Wi-Fi SDIO probe (results in WifiShared)    */
   AUDIO_CMD_WIFI_BOOT = 5, /* upload the SD-staged firmware and boot the chip */
+  AUDIO_CMD_GPU = 6,  /* run a PICA200 GPU op (params + results in GpuShared) */
 };
 
 /* ARM11 progress codes, surfaced on-screen to debug the bring-up. */

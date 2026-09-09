@@ -27,14 +27,20 @@
 #define WIFI_FW_STUBDATA (WIFI_FW_ADDR + 0x00001000u)
 #define WIFI_FW_STUBCODE (WIFI_FW_ADDR + 0x00002000u)
 #define WIFI_FW_DATABASE (WIFI_FW_ADDR + 0x00003000u)
-#define WIFI_FW_MAIN4    (WIFI_FW_ADDR + 0x00010000u) /* ~42 KB, largest blob */
+#define WIFI_FW_MAIN     (WIFI_FW_ADDR + 0x00010000u)
+
+enum {
+  WIFI_FW_TYPE1 = 1,
+  WIFI_FW_TYPE4 = 4,
+};
 
 typedef struct {
   volatile uint32_t magic; /* WIFI_FW_MAGIC once the ARM9 has staged the blobs */
   volatile uint32_t stubdata_len;
   volatile uint32_t stubcode_len;
   volatile uint32_t database_len;
-  volatile uint32_t main4_len;
+  volatile uint32_t main_len;
+  volatile uint32_t main_type;
 } WifiFw;
 
 /* Phase the ARM11 probe reached, so a hang localises to the last phase set. */
@@ -112,6 +118,7 @@ typedef struct {
   volatile uint32_t fw_chk;     /* upload-integrity bits: b0 database word0 ok, b1 HI+0x6c==0x80, b2 HI+0x74==0x63 */
   volatile uint32_t fw_dbrd;    /* database word0 read back from target via diag */
   volatile uint32_t fw_dbex;    /* database word0 expected (from the SD-loaded blob) */
+  volatile uint32_t fw_type;    /* selected NWM Main.type image */
 } WifiShared;
 
 /* Firmware boot sequence progress (WifiShared.boot_step). */

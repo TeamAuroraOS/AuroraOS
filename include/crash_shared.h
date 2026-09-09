@@ -5,7 +5,7 @@
  * exception stub fills this block in shared FCRAM and sets the magic; the ARM9
  * polls the magic (in get_keys_down) and shows the crash screen on its behalf.
  *
- * Field offsets are relied on by the ARM11 asm stubs in audio11_start.s -- keep
+ * Field offsets are relied on by the ARM11 asm stubs in audio11_start.s, keep
  * them in sync (magic 0, cpu 4, core 8, r[0] 12, pc 64, cpsr 68, exc 72,
  * dfsr 76, dfar 80).
  */

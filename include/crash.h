@@ -3,8 +3,8 @@
  *
  * Installs exception vectors so an Undefined-Instruction / Prefetch-Abort /
  * Data-Abort on the ARM9 (where the OS runs) is caught and shown on a blue
- * crash screen -- a sad face on the top screen, the register/reason dump on the
- * bottom -- instead of silently hanging. The Settings menu can also force one
+ * crash screen instead of silently hanging: a sad face on the top screen, the
+ * register/reason dump on the bottom. The Settings menu can also force one
  * ("User Forced Crash") to test it.
  */
 #ifndef AURORA_CRASH_H
@@ -20,7 +20,7 @@ enum {
   CRASH_USER  = 3, /* User Forced Crash     */
 };
 
-/* CPU snapshot captured at the fault. Layout is shared with crash.s -- keep the
+/* CPU snapshot captured at the fault. Layout is shared with crash.s, keep the
  * field order and offsets in sync (r[0] at 0, pc at 52, cpsr 56, exc 60,
  * dfsr 64, dfar 68). */
 typedef struct {

@@ -19,14 +19,35 @@
 #define BUTTON_DDOWN        (1 << 7)
 #define BUTTON_R            (1 << 8)
 #define BUTTON_L            (1 << 9)
+#define BUTTON_X            (1 << 10)
+#define BUTTON_Y            (1 << 11)
 
 #define REG_SDMMC_BASE      0x10006000
 
 #define REG_LCD_TOP_CFG     (*(volatile uint32_t *)0x10400400)
 #define REG_LCD_BOT_CFG     (*(volatile uint32_t *)0x10400500)
 
-#define VRAM_TOP_LA         ((volatile uint8_t *)0x18300000)
-#define VRAM_BOT_A          ((volatile uint8_t *)0x18346500)
+/* The physical framebuffers the LCD controller scans out. Drawing code should
+ * use VRAM_TOP_LA / VRAM_BOT_A below; these are for code that must bypass the
+ * backbuffer and reach the panel directly (the crash handler). */
+#define VRAM_TOP_PHYS       ((volatile uint8_t *)0x18300000)
+#define VRAM_BOT_PHYS       ((volatile uint8_t *)0x18346500)
+
+/* Backbuffers in cached FCRAM. VRAM is uncached from the ARM9, so rasterising
+ * straight into it costs thousands of uncached byte stores per screen; drawing
+ * into FCRAM and moving the result in one GPU blit is far cheaper. Placed clear
+ * of the Wi-Fi firmware slots (which end by 0x23E70000) and the app-launch
+ * staging area at 0x24000000. */
+#define VRAM_TOP_BACK       ((volatile uint8_t *)0x23E80000)
+#define VRAM_BOT_BACK       ((volatile uint8_t *)0x23F00000)
+
+/* The current draw targets. These start out pointing at the physical
+ * framebuffers, so code that never calls screen_use_backbuffer() behaves
+ * exactly as before; screen_use_backbuffer(1) redirects them to FCRAM. */
+extern volatile uint8_t *g_fb_top;
+extern volatile uint8_t *g_fb_bot;
+#define VRAM_TOP_LA         (g_fb_top)
+#define VRAM_BOT_A          (g_fb_bot)
 
 #define TOP_SCREEN_WIDTH    400
 #define TOP_SCREEN_HEIGHT   240
@@ -89,6 +110,17 @@ typedef struct {
 void screen_init(void);
 void screen_present_top(void);
 void screen_present_bottom(void);
+
+/* Redirect drawing to the FCRAM backbuffers (1) or straight to VRAM (0).
+ * With backbuffers on, nothing reaches the panel until screen_present_*(). */
+void screen_use_backbuffer(int on);
+
+/* Blit hook used to present a backbuffer: (src, dst, byte count) -> non-zero on
+ * success. The OS points this at gpu_texcopy() once the GPU is up; when it is
+ * NULL (the FIRM payload, or before the ARM11 core starts) the present falls
+ * back to a CPU copy. screen.c is linked into both builds, so this must stay a
+ * hook rather than a direct call into the GPU driver. */
+extern int (*g_screen_blit)(u32 src, u32 dst, u32 len);
 void clear_screen(volatile u8 *fb, u32 fb_size, Color color);
 void draw_pixel(volatile u8 *fb, int x, int y, int screen_height, Color color);
 void draw_char(volatile u8 *fb, int x, int y, int screen_height, char c, Color fg, Color bg);

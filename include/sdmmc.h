@@ -7,10 +7,10 @@
 typedef volatile u16 vu16;
 typedef volatile u32 vu32;
 
-/* SD/MMC controller 1 (the physical SD card slot). -- from GodMode9 */
+/* SD/MMC controller 1 (the physical SD card slot). From GodMode9 */
 #define SDMMC_BASE        (0x10006000)
 
-/* 16-bit register offsets from SDMMC_BASE. -- from GodMode9 */
+/* 16-bit register offsets from SDMMC_BASE. From GodMode9 */
 #define REG_SDCMD         (0x00)
 #define REG_SDPORTSEL     (0x02)
 #define REG_SDCMDARG0     (0x04)
@@ -40,7 +40,7 @@ typedef volatile u32 vu32;
 #define REG_SDBLKCOUNT32  (0x108)
 #define REG_SDFIFO32      (0x10C)
 
-/* TMIO status-register bits. -- from GodMode9 */
+/* TMIO status-register bits. From GodMode9 */
 #define TMIO_STAT0_CMDRESPEND     (0x0001)
 #define TMIO_STAT0_DATAEND        (0x0004)
 #define TMIO_STAT0_CARD_REMOVE    (0x0008)
@@ -61,7 +61,7 @@ typedef volatile u32 vu32;
 
 #define TMIO_MASK_ALL             (0x837F031D)
 
-/* "Got worse" -- any error bit that aborts a command. -- from GodMode9 */
+/* "Got worse": any error bit that aborts a command. From GodMode9 */
 #define TMIO_MASK_GW (TMIO_STAT1_ILL_ACCESS | TMIO_STAT1_CMDTIMEOUT | \
                       TMIO_STAT1_TXUNDERRUN | TMIO_STAT1_RXOVERFLOW | \
                       TMIO_STAT1_DATATIMEOUT | TMIO_STAT1_STOPBIT_ERR | \

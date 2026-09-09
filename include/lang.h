@@ -4,7 +4,7 @@
 #include "user.h" /* LANG_COUNT */
 
 typedef enum {
-  /* Progress-bar labels -- must stay first and in step order (0..4). */
+  /* Progress-bar labels: must stay first and in step order (0..4). */
   STR_LANGUAGE = 0,
   STR_NETWORK,
   STR_DETAILS,
@@ -58,6 +58,7 @@ typedef enum {
   STR_DEBUG_CRASH,
   STR_TOUCH_TEST,
   STR_WIFI_TEST,
+  STR_GPU_TEST,
 
   STR_COUNT
 } StringId;
