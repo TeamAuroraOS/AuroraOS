@@ -14,6 +14,47 @@ static int console_y = 0;
 static Color console_fg = {0xFF, 0xFF, 0xFF};
 static Color console_bg = {0x10, 0x10, 0x20};
 
+/* Draw targets. Default to the panels themselves so any code that never opts in
+ * keeps the original direct-to-VRAM behaviour. */
+volatile u8 *g_fb_top = VRAM_TOP_PHYS;
+volatile u8 *g_fb_bot = VRAM_BOT_PHYS;
+
+int (*g_screen_blit)(u32 src, u32 dst, u32 len) = 0;
+
+static void copy_words(volatile u8 *dst, const volatile u8 *src, u32 size) {
+  volatile u32 *d = (volatile u32 *)dst;
+  const volatile u32 *s = (const volatile u32 *)src;
+  for (u32 i = 0; i < (size >> 2); i++)
+    d[i] = s[i];
+}
+
+void screen_use_backbuffer(int on) {
+  if (on && g_fb_top != VRAM_TOP_BACK) {
+    /* Seed the backbuffers from what is currently on the panels, so a present
+     * that only redraws part of a screen cannot flash uninitialised memory. */
+    copy_words(VRAM_TOP_BACK, VRAM_TOP_PHYS, TOP_FB_SIZE);
+    copy_words(VRAM_BOT_BACK, VRAM_BOT_PHYS, BOT_FB_SIZE);
+  }
+  g_fb_top = on ? VRAM_TOP_BACK : VRAM_TOP_PHYS;
+  g_fb_bot = on ? VRAM_BOT_BACK : VRAM_BOT_PHYS;
+}
+
+/* Move a finished backbuffer to the panel. In direct mode this is a no-op, so
+ * present calls are always safe to make. */
+static void present(volatile u8 *back, volatile u8 *phys, u32 size) {
+  if (back == phys)
+    return;
+  if (g_screen_blit && g_screen_blit((u32)back, (u32)phys, size))
+    return;
+  /* No GPU yet: copy by word. Still much cheaper than having rasterised
+   * straight into VRAM, because this is one sequential run instead of
+   * thousands of scattered uncached byte stores. */
+  const u32 *s = (const u32 *)back;
+  volatile u32 *d = (volatile u32 *)phys;
+  for (u32 i = 0; i < (size >> 2); i++)
+    d[i] = s[i];
+}
+
 void screen_init(void) {
   Color top_bg = {0x05, 0x0A, 0x15};
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, top_bg);
@@ -23,9 +64,11 @@ void screen_init(void) {
   screen_present_bottom();
 }
 
-void screen_present_top(void) {}
+void screen_present_top(void) { present(g_fb_top, VRAM_TOP_PHYS, TOP_FB_SIZE); }
 
-void screen_present_bottom(void) {}
+void screen_present_bottom(void) {
+  present(g_fb_bot, VRAM_BOT_PHYS, BOT_FB_SIZE);
+}
 
 void clear_screen(volatile u8 *fb, u32 fb_size, Color color) {
   u32 b = color.b, g = color.g, r = color.r;
@@ -53,6 +96,10 @@ void draw_pixel(volatile u8 *fb, int x, int y, int screen_height, Color color) {
   fb[offset + 2] = color.r;
 }
 
+/* The framebuffer runs down a screen column before stepping to the next one, so
+ * a glyph column is one contiguous descending run. Walking it with a pointer
+ * costs a single multiply per column instead of one per pixel, and drops the
+ * per-pixel call and bounds test that draw_pixel would repeat 64 times. */
 void draw_char(volatile u8 *fb, int x, int y, int screen_height, char c,
                Color fg, Color bg) {
   if (c < 0x20 || c > 0x7E)
@@ -60,11 +107,27 @@ void draw_char(volatile u8 *fb, int x, int y, int screen_height, char c,
 
   const u8 *glyph = font_data[c - 0x20];
 
-  for (int row = 0; row < FONT_HEIGHT; row++) {
-    u8 bits = glyph[row];
-    for (int col = 0; col < FONT_WIDTH; col++) {
-      Color pixel = (bits & (0x80 >> col)) ? fg : bg;
-      draw_pixel(fb, x + col, y + row, screen_height, pixel);
+  int r0 = 0, r1 = FONT_HEIGHT; /* clip vertically once, not per pixel */
+  if (y < 0)
+    r0 = -y;
+  if (y + r1 > screen_height)
+    r1 = screen_height - y;
+  if (r0 >= r1)
+    return;
+
+  for (int col = 0; col < FONT_WIDTH; col++) {
+    int px = x + col;
+    if (px < 0)
+      continue;
+    volatile u8 *p =
+        fb + ((px * screen_height) + (screen_height - 1 - (y + r0))) * 3;
+    u8 mask = (u8)(0x80 >> col);
+    for (int row = r0; row < r1; row++) {
+      Color pixel = (glyph[row] & mask) ? fg : bg;
+      p[0] = pixel.b;
+      p[1] = pixel.g;
+      p[2] = pixel.r;
+      p -= 3;
     }
   }
 }
@@ -86,13 +149,30 @@ void draw_string(volatile u8 *fb, int x, int y, int screen_height,
 
 void draw_aurora_logo(volatile u8 *fb, int x0, int y0, int screen_height,
                       Color color) {
-  for (int y = 0; y < AURORA_LOGO_HEIGHT; y++) {
-    for (int x = 0; x < AURORA_LOGO_WIDTH; x++) {
-      int byte_idx = y * AURORA_LOGO_ROW_BYTES + (x / 8);
-      int bit_idx = 7 - (x % 8);
-      if (aurora_logo_bits[byte_idx] & (1 << bit_idx)) {
-        draw_pixel(fb, x0 + x, y0 + y, screen_height, color);
+  int r0 = 0, r1 = AURORA_LOGO_HEIGHT;
+  if (y0 < 0)
+    r0 = -y0;
+  if (y0 + r1 > screen_height)
+    r1 = screen_height - y0;
+  if (r0 >= r1)
+    return;
+
+  u8 b = color.b, g = color.g, r = color.r;
+  for (int col = 0; col < AURORA_LOGO_WIDTH; col++) {
+    int px = x0 + col;
+    if (px < 0)
+      continue;
+    volatile u8 *p =
+        fb + ((px * screen_height) + (screen_height - 1 - (y0 + r0))) * 3;
+    int byte_col = col >> 3;
+    u8 mask = (u8)(0x80 >> (col & 7));
+    for (int row = r0; row < r1; row++) {
+      if (aurora_logo_bits[row * AURORA_LOGO_ROW_BYTES + byte_col] & mask) {
+        p[0] = b;
+        p[1] = g;
+        p[2] = r;
       }
+      p -= 3;
     }
   }
 }
@@ -160,19 +240,40 @@ void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h,
 
 void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height,
                   const unsigned char *icon_bits, Color color) {
-  for (int row = 0; row < ICON_SIZE; row++) {
-    for (int col = 0; col < ICON_SIZE; col++) {
-      int byte_idx = row * ICON_ROW_BYTES + (col / 8);
-      int bit_idx = 7 - (col % 8);
-      if (icon_bits[byte_idx] & (1 << bit_idx)) {
-        draw_pixel(fb, x + col, y + row, screen_height, color);
+  int r0 = 0, r1 = ICON_SIZE;
+  if (y < 0)
+    r0 = -y;
+  if (y + r1 > screen_height)
+    r1 = screen_height - y;
+  if (r0 >= r1)
+    return;
+
+  u8 b = color.b, g = color.g, r = color.r;
+  for (int col = 0; col < ICON_SIZE; col++) {
+    int px = x + col;
+    if (px < 0)
+      continue;
+    volatile u8 *p =
+        fb + ((px * screen_height) + (screen_height - 1 - (y + r0))) * 3;
+    int byte_col = col >> 3;
+    u8 mask = (u8)(0x80 >> (col & 7));
+    for (int row = r0; row < r1; row++) {
+      if (icon_bits[row * ICON_ROW_BYTES + byte_col] & mask) {
+        p[0] = b;
+        p[1] = g;
+        p[2] = r;
       }
+      p -= 3;
     }
   }
 }
 
 void draw_icon_scaled(volatile u8 *fb, int x, int y, int screen_height,
                       const unsigned char *icon_bits, Color color, int scale) {
+  if (scale <= 1) { /* the common case: no need for 1024 one-pixel rects */
+    draw_icon_32(fb, x, y, screen_height, icon_bits, color);
+    return;
+  }
   for (int row = 0; row < ICON_SIZE; row++) {
     for (int col = 0; col < ICON_SIZE; col++) {
       int byte_idx = row * ICON_ROW_BYTES + (col / 8);

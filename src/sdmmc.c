@@ -165,7 +165,7 @@ static void sdmmc_controller_init(void) {
     handleSD.clk = 0x20; /* ~523 KHz for identification */
     handleSD.devicenumber = 0;
 
-    /* Raw controller configuration -- magic values straight from GodMode9. */
+    /* Raw controller configuration: magic values straight from GodMode9. */
     *(vu16 *)0x10006100 &= 0xF7FFu;
     *(vu16 *)0x10006100 &= 0xEFFFu;
     *(vu16 *)0x10006100 |= 0x402u;
@@ -275,7 +275,7 @@ static int SD_Init(void) {
 }
 
 int sdmmc_sdcard_readsectors(u32 sector_no, u32 numsectors, u8 *out) {
-    /* from GodMode9 sdmmc.c -- byte-address non-SDHC cards, sector-address SDHC. */
+    /* from GodMode9 sdmmc.c: byte-address non-SDHC cards, sector-address SDHC. */
     if (handleSD.isSDHC == 0)
         sector_no <<= 9;
     set_target(&handleSD);
@@ -295,7 +295,7 @@ int sdmmc_sdcard_readsector(u32 sector_no, u8 *out) {
 
 int sdmmc_sdcard_writesectors(u32 sector_no, u32 numsectors, const u8 *in) {
     /* Mirror of readsectors using CMD25 WRITE_MULTIPLE_BLOCK. Non-SDHC cards
-       are byte-addressed, SDHC cards are sector-addressed. -- from GodMode9. */
+       are byte-addressed, SDHC cards are sector-addressed. From GodMode9. */
     if (handleSD.isSDHC == 0)
         sector_no <<= 9;
     set_target(&handleSD);
@@ -315,7 +315,7 @@ u32 sdmmc_sdcard_size(void) {
 
 int sdmmc_sdcard_init(void) {
     /* "SD mount fix": CFG register that routes the SD card to the ARM9
-       controller. -- from GodMode9 sdmmc_sdcard_init() */
+       controller. From GodMode9 sdmmc_sdcard_init() */
     *((vu16 *)0x10000020) = 0x340;
 
     sdmmc_controller_init();

@@ -4,7 +4,7 @@
 .global _start11
 
 @ Fixed ARM11 handoff mailbox in FCRAM. MUST match AOS_ARM11_MAILBOX in
-@ include/loader.h -- the ARM9 loader writes the ARM11 payload's entry point
+@ include/loader.h, the ARM9 loader writes the ARM11 payload's entry point
 @ here once it has copied the payload into RAM.
 .equ ARM11_MAILBOX, 0x27000000
 

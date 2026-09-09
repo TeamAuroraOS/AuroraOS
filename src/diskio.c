@@ -51,7 +51,7 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
     return RES_PARERR;
 
   switch (cmd) {
-    case CTRL_SYNC: /* nothing buffered -- always in sync */
+    case CTRL_SYNC: /* nothing buffered, always in sync */
       return RES_OK;
     case GET_SECTOR_SIZE:
       *(WORD *)buff = 512;
