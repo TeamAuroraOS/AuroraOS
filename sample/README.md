@@ -1,4 +1,4 @@
-# Rainbow — a sample Auric app
+# Rainbow: a sample Auric app
 
 A tiny [Auric](../auric-lang/README.md) app that fills the top screen with a
 ROYGBIV rainbow and returns to the AuroraOS home menu when you press **HOME**.
@@ -9,7 +9,7 @@ It demonstrates the three app features:
   binary and shown on the home screen.
 * **Drawing** with the `fill_rect` built-in (seven colour bands, using named
   colours and raw `0xRRGGBB` values).
-* **HOME to exit** — handled automatically by the runtime; the app just keeps a
+* **HOME to exit**, handled automatically by the runtime; the app just keeps a
   `delay()` in its idle loop so HOME stays responsive.
 
 ## Files
