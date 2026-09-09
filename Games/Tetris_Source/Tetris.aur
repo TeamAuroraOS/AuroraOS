@@ -1,0 +1,411 @@
+// Tetris for AuroraOS, written in Auric.
+//
+// Controls:  LEFT/RIGHT move, DOWN soft drop, UP hard drop,
+//            A rotate clockwise, B rotate counter-clockwise,
+//            START restart after a game over, HOME exit to the Home Menu.
+//
+// The playfield is 10x20 cells stored in one flat array, index = row*10 + col.
+// Each tetromino rotation is a 16-bit mask over a 4x4 box: bit (row*4 + col) is
+// set when that square is filled. That keeps all seven pieces and all four of
+// their rotations in a single 28-entry table.
+//
+// Timing is real: gravity and key auto-repeat are driven by millis(), an ARM9
+// hardware timer, not by counting frames. Frame rate therefore changes how
+// smooth the game looks but never how fast it plays.
+//
+// Rendering only repaints what moves. The title, labels and playfield border
+// are drawn once by draw_static(); each frame repaints the well and the side
+// numbers only when they change.
+
+let BOARD_W = 10;
+let BOARD_H = 20;
+let CELL = 10;
+let BX = 150;   // playfield origin on the 400x240 top screen
+let BY = 20;
+let WELL = 0x101018;
+
+let board: int[200];
+let shapes: int[28];
+
+let cur = 0;    // piece currently falling (0..6)
+let rot = 0;
+let px = 0;
+let py = 0;
+let nxt = 0;    // piece shown in the NEXT box
+
+let score = 0;
+let lines = 0;
+let level = 1;
+let dead = false;
+
+// Last values painted into the side panel, so it is only redrawn on a change.
+let shown_score = -1;
+let shown_lines = -1;
+let shown_level = -1;
+let shown_next = -1;
+let shown_fps = -1;
+let fps = 0;
+
+fn init_shapes() {
+    // I
+    shapes[0] = 0x00F0; shapes[1] = 0x4444;
+    shapes[2] = 0x00F0; shapes[3] = 0x4444;
+    // J
+    shapes[4] = 0x0071; shapes[5] = 0x0226;
+    shapes[6] = 0x0470; shapes[7] = 0x0322;
+    // L
+    shapes[8] = 0x0074; shapes[9] = 0x0622;
+    shapes[10] = 0x0170; shapes[11] = 0x0223;
+    // O
+    shapes[12] = 0x0066; shapes[13] = 0x0066;
+    shapes[14] = 0x0066; shapes[15] = 0x0066;
+    // S
+    shapes[16] = 0x0036; shapes[17] = 0x0462;
+    shapes[18] = 0x0036; shapes[19] = 0x0462;
+    // T
+    shapes[20] = 0x0072; shapes[21] = 0x0262;
+    shapes[22] = 0x0270; shapes[23] = 0x0232;
+    // Z
+    shapes[24] = 0x0063; shapes[25] = 0x0264;
+    shapes[26] = 0x0063; shapes[27] = 0x0264;
+}
+
+fn shape_of(p: int, r: int) -> int {
+    return shapes[p * 4 + r];
+}
+
+fn color_of(v: int) -> int {
+    if v == 1 { return CYAN; }
+    if v == 2 { return BLUE; }
+    if v == 3 { return ORANGE; }
+    if v == 4 { return YELLOW; }
+    if v == 5 { return GREEN; }
+    if v == 6 { return MAGENTA; }
+    if v == 7 { return RED; }
+    return DARK_GRAY;
+}
+
+// Would piece `p` at rotation `r` overlap a wall, the floor, or a settled
+// block if its 4x4 box were placed with its top-left at (x, y)? Cells above
+// the top of the playfield are allowed, so a piece can spawn part-way in.
+fn collides(p: int, r: int, x: int, y: int) -> bool {
+    let mask = shape_of(p, r);
+    let i = 0;
+    while i < 16 {
+        if ((mask >> i) & 1) == 1 {
+            let cx = x + (i % 4);
+            let cy = y + (i / 4);
+            if cx < 0 || cx >= BOARD_W || cy >= BOARD_H {
+                return true;
+            }
+            if cy >= 0 {
+                if board[cy * BOARD_W + cx] != 0 {
+                    return true;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn lock_piece() {
+    let mask = shape_of(cur, rot);
+    let i = 0;
+    while i < 16 {
+        if ((mask >> i) & 1) == 1 {
+            let cx = px + (i % 4);
+            let cy = py + (i / 4);
+            if cy >= 0 && cy < BOARD_H && cx >= 0 && cx < BOARD_W {
+                board[cy * BOARD_W + cx] = cur + 1;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+// Remove every full row, pulling the rows above down. Returns how many went.
+fn clear_lines() -> int {
+    let cleared = 0;
+    let row = BOARD_H - 1;
+    while row >= 0 {
+        let full = true;
+        let c = 0;
+        while c < BOARD_W {
+            if board[row * BOARD_W + c] == 0 {
+                full = false;
+            }
+            c = c + 1;
+        }
+        if full {
+            let r = row;
+            while r > 0 {
+                let c2 = 0;
+                while c2 < BOARD_W {
+                    board[r * BOARD_W + c2] = board[(r - 1) * BOARD_W + c2];
+                    c2 = c2 + 1;
+                }
+                r = r - 1;
+            }
+            let c3 = 0;
+            while c3 < BOARD_W {
+                board[c3] = 0;
+                c3 = c3 + 1;
+            }
+            cleared = cleared + 1;
+            // Do not step past this row: after the shift it holds new content.
+        } else {
+            row = row - 1;
+        }
+    }
+    return cleared;
+}
+
+fn spawn() {
+    cur = nxt;
+    nxt = rand(7);
+    rot = 0;
+    px = 3;
+    py = 0;
+    if collides(cur, rot, px, py) {
+        dead = true;
+    }
+}
+
+fn try_rotate(d: int) {
+    let r = (rot + d) % 4;
+    if !collides(cur, r, px, py) {
+        rot = r;
+    }
+}
+
+// One gravity step: fall if there is room, otherwise lock, score and respawn.
+fn step_down() {
+    if collides(cur, rot, px, py + 1) {
+        lock_piece();
+        let n = clear_lines();
+        if n > 0 {
+            lines = lines + n;
+            if n == 1 {
+                score = score + 40 * level;
+            } else if n == 2 {
+                score = score + 100 * level;
+            } else if n == 3 {
+                score = score + 300 * level;
+            } else {
+                score = score + 1200 * level;
+            }
+            level = 1 + lines / 10;
+        }
+        spawn();
+    } else {
+        py = py + 1;
+    }
+}
+
+// Milliseconds between gravity steps at the current level.
+fn drop_interval() -> int {
+    let ms = 850 - level * 65;
+    if ms < 90 {
+        ms = 90;
+    }
+    return ms;
+}
+
+fn draw_cell(cx: int, cy: int, v: int) {
+    fill_rect(BX + cx * CELL, BY + cy * CELL, CELL - 1, CELL - 1, color_of(v));
+}
+
+// Everything that never changes. Drawn once, then left alone: the backbuffer
+// keeps it, so per-frame work is only the well and the changed numbers.
+fn draw_static() {
+    clear(BLACK);
+
+    print("AURIC", 10, 18, AURORA);
+    print("TETRIS", 10, 30, AURORA);
+    print("SCORE", 10, 62, GRAY);
+    print("LINES", 10, 100, GRAY);
+    print("LEVEL", 10, 138, GRAY);
+    print("A/B ROTATE", 10, 186, DARK_GRAY);
+    print("UP  DROP", 10, 198, DARK_GRAY);
+    print("HOME  EXIT", 10, 210, DARK_GRAY);
+    print("NEXT", 286, 62, GRAY);
+
+    fill_rect(BX - 2, BY - 2, BOARD_W * CELL + 4, BOARD_H * CELL + 4, AURORA);
+
+    shown_score = -1;
+    shown_lines = -1;
+    shown_level = -1;
+    shown_next = -1;
+    shown_fps = -1;
+}
+
+fn draw_panels() {
+    if score != shown_score {
+        fill_rect(10, 74, 72, 8, BLACK);
+        print_int(score, 10, 74, WHITE);
+        shown_score = score;
+    }
+    if lines != shown_lines {
+        fill_rect(10, 112, 72, 8, BLACK);
+        print_int(lines, 10, 112, WHITE);
+        shown_lines = lines;
+    }
+    if level != shown_level {
+        fill_rect(10, 150, 72, 8, BLACK);
+        print_int(level, 10, 150, WHITE);
+        shown_level = level;
+    }
+    if nxt != shown_next {
+        fill_rect(286, 78, 42, 42, BLACK);
+        let m = shape_of(nxt, 0);
+        let k = 0;
+        while k < 16 {
+            if ((m >> k) & 1) == 1 {
+                fill_rect(286 + (k % 4) * CELL, 78 + (k / 4) * CELL,
+                          CELL - 1, CELL - 1, color_of(nxt + 1));
+            }
+            k = k + 1;
+        }
+        shown_next = nxt;
+    }
+    if fps != shown_fps {
+        fill_rect(10, 224, 72, 8, BLACK);
+        print("FPS", 10, 224, DARK_GRAY);
+        print_int(fps, 42, 224, DARK_GRAY);
+        shown_fps = fps;
+    }
+}
+
+fn draw_play() {
+    fill_rect(BX, BY, BOARD_W * CELL, BOARD_H * CELL, WELL);
+
+    let i = 0;
+    while i < BOARD_W * BOARD_H {
+        if board[i] != 0 {
+            draw_cell(i % BOARD_W, i / BOARD_W, board[i]);
+        }
+        i = i + 1;
+    }
+
+    if !dead {
+        let mask = shape_of(cur, rot);
+        let j = 0;
+        while j < 16 {
+            if ((mask >> j) & 1) == 1 {
+                let cy = py + (j / 4);
+                if cy >= 0 {
+                    draw_cell(px + (j % 4), cy, cur + 1);
+                }
+            }
+            j = j + 1;
+        }
+    } else {
+        // The inner panel is black because print() draws text on the colour
+        // last passed to clear(); anything else leaves boxes behind the glyphs.
+        fill_rect(118, 98, 164, 46, AURORA);
+        fill_rect(120, 100, 160, 42, BLACK);
+        print("GAME OVER", 150, 112, RED);
+        print("START = AGAIN", 134, 128, WHITE);
+    }
+}
+
+fn reset_game() {
+    let i = 0;
+    while i < BOARD_W * BOARD_H {
+        board[i] = 0;
+        i = i + 1;
+    }
+    score = 0;
+    lines = 0;
+    level = 1;
+    dead = false;
+    nxt = rand(7);
+    spawn();
+}
+
+fn main() {
+    init_shapes();
+    buffered(true);
+    reset_game();
+    draw_static();
+
+    let last_drop = millis();
+    let das_next = 0;   // next millisecond at which a held direction repeats
+    let frames = 0;
+    let fps_mark = millis();
+
+    while true {
+        let now = millis();
+        let k = keys_down();
+        let held = keys_held();
+
+        if dead {
+            if (k & KEY_START) != 0 {
+                reset_game();
+                draw_static();
+                last_drop = millis();
+            }
+        } else {
+            if (k & KEY_A) != 0 {
+                try_rotate(1);
+            }
+            if (k & KEY_B) != 0 {
+                try_rotate(3);
+            }
+
+            // Move on the press, then repeat while the direction stays held.
+            // Both delays are in real milliseconds, so they feel the same
+            // whatever the frame rate happens to be.
+            let dx = 0;
+            if (k & KEY_LEFT) != 0 {
+                dx = -1;
+                das_next = now + 170;
+            } else if (k & KEY_RIGHT) != 0 {
+                dx = 1;
+                das_next = now + 170;
+            } else if now >= das_next {
+                if (held & KEY_LEFT) != 0 {
+                    dx = -1;
+                    das_next = now + 55;
+                } else if (held & KEY_RIGHT) != 0 {
+                    dx = 1;
+                    das_next = now + 55;
+                }
+            }
+            if dx != 0 {
+                if !collides(cur, rot, px + dx, py) {
+                    px = px + dx;
+                }
+            }
+
+            if (k & KEY_UP) != 0 {
+                while !collides(cur, rot, px, py + 1) {
+                    py = py + 1;
+                    score = score + 2;
+                }
+                last_drop = now - 100000; // lock on this frame
+            }
+
+            let interval = drop_interval();
+            if (held & KEY_DOWN) != 0 {
+                interval = 40;
+            }
+            if now - last_drop >= interval {
+                last_drop = now;
+                step_down();
+            }
+        }
+
+        draw_play();
+        draw_panels();
+        present();
+
+        frames = frames + 1;
+        if now - fps_mark >= 1000 {
+            fps = frames;
+            frames = 0;
+            fps_mark = now;
+        }
+    }
+}
