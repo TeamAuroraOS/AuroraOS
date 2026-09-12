@@ -5,7 +5,7 @@ ROYGBIV rainbow and returns to the AuroraOS home menu when you press **HOME**.
 
 It demonstrates the three app features:
 
-* **A custom icon** (`rainbow.icon`, a 32×32 nested-arc rainbow) embedded in the
+* **A custom icon** (`rainbow.icon`, a 32x32 nested-arc rainbow) embedded in the
   binary and shown on the home screen.
 * **Drawing** with the `fill_rect` built-in (seven colour bands, using named
   colours and raw `0xRRGGBB` values).
@@ -17,7 +17,7 @@ It demonstrates the three app features:
 | File | What |
 |------|------|
 | `rainbow.aur`  | the program |
-| `rainbow.icon` | the 32×32 text icon (`#` = on) embedded via `--icon` |
+| `rainbow.icon` | the 32x32 text icon (`#` = on) embedded via `--icon` |
 | `RAINBOW.BIN`  | the built `AUR1` app container |
 
 ## Build
