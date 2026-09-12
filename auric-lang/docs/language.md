@@ -97,16 +97,16 @@ braces. Each `{ ... }` block is its own scope.
 
 ## Operators
 
-| Category   | Operators                          | Operand types        | Result  |
-|------------|------------------------------------|----------------------|---------|
-| Arithmetic | `+` `-` `*` `/` `%`                | int×int or float×float (`%` int only) | same |
-| Bitwise    | `&` `\|` `^` `<<` `>>`             | int×int              | `int`   |
-| Comparison | `<` `<=` `>` `>=`                  | int×int or float×float | `bool` |
-| Equality   | `==` `!=`                          | any matching type    | `bool`  |
-| Logical    | `&&` `\|\|` `!`                    | `bool`               | `bool`  |
-| Unary      | `-` (negate), `!` (not)            | number / bool        | same    |
+| Category   | Operators               | Operand types                             | Result |
+|------------|-------------------------|-------------------------------------------|--------|
+| Arithmetic | `+` `-` `*` `/` `%`     | int x int or float x float (`%` int only) | same   |
+| Bitwise    | `&` `\|` `^` `<<` `>>`   | int x int                                 | `int`  |
+| Comparison | `<` `<=` `>` `>=`       | int x int or float x float                | `bool` |
+| Equality   | `==` `!=`               | any matching type                         | `bool` |
+| Logical    | `&&` `\|\|` `!`           | `bool`                                    | `bool` |
+| Unary      | `-` (negate), `!` (not) | number / bool                             | same   |
 
-Precedence (low → high): `||`, `&&`, `|`, `^`, `&`, equality, comparison,
+Precedence (low -> high): `||`, `&&`, `|`, `^`, `&`, equality, comparison,
 shifts, `+ -`, `* / %`, unary, the same order as C, so `a & b == c` means
 `a & (b == c)`. Parenthesize bit tests: `(flags & MASK) != 0`.
 
@@ -114,7 +114,7 @@ shifts, `+ -`, `* / %`, unary, the same order as C, so `a & b == c` means
 
 These map one-to-one onto AuroraOS's API through the runtime shim
 ([`../runtime`](../runtime)). All drawing targets the **top screen**
-(400×240, origin top-left, 8×8 font).
+(400x240, origin top-left, 8x8 font).
 
 | Built-in                          | Does                                             | AuroraOS call     |
 |-----------------------------------|--------------------------------------------------|-------------------|
@@ -176,8 +176,8 @@ stays responsive. See `../../sample/rainbow.aur`.
 
 ### App icons
 
-Every compiled app embeds a 32×32 icon that the home menu shows. Supply your own
-with `aurc build … --icon my.icon` (a text bitmap: 32 lines, `#` = on); without
+Every compiled app embeds a 32x32 icon that the home menu shows. Supply your own
+with `aurc build ... --icon my.icon` (a text bitmap: 32 lines, `#` = on); without
 `--icon`, a default icon is used.
 
 ## Predefined constants
@@ -207,7 +207,7 @@ You cannot declare a variable or function that reuses a predefined name.
 
 ## What Auric still leaves out
 
-Structs, pointers, `for` loops, string operations, float↔int conversion,
+Structs, pointers, `for` loops, string operations, float<->int conversion,
 multi-dimensional arrays, and passing arrays to functions. The scope stays
 deliberately small; these are candidates for later versions.
 

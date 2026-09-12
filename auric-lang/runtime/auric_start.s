@@ -34,7 +34,7 @@ _start:
  * drain the write buffer. Same shape as AuroraOS's src/os/os_launch.s
  * (ARM946E-S: 4 KB / 4 ways / 32 B lines).
  *
- * The GPU driver (src/os/gpu9.c) is linked into Auric apps so that present()
+ * The GPU driver (src/os/Gpu9.c) is linked into Auric apps so that present()
  * is a GPU blit rather than a CPU copy, and it calls this before handing a
  * buffer to the ARM11, the GPU reads physical memory, so pending writes must
  * be out of the cache first. */

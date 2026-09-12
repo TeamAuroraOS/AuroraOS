@@ -21,22 +21,22 @@ fn main() {
 
 ```
  hello.aur
-   │  lexer → parser → type checker → C code generator   (pure Python, compiler/)
-   ▼
+   |  lexer -> parser -> type checker -> C code generator   (pure Python, compiler/)
+   v
  hello.c                       generated freestanding C
-   │  arm-none-eabi-gcc        AuroraOS's exact ARM9 flags (from ../Makefile)
-   │  + runtime/auric_runtime.c + ../src/screen.c + runtime/auric_start.s
-   ▼
- hello.elf  →  objcopy -O binary  →  hello.payload.bin
-   │  tools/aur_pack.py
-   ▼
+   |  arm-none-eabi-gcc        AuroraOS's exact ARM9 flags (from ../Makefile)
+   |  + runtime/auric_runtime.c + ../src/screen.c + runtime/auric_start.s
+   v
+ hello.elf  ->  objcopy -O binary  ->  hello.payload.bin
+   |  tools/aur_pack.py
+   v
  hello.bin                     AUR1 container (36-byte header + ARM9 payload)
 ```
 
 The generated program is linked at `0x22000000` and run in place, exactly like
 AuroraOS's own payload (`src/os/os.ld`). The runtime shim maps the Auric
 built-ins onto AuroraOS's own API, reusing the real `src/screen.c` for drawing,
-`src/i2c.c` for the HOME button, and `src/os/gpu9.c` so that a buffered app
+`src/i2c.c` for the HOME button, and `src/os/Gpu9.c` so that a buffered app
 presents each frame with a GPU blit instead of a full-screen CPU copy.
 
 ## Prerequisites
@@ -143,7 +143,7 @@ can do this for you).
 ```
 auric-lang/
   compiler/    lexer, parser, AST, type checker, C codegen, and the aurc driver
-  runtime/     C shim (built-ins → AuroraOS API), crt0 (auric_start.s), linker script
+  runtime/     C shim (built-ins -> AuroraOS API), crt0 (auric_start.s), linker script
   tools/       aur_pack.py | AUR1 container packer/inspector (forked from aos_pack.py)
   examples/    hello.aur, demo.aur
   docs/        language.md | the full v0.2 language reference

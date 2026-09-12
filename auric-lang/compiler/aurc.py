@@ -56,7 +56,7 @@ AURORA_I2C = AURORA_SRC / "i2c.c"
 # The ARM9 side of the GPU driver, so buffered apps present with a GPU blit
 # instead of a full-screen CPU copy. The ARM11 core stays resident while an app
 # runs, so it is there to service the request.
-AURORA_GPU9 = AURORA_SRC / "os" / "gpu9.c"
+AURORA_GPU9 = AURORA_SRC / "os" / "Gpu9.c"
 
 RUNTIME_C = RUNTIME_DIR / "auric_runtime.c"
 RUNTIME_START = RUNTIME_DIR / "auric_start.s"
