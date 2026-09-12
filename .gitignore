@@ -4,7 +4,7 @@ output/
 mockup/
 
 # Dumped copyright material (NWM Wi-Fi sysmodule + extracted Atheros firmware).
-# Must NOT be committed -- users dump these from their own console.
+# Must NOT be committed; users dump these from their own console.
 exclude/
 *.bin
 *.elf
@@ -13,6 +13,13 @@ exclude/
 *.a
 *.map
 *.lst
+
+# Exception: the built apps under Games/ are shipped with the repository, so
+# they are re-included after the blanket *.bin rule above. Both spellings are
+# listed because pattern matching is case-sensitive where core.ignoreCase is
+# not set (Linux, macOS).
+!Games/**/*.bin
+!Games/**/*.BIN
 
 # Python tool caches (tools/, audio/, images/ scripts)
 __pycache__/
