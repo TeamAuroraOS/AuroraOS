@@ -5,6 +5,7 @@
  * crash reason + CPU register dump on the bottom. Replaces the default hang /
  * upstream crash handler. See include/crash.h and src/os/crash.s.
  */
+#include "audio.h"
 #include "crash.h"
 #include "crash_shared.h"
 #include "font.h"
@@ -190,6 +191,12 @@ void crash_handle(CrashDump *d) {
                    :
                    :
                    : "r0", "memory");
+
+  /* Sound the fault before anything is drawn, so it is heard even if the screen
+   * work goes wrong. When the ARM11 is what died this posts into a core that
+   * will never answer, which is harmless: that core's own fault stub has
+   * already started the same tone. */
+  audio_error_beep();
 
   /* Draw straight to the panels from here on. The fault may well be the ARM11
    * core or the GPU, so the crash screen must not depend on a backbuffer that

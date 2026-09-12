@@ -1,18 +1,14 @@
 /*
- * Audio, ARM11 side: the analog output path and the CSND mixer.
+ * Audio, ARM11 side: the analog output path and the CSND mixer. The codec bus
+ * itself is Codec11.c, shared with the touchscreen. See docs/audio.md.
  *
- * The output bring-up (I2S controller + CTR audio codec) is ported from
- * profi200's libn3ds (source/arm11/drivers/{codec,i2s}.c). The CSND channel
- * register layout was settled by measurement on hardware; see docs/audio.md,
- * because the layout libctru implies is the CSND service's argument format
- * rather than the registers. The bus itself belongs to Codec11.c, which the
- * touchscreen shares. The ARM9 side is Audio9.c.
+ * The output bring-up is ported from profi200's libn3ds
+ * (source/arm11/drivers/{codec,i2s}.c).
  *
- * Untested-on-hardware caveats: the codec calibration values (driver gains /
- * analog volumes) normally come from the console's HWCAL block, which isn't
- * read here, neutral defaults are used instead. Headphone-jack detection is
- * skipped (output forced to the speaker path). EQ-filter upload is skipped
- * (codec defaults). Per-unit "depop" GPIO pulsing is skipped.
+ * Not done here, and untested as a result: calibration values normally come
+ * from the console's HWCAL block, so neutral defaults are used; headphone-jack
+ * detection is skipped and output forced to the speaker; no EQ upload; no
+ * per-unit depop pulsing.
  */
 #include "core11.h"
 
@@ -133,15 +129,10 @@ static void codec_init(void) {
 #define CSND_CH_SIZE(n) (CSND_CH(n) + 0x10) /* u32: total size in BYTES          */
 #define CSND_CH_LOOP(n) (CSND_CH(n) + 0x14) /* u32: loop restart phys addr       */
 
-/* Channel control is a 16-BIT register and the period reload is a separate,
- * WRITE-ONLY register beside it that reads back as zero. libctru packs the
- * divider as `timer << 16` alongside these flags, but that word is the argument
- * to the CSND system module, which splits it before touching hardware; written
- * straight to the register the divider lands in a discarded upper half. The
- * reload also counts up to overflow, so it takes the two's complement of the
- * wanted period. Both halves of that were found by measurement, not reasoning:
- * +0x08 accepts a divider and reads it back perfectly while the channel ignores
- * it. See docs/audio.md. */
+/* Control is 16-bit, and the reload beside it is write-only and holds the
+ * two's complement of the period. libctru's `timer << 16` packing is its
+ * service's argument format, not a register image, so writing it here loses
+ * the divider in a discarded upper half. docs/audio.md has the full story. */
 #define CH_LINEAR_INTERP  (1u << 6)  /* resample smoothly instead of nearest  */
 #define CH_REPEAT_LOOP    (1u << 10) /* loop mode 1 = loop infinite           */
 #define CH_REPEAT_ONESHOT (2u << 10) /* loop mode 2 = one-shot                */
@@ -211,7 +202,34 @@ static uint32_t gen_tone(uint32_t freq, uint32_t rate) {
 }
 
 
+/* Render the crash beep: three tones separated by silence, as one buffer that
+ * can be played with a single channel start. Done at boot so the fault path
+ * never has to build it. */
+static void audio11_error_prepare(void) {
+  int16_t *buf = (int16_t *)AUDIO_ERR_ADDR;
+  const int16_t amp = 0x3000;
+  uint32_t step = (AUDIO_ERR_FREQ << 16) / AUDIO_ERR_RATE;
+  uint32_t phase = 0;
+  uint32_t i = 0;
+
+  for (int beep = 0; beep < 3; beep++) {
+    for (uint32_t n = 0; n < AUDIO_ERR_BEEP; n++) {
+      buf[i++] = (phase & 0x8000) ? amp : (int16_t)-amp;
+      phase = (phase + step) & 0xFFFF;
+    }
+    if (beep < 2)
+      for (uint32_t n = 0; n < AUDIO_ERR_GAP; n++)
+        buf[i++] = 0;
+  }
+  dcache_clean(); /* CSND reads physical memory, so this must not sit in cache */
+}
+
+void audio11_error_play(void) {
+  csnd_play(AUDIO_ERR_ADDR, AUDIO_ERR_BYTES, AUDIO_ERR_RATE, CH_FORMAT_PCM16, 0);
+}
+
 void audio11_init(AudioCtrl *ct) {
+  audio11_error_prepare();
   codec_init();
   /* Diagnostics: read back codec ID/rev registers and one written register.
    * All-0x00 or all-0xFF here means the codec SPI link is not working. */
@@ -243,6 +261,9 @@ int audio11_command(AudioCtrl *ct, uint32_t cmd, uint32_t arg0) {
     uint32_t bytes = ct->arg1 * ((ct->arg3 == 8) ? 1u : 2u);
     csnd_play(AUDIO_PCM_ADDR, bytes, ct->arg2 ? ct->arg2 : 8000u, fmt, 0);
     ct->diag3 = MMIO32(CSND_CH_CNT(0));
+    ct->status = AUDIO_ST_PLAY;
+  } else if (cmd == AUDIO_CMD_ERROR) {
+    audio11_error_play();
     ct->status = AUDIO_ST_PLAY;
   } else if (cmd == AUDIO_CMD_STOP) {
     csnd_stop();

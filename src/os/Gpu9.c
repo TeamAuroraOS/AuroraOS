@@ -1,20 +1,23 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * AuroraOS PICA200 GPU driver: ARM9 side.
+ * PICA200 GPU, ARM9 side. The registers are ARM11 I/O, so every operation is
+ * posted to Gpu11.c and answered in GpuShared. Each call blocks, bounded,
+ * until the ARM11 bumps the sequence counter.
  *
- * The GPU registers are ARM11 I/O, so every operation is posted to the ARM11
- * core (src/os/gpu11.c) through the audio command block and answered in the
- * shared block at GPU_SHARED_ADDR. Each call here blocks (bounded) until the
- * ARM11 bumps the sequence counter, so callers get a synchronous API.
- *
- * LICENSE: GPL-2.0 (not GPL-3.0 like the rest of AuroraOS); derived from the
- * Linux Nintendo 3DS PICA200 driver. See docs/gpu.md "License and credits".
+ * LICENSE: GPL-2.0, not GPL-3.0 like the rest of AuroraOS. See docs/gpu.md.
  */
 #include "aurora.h"
 #include "audio.h"
 #include "gpu.h"
 
 extern void os_cache_sync(void);
+
+/* Invalidate one cache line so a poll sees the ARM11's latest write. A full
+ * clean+invalidate would work but costs the whole 4 KB cache, and this runs in
+ * the completion spin. */
+static inline void inval_line(const volatile void *p) {
+  __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(p) : "memory");
+}
 
 static AudioCtrl *const ctrl = (AudioCtrl *)AUDIO_CTRL_ADDR;
 static GpuShared *const gs = (GpuShared *)GPU_SHARED_ADDR;
@@ -42,11 +45,12 @@ static int gpu_run(void) {
   ctrl->cmd_seq = ctrl->cmd_seq + 1;
   os_cache_sync(); /* publish the command + parameters to the ARM11 */
 
-  /* The engines finish in well under a millisecond; this bound only exists so a
-   * wedged GPU or a dead ARM11 core cannot hang the OS. */
-  for (int t = 0; t < 400; t++) {
-    delay(20000);
-    os_cache_sync();
+  /* Spin on the sequence counter rather than sleeping between checks. The
+   * engines finish in tens of microseconds, so a delay here set the floor on
+   * what a GPU operation costs and made small ones pointless to offload. The
+   * bound only exists so a wedged GPU or a dead ARM11 core cannot hang the OS. */
+  for (u32 spin = 0; spin < 4000000u; spin++) {
+    inval_line(&gs->seq);
     if (gs->seq != last)
       return gs->err == GPU_ERR_NONE;
   }

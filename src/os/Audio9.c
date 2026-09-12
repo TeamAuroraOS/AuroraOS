@@ -1,9 +1,9 @@
 /*
- * Audio, ARM9 side.
+ * Audio, ARM9 side: posts commands to the ARM11 core.
  *
- * audio_boot() brings up the whole ARM11 core, not just audio: that binary
- * carries the touchscreen, Wi-Fi and GPU modules too. It lives here because
- * the embedded core blob is generated alongside this file.
+ * audio_boot() brings up that whole core, not just audio, since the same
+ * binary carries the touchscreen, Wi-Fi and GPU modules. It lives here because
+ * the embedded blob is generated alongside this file.
  *
  * Starts the ARM11 audio core and posts commands to it through the shared block
  * at AUDIO_CTRL_ADDR. The ARM11 core binary is embedded here as a byte blob
@@ -93,6 +93,8 @@ static void post(uint32_t cmd, uint32_t arg0) {
 void audio_play_tone(uint32_t freq_hz) { post(AUDIO_CMD_TONE, freq_hz); }
 
 void audio_stop(void) { post(AUDIO_CMD_STOP, 0); }
+
+void audio_error_beep(void) { post(AUDIO_CMD_ERROR, 0); }
 
 void audio_play_pcm(uint32_t samples, uint32_t rate, uint32_t depth) {
   os_cache_sync(); /* flush the caller's PCM writes at AUDIO_PCM_ADDR to RAM */

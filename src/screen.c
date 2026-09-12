@@ -200,14 +200,56 @@ void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h,
   }
 }
 
+/* --- anti-aliasing helpers ------------------------------------------------
+ * Edges are drawn by coverage rather than a hard in/out test: a pixel the shape
+ * only partly covers is blended into what is already there. Everything is
+ * integer; alpha runs 0..256 so the blend is a shift rather than a divide. */
+
+/* Integer square root, used to turn a squared distance into a distance. */
+static u32 isqrt32(u32 n) {
+  u32 rem = 0, root = 0;
+  for (int i = 0; i < 16; i++) {
+    root <<= 1;
+    rem = (rem << 2) | (n >> 30);
+    n <<= 2;
+    if (root < rem) {
+      rem -= root + 1;
+      root += 2;
+    }
+  }
+  return root >> 1;
+}
+
+void draw_pixel_alpha(volatile u8 *fb, int x, int y, int screen_height,
+                      Color color, int alpha) {
+  if (alpha <= 0 || x < 0 || y < 0 || y >= screen_height)
+    return;
+  if (alpha >= 256) {
+    draw_pixel(fb, x, y, screen_height, color);
+    return;
+  }
+  u32 o = ((x * screen_height) + (screen_height - 1 - y)) * BYTES_PER_PIXEL;
+  int inv = 256 - alpha;
+  fb[o + 0] = (u8)((color.b * alpha + fb[o + 0] * inv) >> 8);
+  fb[o + 1] = (u8)((color.g * alpha + fb[o + 1] * inv) >> 8);
+  fb[o + 2] = (u8)((color.r * alpha + fb[o + 2] * inv) >> 8);
+}
+
+/* One rounded corner: the r-by-r box at (bx,by) against the arc centred on
+ * (cx,cy). Coverage falls off across the single pixel straddling the radius,
+ * which is what removes the stair-stepping. */
 static void fill_corner(volatile u8 *fb, int bx, int by, int r, int cx0,
                         int cy0, int screen_height, Color color) {
-  int r2 = r * r;
   for (int cy = by; cy < by + r; cy++) {
     for (int cx = bx; cx < bx + r; cx++) {
       int ex = cx - cx0, ey = cy - cy0;
-      if (ex * ex + ey * ey <= r2)
-        draw_pixel(fb, cx, cy, screen_height, color);
+      u32 d = isqrt32(((u32)(ex * ex + ey * ey)) << 16); /* 8.8 fixed point */
+      int a = (int)(((u32)r << 8) + 128u - d);
+      if (a <= 0)
+        continue;
+      if (a > 256)
+        a = 256;
+      draw_pixel_alpha(fb, cx, cy, screen_height, color, a);
     }
   }
 }
@@ -235,6 +277,88 @@ void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h,
                 screen_height, color);
     fill_corner(fb, x + w - radius, y + h - radius, radius, x + w - 1 - radius,
                 y + h - 1 - radius, screen_height, color);
+  }
+}
+
+/* Vertical gradient. The framebuffer runs down a column, so the ramp is walked
+ * along the fast axis and each shade computed once rather than per pixel. */
+void draw_vgradient(volatile u8 *fb, int x, int y, int w, int h,
+                    int screen_height, Color top, Color bottom) {
+  Color ramp[BOT_SCREEN_HEIGHT > TOP_SCREEN_HEIGHT ? BOT_SCREEN_HEIGHT
+                                                   : TOP_SCREEN_HEIGHT];
+  int r0 = 0, r1 = h;
+
+  if (y < 0)
+    r0 = -y;
+  if (y + r1 > screen_height)
+    r1 = screen_height - y;
+  if (r0 >= r1 || w <= 0)
+    return;
+  if (r1 > (int)(sizeof(ramp) / sizeof(ramp[0])))
+    r1 = (int)(sizeof(ramp) / sizeof(ramp[0]));
+
+  for (int row = r0; row < r1; row++) {
+    int tt = (h > 1) ? (row * 255) / (h - 1) : 0;
+    ramp[row].r = (u8)((top.r * (255 - tt) + bottom.r * tt) / 255);
+    ramp[row].g = (u8)((top.g * (255 - tt) + bottom.g * tt) / 255);
+    ramp[row].b = (u8)((top.b * (255 - tt) + bottom.b * tt) / 255);
+  }
+
+  for (int px = x; px < x + w; px++) {
+    if (px < 0)
+      continue;
+    volatile u8 *p =
+        fb + ((px * screen_height) + (screen_height - 1 - (y + r0))) * 3;
+    for (int row = r0; row < r1; row++) {
+      p[0] = ramp[row].b;
+      p[1] = ramp[row].g;
+      p[2] = ramp[row].r;
+      p -= 3;
+    }
+  }
+}
+
+/* A rounded rect filled with a vertical gradient, corners anti-aliased. The
+ * body is drawn as a gradient and the corners blended on top of whatever the
+ * gradient left, so the rounding stays smooth over the shading. */
+void draw_gradient_round_rect(volatile u8 *fb, int x, int y, int w, int h,
+                              int radius, int screen_height, Color top,
+                              Color bottom) {
+  if (radius < 0)
+    radius = 0;
+  if (radius > w / 2)
+    radius = w / 2;
+  if (radius > h / 2)
+    radius = h / 2;
+
+  draw_vgradient(fb, x + radius, y, w - 2 * radius, h, screen_height, top,
+                 bottom);
+  draw_vgradient(fb, x, y + radius, radius, h - 2 * radius, screen_height, top,
+                 bottom);
+  draw_vgradient(fb, x + w - radius, y + radius, radius, h - 2 * radius,
+                 screen_height, top, bottom);
+
+  if (radius > 0) {
+    /* Corner shade: sample the ramp at the corner's own height so the arc
+     * matches the body it joins. */
+    Color ctop = top, cbot = bottom;
+    if (h > 1) {
+      int t1 = ((radius - 1) * 255) / (h - 1);
+      int t2 = ((h - radius) * 255) / (h - 1);
+      ctop.r = (u8)((top.r * (255 - t1) + bottom.r * t1) / 255);
+      ctop.g = (u8)((top.g * (255 - t1) + bottom.g * t1) / 255);
+      ctop.b = (u8)((top.b * (255 - t1) + bottom.b * t1) / 255);
+      cbot.r = (u8)((top.r * (255 - t2) + bottom.r * t2) / 255);
+      cbot.g = (u8)((top.g * (255 - t2) + bottom.g * t2) / 255);
+      cbot.b = (u8)((top.b * (255 - t2) + bottom.b * t2) / 255);
+    }
+    fill_corner(fb, x, y, radius, x + radius, y + radius, screen_height, ctop);
+    fill_corner(fb, x + w - radius, y, radius, x + w - 1 - radius, y + radius,
+                screen_height, ctop);
+    fill_corner(fb, x, y + h - radius, radius, x + radius, y + h - 1 - radius,
+                screen_height, cbot);
+    fill_corner(fb, x + w - radius, y + h - radius, radius, x + w - 1 - radius,
+                y + h - 1 - radius, screen_height, cbot);
   }
 }
 
@@ -268,20 +392,82 @@ void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height,
   }
 }
 
+/* Upscaled 1bpp art, smoothed by bilinear filtering.
+ *
+ * Supersampling does nothing here: at an integer scale every subsample of a
+ * destination pixel falls inside the same source pixel, so coverage only ever
+ * comes out 0 or full. Interpolating between the four neighbouring source
+ * pixels is what actually softens the edge, and it is cheaper too. */
+
+/* One source pixel as 0 or 256; anything off the edge reads as empty. */
+static int bitmap_texel(const unsigned char *bits, int row_bytes, int size,
+                        int col, int row) {
+  if (col < 0 || row < 0 || col >= size || row >= size)
+    return 0;
+  return (bits[row * row_bytes + (col >> 3)] & (0x80 >> (col & 7))) ? 256 : 0;
+}
+
+static void draw_bitmap_smooth(volatile u8 *fb, int x, int y, int screen_height,
+                               const unsigned char *bits, int size,
+                               int row_bytes, Color color, int scale) {
+  int dim = size * scale;
+
+  for (int dy = 0; dy < dim; dy++) {
+    int py = y + dy;
+    /* Source coordinate of this pixel's centre, 8.8 fixed point. */
+    int fy = ((dy * 2 + 1) * 128) / scale - 128;
+    int sy0 = fy >> 8, ty = fy & 255;
+    if (py < 0 || py >= screen_height)
+      continue;
+    for (int dx = 0; dx < dim; dx++) {
+      int px = x + dx;
+      int fx, sx0, tx, top, bot, a;
+      if (px < 0)
+        continue;
+      fx = ((dx * 2 + 1) * 128) / scale - 128;
+      sx0 = fx >> 8;
+      tx = fx & 255;
+      top = (bitmap_texel(bits, row_bytes, size, sx0, sy0) * (256 - tx) +
+             bitmap_texel(bits, row_bytes, size, sx0 + 1, sy0) * tx) >> 8;
+      bot = (bitmap_texel(bits, row_bytes, size, sx0, sy0 + 1) * (256 - tx) +
+             bitmap_texel(bits, row_bytes, size, sx0 + 1, sy0 + 1) * tx) >> 8;
+      a = (top * (256 - ty) + bot * ty) >> 8;
+      if (a > 0)
+        draw_pixel_alpha(fb, px, py, screen_height, color, a);
+    }
+  }
+}
+
 void draw_icon_scaled(volatile u8 *fb, int x, int y, int screen_height,
                       const unsigned char *icon_bits, Color color, int scale) {
-  if (scale <= 1) { /* the common case: no need for 1024 one-pixel rects */
+  if (scale <= 1) { /* 1:1 has nothing to smooth, and stays crisp */
     draw_icon_32(fb, x, y, screen_height, icon_bits, color);
     return;
   }
-  for (int row = 0; row < ICON_SIZE; row++) {
-    for (int col = 0; col < ICON_SIZE; col++) {
-      int byte_idx = row * ICON_ROW_BYTES + (col / 8);
-      if (icon_bits[byte_idx] & (0x80 >> (col % 8))) {
-        draw_filled_rect(fb, x + col * scale, y + row * scale, scale, scale,
-                         screen_height, color);
-      }
+  draw_bitmap_smooth(fb, x, y, screen_height, icon_bits, ICON_SIZE,
+                     ICON_ROW_BYTES, color, scale);
+}
+
+/* Text at a larger size, smoothed the same way. The 8x8 font blown up with
+ * whole pixels looks like a staircase; blending the edges reads as a heavier
+ * weight instead. Body text stays at 1:1, where it is already crisp. */
+void draw_string_scaled(volatile u8 *fb, int x, int y, int screen_height,
+                        const char *str, Color color, int scale) {
+  int cx = x;
+  if (scale <= 1) {
+    return; /* callers wanting 1:1 use draw_string, which sets a background */
+  }
+  while (*str) {
+    if (*str == '\n') {
+      cx = x;
+      y += FONT_HEIGHT * scale;
+    } else {
+      if (*str >= 0x20 && *str <= 0x7E)
+        draw_bitmap_smooth(fb, cx, y, screen_height, font_data[*str - 0x20],
+                           FONT_HEIGHT, 1, color, scale);
+      cx += FONT_WIDTH * scale;
     }
+    str++;
   }
 }
 

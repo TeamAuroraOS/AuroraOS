@@ -1,26 +1,15 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * AuroraOS PICA200 GPU driver: ARM11 side.
+ * PICA200 GPU, ARM11 side. Core11.c dispatches here on AUDIO_CMD_GPU.
+ * See docs/gpu.md.
  *
- * Runs inside the ARM11 audio core (see audio11.c), which dispatches here when
- * the ARM9 posts AUDIO_CMD_GPU. Implements the two PICA200 memory engines:
+ * PSC fills memory and PPF copies it. Both are plain DMA engines, so unlike
+ * P3D they need no command list or shader state, only a clock enable. Every
+ * wait is bounded: a wedged engine must stall one operation rather than the
+ * core, which still has a touchscreen to poll.
  *
- *   PSC: memory fill. Two independent fill units; only PSC0 is used here.
- *   PPF: "display transfer": copies a rectangle between two buffers with
- *          optional pixel-format conversion and vertical flip.
- *
- * Both are plain DMA engines: unlike the P3D pipeline they need no command list,
- * shaders or vertex state, so they work straight after a clock enable. Every
- * wait is bounded so a wedged engine stalls one operation instead of hanging the
- * core (the ARM11 must keep servicing the touchscreen).
- *
- * The GPU block is already powered on entry: the firm leaves the LCD controller
- * (0x10400400/0x10400500, the same register block) driving the framebuffers, so
- * only the engine clocks need enabling.
- *
- * LICENSE: GPL-2.0 (not GPL-3.0 like the rest of AuroraOS). The register map and
- * the init / fill / transfer sequences derive from the Linux Nintendo 3DS
- * PICA200 driver (ctr_pica.c, GPL-2.0). See docs/gpu.md "License and credits".
+ * LICENSE: GPL-2.0, not GPL-3.0 like the rest of AuroraOS. Derived from the
+ * Linux Nintendo 3DS PICA200 driver (ctr_pica.c). See docs/gpu.md.
  */
 #include "gpu.h"
 

@@ -103,6 +103,25 @@ crash_post11:                     @ r1 = CS_BASE
     mov   r0, #0
     mcr   p15, 0, r0, c7, c10, 0
     mcr   p15, 0, r0, c7, c10, 4
+    @ Sound the fault. The beep was rendered into AUDIO_ERR_ADDR at boot, so
+    @ starting it is only register stores: no stack and no call, neither of
+    @ which is safe here. CSND is a DMA engine, so the tone finishes playing
+    @ after this core stops. These values mirror the AUDIO_ERR_* defines in
+    @ include/audio.h and the channel layout in Audio11.c.
+    ldr   r1, =0x10103400         @ CSND channel 0
+    mov   r0, #0
+    strh  r0, [r1, #0x00]         @ stop the channel before reprogramming it
+    ldr   r0, =0x80008000
+    str   r0, [r1, #0x04]         @ volume: full left + right
+    ldr   r0, =0x233D0000         @ AUDIO_ERR_ADDR
+    str   r0, [r1, #0x0C]         @ sample source
+    ldr   r0, =5200               @ AUDIO_ERR_BYTES (2600 samples, 16-bit)
+    str   r0, [r1, #0x10]         @ length in bytes
+    ldr   r0, =0xDF46             @ period reload for 8 kHz, two's complement
+    strh  r0, [r1, #0x02]
+    ldr   r0, =0xD840             @ start | enable | interp | PCM16 | one-shot
+    strh  r0, [r1, #0x00]
+
 .type crash_hang11, %function
 crash_hang11:
     wfi

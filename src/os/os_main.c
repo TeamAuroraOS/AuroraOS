@@ -1,4 +1,5 @@
 #include "aurora.h"
+#include "timer.h"
 #include "audio.h"
 #include "container.h"
 #include "crash.h"
@@ -27,62 +28,6 @@ u32 get_keys_down(void) {
   u32 down = cur & ~prev_keys;
   prev_keys = cur;
   return down;
-}
-
-/* Touchscreen raw-ADC -> screen-pixel calibration. Defaults are a first guess;
- * the Touch Test shows raw values so these can be tuned (flip min/max to invert
- * an axis). Raw ADC is 12-bit. */
-#define TS_X_MIN 0x0D0
-#define TS_X_MAX 0xF00
-#define TS_Y_MIN 0x0F0
-#define TS_Y_MAX 0xF00
-
-int touch_read(int *sx, int *sy, int *rawx, int *rawy) {
-  volatile TouchShared *ts = (volatile TouchShared *)TOUCH_SHARED_ADDR;
-  __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(TOUCH_SHARED_ADDR)
-                   : "memory");
-  if (!ts->pressed)
-    return 0;
-
-  int rx = (int)ts->raw_x, ry = (int)ts->raw_y;
-  if (rawx)
-    *rawx = rx;
-  if (rawy)
-    *rawy = ry;
-
-  int x = (rx - (TS_X_MIN)) * 320 / ((TS_X_MAX) - (TS_X_MIN));
-  int y = (ry - (TS_Y_MIN)) * 240 / ((TS_Y_MAX) - (TS_Y_MIN));
-  if (x < 0)
-    x = 0;
-  if (x > 319)
-    x = 319;
-  if (y < 0)
-    y = 0;
-  if (y > 239)
-    y = 239;
-  if (sx)
-    *sx = x;
-  if (sy)
-    *sy = y;
-  return 1;
-}
-
-/* Press-edge tap: fires once when a new touch begins. The shared prev-state
- * makes a tap that opens a new screen not immediately re-fire there (the finger
- * must lift and press again), matching the A-button edge behaviour. */
-static int touch_prev = 0;
-int touch_tap(int *x, int *y) {
-  int sx = 0, sy = 0;
-  int pressed = touch_read(&sx, &sy, NULL, NULL);
-  int tapped = pressed && !touch_prev;
-  touch_prev = pressed;
-  if (tapped) {
-    if (x)
-      *x = sx;
-    if (y)
-      *y = sy;
-  }
-  return tapped;
 }
 
 static u32 str_len(const char *s) {
@@ -231,7 +176,8 @@ static void hm_status_bar(void) {
 }
 
 static void hm_top_static(void) {
-  clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_HM_BG);
+  draw_vgradient(VRAM_TOP_LA, 0, 0, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT,
+                 TOP_SCREEN_HEIGHT, COLOR_HM_BG_TOP, COLOR_HM_BG_BOT);
 
   for (int o = -TOP_SCREEN_HEIGHT; o < TOP_SCREEN_WIDTH; o += 46) {
     for (int t = 0; t < TOP_SCREEN_HEIGHT; t++) {
@@ -252,23 +198,31 @@ static void hm_top_item(int selected) {
   const HomeApp *app = &home_apps[selected];
 
   int box = 96, bx = (TOP_SCREEN_WIDTH - box) / 2, by = 34;
-  draw_filled_round_rect(VRAM_TOP_LA, bx, by, box, box, 16, TOP_SCREEN_HEIGHT,
-                         app->name ? app->tint : COLOR_HM_SLOT_EMPTY);
-  if (app->icon)
-    draw_icon_32(VRAM_TOP_LA, bx + (box - ICON_SIZE) / 2,
-                 by + (box - ICON_SIZE) / 2, TOP_SCREEN_HEIGHT, app->icon,
-                 COLOR_WHITE);
+  /* Shade the tile from its tint down to a darker mix of itself, so the
+   * featured app reads as lit from above rather than as a flat swatch. */
+  Color tint = app->name ? app->tint : COLOR_HM_EMPTY_TOP;
+  Color tint_dark;
+  tint_dark.r = (u8)((tint.r * 5) / 9);
+  tint_dark.g = (u8)((tint.g * 5) / 9);
+  tint_dark.b = (u8)((tint.b * 5) / 9);
+  draw_gradient_round_rect(VRAM_TOP_LA, bx, by, box, box, 16,
+                           TOP_SCREEN_HEIGHT, tint, tint_dark);
+  if (app->icon) {
+    int isz = ICON_SIZE * 2; /* 64px, smoothed, instead of a 32px block */
+    draw_icon_scaled(VRAM_TOP_LA, bx + (box - isz) / 2, by + (box - isz) / 2,
+                     TOP_SCREEN_HEIGHT, app->icon, COLOR_WHITE, 2);
+  }
 
   int cy = 150, cw = TOP_SCREEN_WIDTH - 80, ch = 58;
-  draw_filled_round_rect(VRAM_TOP_LA, 40, cy, cw, ch, 12, TOP_SCREEN_HEIGHT,
-                         COLOR_HM_CARD);
+  draw_gradient_round_rect(VRAM_TOP_LA, 40, cy, cw, ch, 12, TOP_SCREEN_HEIGHT,
+                           COLOR_HM_SLOT_BOT, COLOR_HM_CARD);
   const char *name = app->name ? app->name : L(STR_EMPTY_SLOT);
   const char *dev = app->dev ? app->dev : "";
+  draw_string_scaled(VRAM_TOP_LA,
+                     (TOP_SCREEN_WIDTH - (int)str_len(name) * FONT_WIDTH * 2) / 2,
+                     cy + 10, TOP_SCREEN_HEIGHT, name, COLOR_WHITE, 2);
   draw_string(VRAM_TOP_LA,
-              (TOP_SCREEN_WIDTH - (int)str_len(name) * FONT_WIDTH) / 2, cy + 16,
-              TOP_SCREEN_HEIGHT, name, COLOR_WHITE, COLOR_HM_CARD);
-  draw_string(VRAM_TOP_LA,
-              (TOP_SCREEN_WIDTH - (int)str_len(dev) * FONT_WIDTH) / 2, cy + 34,
+              (TOP_SCREEN_WIDTH - (int)str_len(dev) * FONT_WIDTH) / 2, cy + 38,
               TOP_SCREEN_HEIGHT, dev, COLOR_HM_TEXT2, COLOR_HM_CARD);
   screen_present_top();
 }
@@ -281,7 +235,8 @@ static void hm_top_item(int selected) {
 #define GRID_Y    52
 
 static void hm_bottom_static(void) {
-  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+  draw_vgradient(VRAM_BOT_A, 0, 0, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+                 BOT_SCREEN_HEIGHT, COLOR_HM_BG_TOP, COLOR_HM_BG_BOT);
 
   draw_filled_round_rect(VRAM_BOT_A, 8, 8, BOT_SCREEN_WIDTH - 16, 30, 10,
                          BOT_SCREEN_HEIGHT, COLOR_HM_BAR);
@@ -308,12 +263,22 @@ static void hm_slot(int i, int selected) {
   int x = GRID_X + col * SLOT_STEP, y = GRID_Y + row * SLOT_STEP;
   const HomeApp *app = &home_apps[i];
 
-  draw_filled_round_rect(VRAM_BOT_A, x - 3, y - 3, SLOT_SIZE + 6, SLOT_SIZE + 6,
-                         12, BOT_SCREEN_HEIGHT,
-                         selected ? g_accent : COLOR_HM_BG);
-  draw_filled_round_rect(VRAM_BOT_A, x, y, SLOT_SIZE, SLOT_SIZE, 10,
-                         BOT_SCREEN_HEIGHT,
-                         app->name ? COLOR_HM_SLOT : COLOR_HM_SLOT_EMPTY);
+  if (selected) {
+    draw_filled_round_rect(VRAM_BOT_A, x - 3, y - 3, SLOT_SIZE + 6,
+                           SLOT_SIZE + 6, 12, BOT_SCREEN_HEIGHT, g_accent);
+  } else {
+    int t = (y * 255) / BOT_SCREEN_HEIGHT;
+    Color bg;
+    bg.r = (u8)((COLOR_HM_BG_TOP.r * (255 - t) + COLOR_HM_BG_BOT.r * t) / 255);
+    bg.g = (u8)((COLOR_HM_BG_TOP.g * (255 - t) + COLOR_HM_BG_BOT.g * t) / 255);
+    bg.b = (u8)((COLOR_HM_BG_TOP.b * (255 - t) + COLOR_HM_BG_BOT.b * t) / 255);
+    draw_filled_rect(VRAM_BOT_A, x - 3, y - 3, SLOT_SIZE + 6, SLOT_SIZE + 6,
+                     BOT_SCREEN_HEIGHT, bg);
+  }
+  draw_gradient_round_rect(VRAM_BOT_A, x, y, SLOT_SIZE, SLOT_SIZE, 10,
+                           BOT_SCREEN_HEIGHT,
+                           app->name ? COLOR_HM_SLOT_TOP : COLOR_HM_EMPTY_TOP,
+                           app->name ? COLOR_HM_SLOT_BOT : COLOR_HM_EMPTY_BOT);
   if (app->icon)
     draw_icon_32(VRAM_BOT_A, x + (SLOT_SIZE - ICON_SIZE) / 2,
                  y + (SLOT_SIZE - ICON_SIZE) / 2, BOT_SCREEN_HEIGHT, app->icon,
@@ -349,9 +314,9 @@ static void settings_header(const unsigned char *icon, const char *title,
   int scale = 3, sz = ICON_SIZE * scale;
   draw_icon_scaled(VRAM_TOP_LA, (TOP_SCREEN_WIDTH - sz) / 2, 44,
                    TOP_SCREEN_HEIGHT, icon, icon_color, scale);
-  draw_string(VRAM_TOP_LA,
-              (TOP_SCREEN_WIDTH - (int)str_len(title) * FONT_WIDTH) / 2, 150,
-              TOP_SCREEN_HEIGHT, title, COLOR_WHITE, COLOR_HM_BG);
+  draw_string_scaled(VRAM_TOP_LA,
+                     (TOP_SCREEN_WIDTH - (int)str_len(title) * FONT_WIDTH * 2) / 2,
+                     148, TOP_SCREEN_HEIGHT, title, COLOR_WHITE, 2);
   screen_present_top();
 }
 
@@ -359,8 +324,6 @@ typedef enum {
   SET_WIFI = 0,
   SET_ACCENT,
   SET_BRIGHTNESS,
-  SET_SOUND,
-  SET_TOUCH,
   SET_WIFITEST,
   SET_GPUTEST,
   SET_ABOUT,
@@ -388,11 +351,6 @@ static void settings_content(int id, const unsigned char **icon,
     case SET_BRIGHTNESS:
       *icon = icon_brightness_bits; *name = L(STR_BRIGHTNESS);
       *value = "3 / 5"; break;
-    case SET_SOUND:
-      *icon = icon_boot_bits; *name = L(STR_SOUND_TEST);
-      *value = audio_alive() ? "Ready" : "---"; break;
-    case SET_TOUCH:
-      *icon = icon_boot_bits; *name = L(STR_TOUCH_TEST); *value = ""; break;
     case SET_WIFITEST:
       *icon = icon_wifi_bits; *name = L(STR_WIFI_TEST); *value = ""; break;
     case SET_GPUTEST:
@@ -412,11 +370,23 @@ static void settings_row(int drow, int id, int sel) {
   settings_content(id, &icon, &name, &value);
 
   int y = ROW_Y0 + drow * ROW_STEP;
-  draw_filled_round_rect(VRAM_BOT_A, ROW_X - 3, y - 3, ROW_W + 6, ROW_H + 6, 10,
-                         BOT_SCREEN_HEIGHT,
-                         (id == sel) ? g_accent : COLOR_HM_BG);
-  draw_filled_round_rect(VRAM_BOT_A, ROW_X, y, ROW_W, ROW_H, 8,
-                         BOT_SCREEN_HEIGHT, COLOR_HM_SLOT);
+  /* Selection ring, then the card. Unselected rows paint the ring area with
+   * the background shade at this height so no halo is left behind. */
+  if (id == sel) {
+    draw_filled_round_rect(VRAM_BOT_A, ROW_X - 3, y - 3, ROW_W + 6, ROW_H + 6,
+                           10, BOT_SCREEN_HEIGHT, g_accent);
+  } else {
+    int t = (y * 255) / BOT_SCREEN_HEIGHT;
+    Color bg;
+    bg.r = (u8)((COLOR_HM_BG_TOP.r * (255 - t) + COLOR_HM_BG_BOT.r * t) / 255);
+    bg.g = (u8)((COLOR_HM_BG_TOP.g * (255 - t) + COLOR_HM_BG_BOT.g * t) / 255);
+    bg.b = (u8)((COLOR_HM_BG_TOP.b * (255 - t) + COLOR_HM_BG_BOT.b * t) / 255);
+    draw_filled_rect(VRAM_BOT_A, ROW_X - 3, y - 3, ROW_W + 6, ROW_H + 6,
+                     BOT_SCREEN_HEIGHT, bg);
+  }
+  draw_gradient_round_rect(VRAM_BOT_A, ROW_X, y, ROW_W, ROW_H, 8,
+                           BOT_SCREEN_HEIGHT, COLOR_HM_SLOT_TOP,
+                           COLOR_HM_SLOT_BOT);
   if (icon)
     draw_icon_32(VRAM_BOT_A, ROW_X + 6, y + (ROW_H - ICON_SIZE) / 2,
                  BOT_SCREEN_HEIGHT, icon, COLOR_WHITE);
@@ -433,17 +403,39 @@ static void settings_row(int drow, int id, int sel) {
               BOT_SCREEN_HEIGHT, ">", COLOR_HM_TEXT2, COLOR_HM_SLOT);
 }
 
-static void settings_draw(int sel) {
-  /* Title is shown on the top screen by settings_header(). */
-  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
-
-  int top = sel - SET_VISIBLE / 2; /* keep the selection roughly centred */
+/* First item shown, chosen to keep the selection roughly centred. */
+static int settings_top(int sel) {
+  int top = sel - SET_VISIBLE / 2;
   if (top > SET_COUNT - SET_VISIBLE)
     top = SET_COUNT - SET_VISIBLE;
   if (top < 0)
     top = 0;
+  return top;
+}
+
+static void settings_draw(int sel) {
+  /* Title is shown on the top screen by settings_header(). */
+  int top = settings_top(sel);
+
+  draw_vgradient(VRAM_BOT_A, 0, 0, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+                 BOT_SCREEN_HEIGHT, COLOR_HM_BG_TOP, COLOR_HM_BG_BOT);
   for (int r = 0; r < SET_VISIBLE && top + r < SET_COUNT; r++)
     settings_row(r, top + r, sel);
+  screen_present_bottom();
+}
+
+/* Moving the cursor only changes two rows, so repaint those rather than the
+ * whole screen, the way the home menu already updates two tiles. A full redraw
+ * is only needed when the list scrolls and every row shifts. */
+static void settings_update(int old_sel, int new_sel) {
+  int top = settings_top(new_sel);
+
+  if (settings_top(old_sel) != top) {
+    settings_draw(new_sel);
+    return;
+  }
+  settings_row(old_sel - top, old_sel, new_sel);
+  settings_row(new_sel - top, new_sel, new_sel);
   screen_present_bottom();
 }
 
@@ -580,10 +572,7 @@ static void accent_screen(void) {
   }
 }
 
-/* Sound Test */
-/* Drives the ARM11 audio core: shows whether it is alive + its status code, and
- * plays a test tone through CSND. This is the on-device bring-up harness. */
-
+/* Small text helpers shared by the diagnostic screens. */
 static char *snd_cpy(char *dst, const char *src) {
   while ((*dst = *src)) {
     dst++;
@@ -616,191 +605,6 @@ static void snd_hex(char *out, u32 v) {
   out[10] = '\0';
 }
 
-static void sound_test_row(int y, const char *label, const char *value,
-                           Color vc) {
-  char line[48];
-  char *p = snd_cpy(line, label);
-  snd_cpy(p, value);
-  draw_string(VRAM_BOT_A, 12, y, BOT_SCREEN_HEIGHT, line, vc, COLOR_HM_BG);
-}
-
-static void sound_test_draw(u32 freq) {
-  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
-  draw_string(VRAM_BOT_A, 12, 8, BOT_SCREEN_HEIGHT, L(STR_SOUND_TEST),
-              COLOR_HM_TEXT2, COLOR_HM_BG);
-
-  int alive = audio_alive();
-  u32 ver = audio_version();
-  char num[16], line[48];
-
-  /* Core + version: green if current, orange if a stale core is resident. */
-  char *p = snd_cpy(line, alive ? "core alive  v" : "core MISSING v");
-  snd_u32(num, ver);
-  p = snd_cpy(p, num);
-  p = snd_cpy(p, " / ");
-  snd_u32(num, AUDIO_CORE_VERSION);
-  snd_cpy(p, num);
-  Color vcol = (alive && ver == AUDIO_CORE_VERSION)
-                   ? COLOR_AURORA
-                   : (alive ? COLOR_ORANGE : COLOR_RED);
-  draw_string(VRAM_BOT_A, 12, 28, BOT_SCREEN_HEIGHT, line, vcol, COLOR_HM_BG);
-
-  snd_u32(num, audio_status());
-  sound_test_row(44, "status:    ", num, COLOR_WHITE);
-
-  snd_hex(num, audio_diag(0));
-  sound_test_row(60, "codec rd:  ", num, COLOR_HM_TEXT2);
-  snd_hex(num, audio_diag(6));
-  sound_test_row(74, "codec wr:  ", num, COLOR_HM_TEXT2);
-  snd_u32(num, audio_diag(1));
-  sound_test_row(88, "spi t/o:   ", num, COLOR_HM_TEXT2);
-  snd_hex(num, audio_diag(4));
-  sound_test_row(102, "cfg11 spi: ", num, COLOR_HM_TEXT2);
-  snd_hex(num, audio_diag(5));
-  sound_test_row(116, "nspi cnt:  ", num, COLOR_HM_TEXT2);
-  snd_hex(num, audio_diag(3));
-  sound_test_row(130, "csnd ch0:  ", num, COLOR_HM_TEXT2);
-
-  p = snd_cpy(line, "freq: ");
-  snd_u32(num, freq);
-  p = snd_cpy(p, num);
-  snd_cpy(p, " Hz");
-  draw_string(VRAM_BOT_A, 12, 148, BOT_SCREEN_HEIGHT, line, COLOR_WHITE,
-              COLOR_HM_BG);
-
-  draw_string(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 52, BOT_SCREEN_HEIGHT,
-              "A: Play  START: Stop", COLOR_HM_TEXT2, COLOR_HM_BG);
-  draw_string(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 36, BOT_SCREEN_HEIGHT,
-              "Up/Down: frequency", COLOR_HM_TEXT2, COLOR_HM_BG);
-  draw_string(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 20, BOT_SCREEN_HEIGHT,
-              "B: Back", COLOR_HM_TEXT2, COLOR_HM_BG);
-  screen_present_bottom();
-}
-
-static void sound_test_screen(void) {
-  settings_header(icon_boot_bits, L(STR_SOUND_TEST), COLOR_WHITE);
-  u32 freq = 440;
-  sound_test_draw(freq);
-  while (1) {
-    u32 k = get_keys_down();
-    int redraw = 0;
-    if ((k & BUTTON_DUP) && freq < 4000) {
-      freq += 55;
-      redraw = 1;
-    }
-    if ((k & BUTTON_DDOWN) && freq > 110) {
-      freq -= 55;
-      redraw = 1;
-    }
-    if (k & BUTTON_A) {
-      audio_play_tone(freq);
-      redraw = 1; /* refresh status after playing */
-    }
-    if (k & BUTTON_START) {
-      audio_stop();
-      redraw = 1;
-    }
-    if (redraw)
-      sound_test_draw(freq);
-    if (k & BUTTON_B) {
-      audio_stop();
-      return;
-    }
-    delay(60000);
-  }
-}
-
-/* Touch Test */
-/* Diagnostics + crosshair. Shows the ARM11 core version, a heartbeat (seq), and
- * the raw codec sample bytes, so it is visible whether touch is being read at all
- * and tune the calibration (TS_*_MIN/MAX). */
-static void snd_hex2(char *out, u32 v) {
-  static const char d[] = "0123456789ABCDEF";
-  out[0] = d[(v >> 4) & 0xF];
-  out[1] = d[v & 0xF];
-  out[2] = '\0';
-}
-
-static void touch_test_screen(void) {
-  settings_header(icon_boot_bits, L(STR_TOUCH_TEST), COLOR_WHITE);
-  char line[48], num[16], *p;
-  while (1) {
-    u32 k = get_keys_down();
-    if (k & BUTTON_B)
-      return;
-
-    volatile TouchShared *ts = (volatile TouchShared *)TOUCH_SHARED_ADDR;
-    __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(TOUCH_SHARED_ADDR)
-                     : "memory");
-    u32 seq = ts->seq, pressed = ts->pressed;
-    u32 b0 = ts->d_b0, b1 = ts->d_b1, b10 = ts->d_b10, b11 = ts->d_b11;
-    u32 rx = ts->raw_x, ry = ts->raw_y;
-
-    clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
-
-    u32 ver = audio_version();
-    p = snd_cpy(line, "core v");
-    snd_u32(num, ver);
-    p = snd_cpy(p, num);
-    p = snd_cpy(p, "/");
-    snd_u32(num, AUDIO_CORE_VERSION);
-    p = snd_cpy(p, num);
-    p = snd_cpy(p, "  st");
-    snd_u32(num, audio_status());
-    p = snd_cpy(p, num);
-    p = snd_cpy(p, "  seq ");
-    snd_u32(num, seq);
-    snd_cpy(p, num);
-    draw_string(VRAM_BOT_A, 8, 8, BOT_SCREEN_HEIGHT, line,
-                (ver == AUDIO_CORE_VERSION) ? COLOR_AURORA : COLOR_ORANGE,
-                COLOR_HM_BG);
-
-    p = snd_cpy(line, "b0:");
-    snd_hex2(num, b0);
-    p = snd_cpy(p, num);
-    p = snd_cpy(p, " b1:");
-    snd_hex2(num, b1);
-    p = snd_cpy(p, num);
-    p = snd_cpy(p, " b10:");
-    snd_hex2(num, b10);
-    p = snd_cpy(p, num);
-    p = snd_cpy(p, " b11:");
-    snd_hex2(num, b11);
-    snd_cpy(p, num);
-    draw_string(VRAM_BOT_A, 8, 24, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
-                COLOR_HM_BG);
-
-    p = snd_cpy(line, "pressed: ");
-    snd_u32(num, pressed);
-    if (pressed) {
-      p = snd_cpy(p, num);
-      p = snd_cpy(p, "  raw ");
-      snd_u32(num, rx);
-      p = snd_cpy(p, num);
-      p = snd_cpy(p, ",");
-      snd_u32(num, ry);
-      snd_cpy(p, num);
-    } else {
-      snd_cpy(p, num);
-    }
-    draw_string(VRAM_BOT_A, 8, 40, BOT_SCREEN_HEIGHT, line, COLOR_WHITE,
-                COLOR_HM_BG);
-
-    if (pressed) {
-      int sx = 0, sy = 0;
-      touch_read(&sx, &sy, NULL, NULL);
-      draw_filled_rect(VRAM_BOT_A, sx - 8, sy - 1, 17, 3, BOT_SCREEN_HEIGHT,
-                       g_accent);
-      draw_filled_rect(VRAM_BOT_A, sx - 1, sy - 8, 3, 17, BOT_SCREEN_HEIGHT,
-                       g_accent);
-    }
-
-    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 16, BOT_SCREEN_HEIGHT,
-                "B: Back", COLOR_HM_TEXT2, COLOR_HM_BG);
-    screen_present_bottom();
-    delay(30000);
-  }
-}
 
 /* Wi-Fi Test: triggers the ARM11 SDIO probe and shows the results.
  * GPL-2.0: this Wi-Fi test UI is part of the GPL-2.0 Wi-Fi driver (ath6kl-
@@ -1112,6 +916,7 @@ static void wifi_test_screen(void) {
  * Results land on the TOP screen so the bottom screen keeps showing the readout.
  * VRAM runs 0x18000000..0x18600000 and the framebuffers start at 0x18300000, so
  * the first bank is free to use as a scratch source for the blit test. */
+
 #define GPU_SCRATCH 0x18000000u
 
 static const char *const gpu_step_names[] = {
@@ -1133,6 +938,45 @@ static void gpu_paint_scratch(void) {
       s[o + 2] = r;                                         /* r */
     }
   }
+}
+
+
+/* --- render benchmark ----------------------------------------------------
+ * Times the work the UI actually does, so choices about what to move onto the
+ * GPU rest on measurements rather than assumptions. Uses the same RTC-
+ * calibrated timebase as the audio test, so the figures are in real
+ * microseconds and do not depend on any assumed clock. */
+static u32 bench_op_us = 0;   /* one GPU round trip, however small the work */
+static u32 bench_cpu_us = 0;  /* CPU filling the bottom screen with a shade */
+static u32 bench_psc_us = 0;  /* GPU doing a whole-screen solid fill        */
+static u32 bench_blit_us = 0; /* GPU moving a finished screen to the panel  */
+
+static void gpu_run_bench(void) {
+  const u32 back = (u32)VRAM_BOT_BACK;
+  u32 t0;
+
+  if (!timer_ready())
+    return;
+
+  /* Round-trip cost: 64 blits of one 16-byte run. The work is negligible, so
+   * what is left is the cost of asking the GPU to do anything at all. */
+  t0 = timer_ticks();
+  for (int i = 0; i < 64; i++)
+    gpu_texcopy(back, back + 0x1000u, 16u);
+  bench_op_us = timer_us_since(t0) / 64u;
+
+  t0 = timer_ticks();
+  draw_vgradient(VRAM_BOT_A, 0, 0, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+                 BOT_SCREEN_HEIGHT, COLOR_HM_BG_TOP, COLOR_HM_BG_BOT);
+  bench_cpu_us = timer_us_since(t0);
+
+  t0 = timer_ticks();
+  gpu_fill(back, back + BOT_FB_SIZE, 0x00161616u, GPU_FILL_24);
+  bench_psc_us = timer_us_since(t0);
+
+  t0 = timer_ticks();
+  gpu_texcopy(back, (u32)VRAM_BOT_PHYS, BOT_FB_SIZE);
+  bench_blit_us = timer_us_since(t0);
 }
 
 static void gputest_draw(const GpuShared *g, const char *last, int lastok) {
@@ -1200,8 +1044,32 @@ static void gputest_draw(const GpuShared *g, const char *last, int lastok) {
                 lastok ? COLOR_AURORA : COLOR_ORANGE, COLOR_HM_BG);
   }
 
+  /* Benchmark results, once run. */
+  if (bench_op_us || bench_cpu_us) {
+    p = snd_cpy(line, "op ");
+    snd_u32(num, bench_op_us);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, "us  psc ");
+    snd_u32(num, bench_psc_us);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, "us");
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line, COLOR_AURORA,
+                COLOR_HM_BG);
+    y += 14;
+    p = snd_cpy(line, "cpu bg ");
+    snd_u32(num, bench_cpu_us);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, "us  blit ");
+    snd_u32(num, bench_blit_us);
+    p = snd_cpy(p, num);
+    snd_cpy(p, "us");
+    draw_string(VRAM_BOT_A, 8, y, BOT_SCREEN_HEIGHT, line, COLOR_AURORA,
+                COLOR_HM_BG);
+  }
+
   draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 15, BOT_SCREEN_HEIGHT,
-              "A:Init  X:Fill  Y:Blit  B:Back", COLOR_HM_TEXT2, COLOR_HM_BG);
+              "A:Init X:Fill Y:Blit L:bench B:Back", COLOR_HM_TEXT2,
+              COLOR_HM_BG);
   screen_present_bottom();
 }
 
@@ -1237,6 +1105,10 @@ static void gpu_test_screen(void) {
       gpu_paint_scratch();
       lastok = gpu_texcopy(GPU_SCRATCH, (u32)VRAM_TOP_PHYS, TOP_FB_SIZE);
       last = lastok ? "PPF blit" : "PPF blit failed";
+    } else if (k & BUTTON_L) {
+      gpu_run_bench();
+      last = "benchmark";
+      lastok = 1;
     } else if (k & BUTTON_B) {
       return;
     } else {
@@ -1282,16 +1154,12 @@ static void settings_open(void) {
     }
 
     if (sel != prev)
-      settings_draw(sel);
+      settings_update(prev, sel);
     if ((k & BUTTON_A) || activate) {
       if (sel == SET_WIFI)
         wifi_screen();
       else if (sel == SET_ACCENT)
         accent_screen();
-      else if (sel == SET_SOUND)
-        sound_test_screen();
-      else if (sel == SET_TOUCH)
-        touch_test_screen();
       else if (sel == SET_WIFITEST)
         wifi_test_screen();
       else if (sel == SET_GPUTEST)

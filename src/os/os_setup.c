@@ -78,7 +78,6 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_SYSTEM       */ {"System", "Sistema", "Systeme"},
     /* STR_EMPTY_SLOT   */ {"Empty Slot", "Vacio", "Vide"},
     /* STR_LOADING      */ {"Loading...", "Cargando...", "Chargement..."},
-    /* STR_SOUND_TEST   */ {"Sound Test", "Sonido", "Son"},
     /* STR_MUSIC        */ {"Music", "Musica", "Musique"},
     /* STR_NO_TRACKS    */
     {"No .aaf files found", "No hay archivos .aaf", "Aucun fichier .aaf"},
@@ -86,7 +85,6 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_STOPPED      */ {"Stopped", "Detenido", "Arrete"},
     /* STR_DEBUG_CRASH  */
     {"Force Debug Crash", "Forzar Fallo", "Forcer un Crash"},
-    /* STR_TOUCH_TEST   */ {"Touch Test", "Tactil", "Tactile"},
     /* STR_WIFI_TEST    */ {"Wi-Fi Test", "Wi-Fi", "Wi-Fi"},
     /* STR_GPU_TEST     */ {"GPU Test", "GPU", "GPU"},
 };

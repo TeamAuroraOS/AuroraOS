@@ -106,6 +106,9 @@ void audio11_init(AudioCtrl *ct);
 /* Handle one audio command; returns 1 if it was one of ours. */
 int audio11_command(AudioCtrl *ct, uint32_t cmd, uint32_t arg0);
 
+/* Play the three-beep crash tone (pre-rendered at boot). */
+void audio11_error_play(void);
+
 /* ---- Touch11.c ---- */
 void touch11_init(void);
 void touch11_poll(void);
