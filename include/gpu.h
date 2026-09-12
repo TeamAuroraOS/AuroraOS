@@ -4,7 +4,7 @@
  *
  * The 3DS GPU (PICA200) lives at 0x10400000, which is ARM11 I/O; the ARM9 that
  * runs the OS cannot reach it. So the GPU is driven from the ARM11 core
- * (src/os/gpu11.c), which the ARM9 already starts for audio; GPU work is posted
+ * (src/os/Gpu11.c), which the ARM9 already starts for audio; GPU work is posted
  * through the same command block and answered in the shared block below.
  *
  * Two engines are implemented, both of which are pure memory movers and need no
@@ -113,7 +113,7 @@ typedef struct {
   volatile uint32_t xf_len;     /* texture-copy length in bytes (16-aligned)  */
 } GpuShared;
 
-/* ARM9-side API (src/os/gpu9.c). Each call posts the operation to the ARM11 and
+/* ARM9-side API (src/os/Gpu9.c). Each call posts the operation to the ARM11 and
  * blocks (bounded) until it completes, then returns 1 on success, 0 on failure.
  * The audio core must already be running (audio_boot()). */
 

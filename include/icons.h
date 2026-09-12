@@ -203,7 +203,7 @@ static const unsigned char icon_wifi_bits[ICON_SIZE * ICON_ROW_BYTES] = {
     0x00, 0x00, 0x00, 0x00,
 };
 
-/* Music note (eighth note) -- home tile for the audio player. */
+/* Music note (eighth note), the home tile for the audio player. */
 static const unsigned char icon_music_bits[ICON_SIZE * ICON_ROW_BYTES] = {
     0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00,

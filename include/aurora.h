@@ -104,6 +104,15 @@ typedef struct {
 #define COLOR_HM_SLOT_EMPTY ((Color){0x1B, 0x1B, 0x1B}) /* empty app slot        */
 #define COLOR_HM_TEXT2     ((Color){0x9A, 0x9A, 0x9A})  /* secondary text        */
 
+/* Shaded pairs. Panels are filled top-to-bottom between these rather than
+ * flat, which is what stops large areas reading as plastic. */
+#define COLOR_HM_BG_TOP    ((Color){0x1F, 0x1F, 0x24})
+#define COLOR_HM_BG_BOT    ((Color){0x0E, 0x0E, 0x12})
+#define COLOR_HM_SLOT_TOP  ((Color){0x36, 0x36, 0x3C})
+#define COLOR_HM_SLOT_BOT  ((Color){0x1E, 0x1E, 0x22})
+#define COLOR_HM_EMPTY_TOP ((Color){0x1E, 0x1E, 0x22})
+#define COLOR_HM_EMPTY_BOT ((Color){0x14, 0x14, 0x17})
+
 #define REG_LCD_TOP_BRIGHTNESS  (*(volatile u32 *)0x10202240)
 #define REG_LCD_BOT_BRIGHTNESS  (*(volatile u32 *)0x10202A40)
 
@@ -128,6 +137,25 @@ void draw_string(volatile u8 *fb, int x, int y, int screen_height, const char *s
 void draw_aurora_logo(volatile u8 *fb, int x0, int y0, int screen_height, Color color);
 
 void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h, int screen_height, Color color);
+
+/* Blend `color` into the pixel already there. alpha is 0..256. The anti-aliased
+ * primitives below are built on this. */
+void draw_pixel_alpha(volatile u8 *fb, int x, int y, int screen_height,
+                      Color color, int alpha);
+
+/* Vertical gradient from `top` to `bottom`. */
+void draw_vgradient(volatile u8 *fb, int x, int y, int w, int h,
+                    int screen_height, Color top, Color bottom);
+
+/* Rounded rect filled with a vertical gradient, corners anti-aliased. */
+void draw_gradient_round_rect(volatile u8 *fb, int x, int y, int w, int h,
+                              int radius, int screen_height, Color top,
+                              Color bottom);
+
+/* Text drawn at `scale` times size with smoothed edges, over whatever is
+ * already there. Use draw_string for 1:1 text, which is crisp as-is. */
+void draw_string_scaled(volatile u8 *fb, int x, int y, int screen_height,
+                        const char *str, Color color, int scale);
 void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h, int radius, int screen_height, Color color);
 void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height, const unsigned char *icon_bits, Color color);
 void draw_icon_scaled(volatile u8 *fb, int x, int y, int screen_height, const unsigned char *icon_bits, Color color, int scale);
