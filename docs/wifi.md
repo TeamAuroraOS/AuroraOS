@@ -38,7 +38,7 @@ effort beyond this point.
 
 ## What works: the SDIO stack
 
-The probe runs on the ARM11 (`src/os/audio11.c: wifi_probe_run()`), triggered from
+The probe runs on the ARM11 (`src/os/WiFi11.c: wifi_probe_run()`), triggered from
 Settings, Wi-Fi Test. Results are published to the `WifiShared` block at
 `0x233B0000` (`include/wifi.h`) and drawn by `wifitest_draw()` in
 `src/os/os_main.c`. Each step publishes a `phase` value so that a bad MMIO access
@@ -152,8 +152,8 @@ xrefs; `axt` lists xrefs to the current seek. Load flat (no `-B`).
 
 ## License and credits
 
-The Wi-Fi driver code (the SDIO/BMI/HIF bring-up in `src/os/audio11.c`, plus the
-Wi-Fi parts of `src/os/audio9.c` and `src/os/os_main.c`, and `include/wifi.h`) is
+The Wi-Fi driver code (the SDIO/BMI/HIF bring-up in `src/os/WiFi11.c`, plus the
+`src/os/WiFi9.c`, the Wi-Fi parts of `src/os/os_main.c`, and `include/wifi.h`) is
 licensed **GPL-2.0**, separately from the rest of AuroraOS. It derives register
 facts and the BMI/HIF bring-up sequence from the **ath6kl legacy driver**
 (GPL-2.0) as ported to the Nintendo 3DS by **Octoblimp**. Because GPL-2.0 is

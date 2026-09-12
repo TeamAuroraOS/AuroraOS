@@ -44,7 +44,7 @@ it cannot copy an app over itself while it is executing there. The launch path
    (`os_launch_stub`) to `0x25000000`, clear of both the staging buffer and the
    load region, and flushes caches so it is fetchable.
 4. Jumps into the relocated stub, which copies the payload
-   `0x24000000 → 0x22000000`, cleans/invalidates the caches, and branches to the
+   `0x24000000 -> 0x22000000`, cleans/invalidates the caches, and branches to the
    app's entry point.
 
 The same `container.c` helpers are used by the launcher firm's `boot_aurora()`
@@ -97,7 +97,7 @@ ignores HOME, so nothing branches into an uninstalled stub.
 
 ## The existing boot flow is unchanged
 
-`Aurora.firm → "Boot Aurora" → loads AURORAOS.BIN → jumps` works exactly as
+`Aurora.firm -> "Boot Aurora" -> loads AURORAOS.BIN -> jumps` works exactly as
 before. The only loader change is that `boot_aurora()` now calls the shared
 `container.c` helpers and accepts an `AUR1` magic in addition to `AOS1`; an
 `AOS1` `AURORAOS.BIN` still boots identically.

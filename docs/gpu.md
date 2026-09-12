@@ -10,6 +10,7 @@ This document covers what works, how it is wired, and the licence situation.
 | PSC | Memory fill (hardware screen clear) | **working on hardware** |
 | PPF texture copy | Raw linear -> linear blit | **working on hardware** |
 | PPF display transfer | Rect copy with format conversion + v-flip | implemented, not yet exercised |
+| Anti-aliased 2D primitives (CPU) | Coverage-blended edges, gradients | **working on hardware** |
 | P3D | 3D command lists, shaders, vertices | **not implemented** |
 
 Verified on a real console: hardware ID `0x00010002`, PSC fill and PPF texture
@@ -31,7 +32,7 @@ already use: the work happens in the ARM11 core, and the ARM9 posts requests
 through the shared command block.
 
 ```
-ARM9  os_main.c / gpu9.c            ARM11  audio11.c -> gpu11.c
+ARM9  os_main.c / Gpu9.c            ARM11  Core11.c -> Gpu11.c
   |                                    |
   | writes params -> GpuShared         |
   | bumps AudioCtrl.cmd_seq  --------> | dispatches AUDIO_CMD_GPU
@@ -131,6 +132,25 @@ touchscreen.
 - **Y**: paint a gradient into the VRAM scratch bank with the CPU, then blit it
   to the top framebuffer with the PPF.
 - **B**: back.
+- **L**: benchmark. Reports, in real microseconds, the cost of one GPU round
+  trip, a whole-screen PSC fill, the CPU filling the same screen, and a present.
+
+## What a GPU request costs
+
+An operation used to cost about 0.6-0.75 ms against roughly 40 us of actual
+work, because the ARM9 slept `delay(20000)` before its first completion check
+and the ARM11 only looked for work every `spin(20000)`. At that price
+offloading anything small was worse than doing it on the CPU, which is what
+made "move the drawing to the GPU" a non-starter.
+
+Now the ARM9 spins on the sequence counter with a single-line cache invalidate
+instead of sleeping, and the ARM11 checks for work 16 times per touchscreen
+sample rather than once. Touch is still sampled at its old rate.
+
+Worth knowing before planning more offloading: the DMA engines move bytes, they
+cannot blend. Anti-aliased edges, smoothed text and icons all read the existing
+pixel and mix into it, which PSC and PPF cannot do at any speed. That work needs
+P3D, not these engines.
 
 Results are shown on the bottom screen: core version, GPU ready flag, hardware
 ID, the step reached, the error code, the BUSY register before and after, the
@@ -190,11 +210,23 @@ well be the ARM11 core or the GPU itself.
 
 **Auric apps present through the GPU too.** An app replaces the OS at
 `0x22000000`, but the ARM11 core lives at `0x23000000` and keeps running, so it
-is still there to service GPU requests. `gpu9.c` is therefore linked into every
+is still there to service GPU requests. `Gpu9.c` is therefore linked into every
 Auric app, and `buffered(true)` installs `gpu_texcopy` as the blit hook, but
 only when the Home Menu did the launching, since that is what guarantees the
 ARM11 core is up. A directly booted app keeps the CPU copy rather than stalling
 on a GPU that will never reply. See `auric-lang/docs/language.md`.
+
+Shapes are drawn by coverage rather than a hard in/out test: `draw_pixel_alpha`
+blends into what is already there, and the rounded-corner and upscaled-bitmap
+paths in `src/screen.c` use it, which is what removed the stair-stepping. Panels
+are filled with `draw_vgradient` / `draw_gradient_round_rect` instead of flat
+colour.
+
+Upscaled 1bpp art (icons, large text) is filtered bilinearly. Supersampling does
+nothing at an integer scale, because every subsample of a destination pixel
+falls inside the same source pixel and coverage only ever comes out 0 or full;
+interpolating between the four neighbouring source pixels is what actually
+softens an edge, and costs less.
 
 The rasterisers were also rewritten to walk columns with a pointer rather than
 call `draw_pixel` per pixel. The framebuffer runs down a screen column before
@@ -218,8 +250,8 @@ presents its output.
 ## License and credits
 
 **This GPU code is licensed GPL-2.0**, separately from the rest of AuroraOS,
-which is GPL-3.0. The files are `include/gpu.h`, `src/os/gpu11.c`,
-`src/os/gpu9.c`, and the GPU Test screen in `src/os/os_main.c`. The full GPL-2.0
+which is GPL-3.0. The files are `include/gpu.h`, `src/os/Gpu11.c`,
+`src/os/Gpu9.c`, and the GPU Test screen in `src/os/os_main.c`. The full GPL-2.0
 text is in `LICENSE.wifi` at the repository root; despite the name it is the
 plain licence text, and it covers both GPL-2.0 components.
 
