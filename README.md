@@ -25,13 +25,31 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: v0.0.9.**
 | Audio | working | ARM11 CSND core; see [`docs/audio.md`](docs/audio.md) |
 | Touchscreen | working | CTR codec on the ARM11 |
 | Clock + battery | working | MCU over I2C; see [`docs/power.md`](docs/power.md) |
-| Crash handler | working | register dump on an ARM9 or ARM11 fault |
+| Crash handler | working | register dump plus a three-beep error tone on a fault |
 | Apps ([Auric](auric-lang/README.md)) | working | see [`docs/apps.md`](docs/apps.md) |
 | Wi-Fi | **paused** | firmware boots, HTC handshake unsolved: [`docs/wifi.md`](docs/wifi.md) |
 
 The UI renders into a cached FCRAM backbuffer and the GPU moves each finished
 screen to the panel in one blit, rather than rasterising straight into uncached
 VRAM.
+
+## Source layout
+
+Subsystems that span both CPUs carry the core they run on in the file name. The
+ARM9 runs the OS; the ARM11 handles the hardware the ARM9 cannot reach.
+
+| Subsystem | ARM9 | ARM11 |
+|-----------|------|-------|
+| Audio (codec output, CSND) | `src/os/Audio9.c` | `src/os/Audio11.c` |
+| Touchscreen | `src/os/Touch9.c` | `src/os/Touch11.c` |
+| Wi-Fi | `src/os/WiFi9.c` | `src/os/WiFi11.c` |
+| GPU | `src/os/Gpu9.c` | `src/os/Gpu11.c` |
+| Codec bus (shared by audio + touch) | | `src/os/Codec11.c` |
+| Core entry and command loop | | `src/os/Core11.c` |
+
+The ARM11 files link into one core binary, which the ARM9 embeds and wakes;
+`src/os/core11.h` carries what they share. ARM9-only modules keep plain names:
+`src/screen.c`, `src/power.c`, `src/i2c.c`, `src/sdmmc.c`, `src/os/Timer9.c`.
 
 ## Documentation
 
