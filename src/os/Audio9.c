@@ -1,5 +1,9 @@
 /*
- * AuroraOS audio: ARM9 side.
+ * Audio, ARM9 side.
+ *
+ * audio_boot() brings up the whole ARM11 core, not just audio: that binary
+ * carries the touchscreen, Wi-Fi and GPU modules too. It lives here because
+ * the embedded core blob is generated alongside this file.
  *
  * Starts the ARM11 audio core and posts commands to it through the shared block
  * at AUDIO_CTRL_ADDR. The ARM11 core binary is embedded here as a byte blob
@@ -10,7 +14,6 @@
 #include "aurora.h"
 #include "audio.h"
 #include "audio11_blob.h" /* generated: audio11_bin[], audio11_bin_len */
-#include "wifi.h"
 
 /* Clean+invalidate the ARM9 caches (src/os/os_launch.s). Used both to push
  * writes to physical RAM for the ARM11/CSND and to re-read the ARM11's replies. */
@@ -90,33 +93,6 @@ static void post(uint32_t cmd, uint32_t arg0) {
 void audio_play_tone(uint32_t freq_hz) { post(AUDIO_CMD_TONE, freq_hz); }
 
 void audio_stop(void) { post(AUDIO_CMD_STOP, 0); }
-
-/* Wi-Fi (GPL-2.0): wifi_probe/wifi_get are part of the GPL-2.0 Wi-Fi driver
- * (ath6kl-derived; credit Octoblimp). See docs/wifi.md "License and credits". */
-void wifi_probe(void) {
-  os_cache_sync();
-  ctrl->cmd = AUDIO_CMD_WIFI;
-  ctrl->cmd_seq = ctrl->cmd_seq + 1;
-  os_cache_sync();
-}
-
-/* Trigger the firmware upload + boot. The caller (os_main) must have staged the
- * SD firmware into the WIFI_FW slots and set the WifiFw header first. */
-void wifi_boot(void) {
-  os_cache_sync();
-  ctrl->cmd = AUDIO_CMD_WIFI_BOOT;
-  ctrl->cmd_seq = ctrl->cmd_seq + 1;
-  os_cache_sync();
-}
-
-void wifi_get(WifiShared *out) {
-  os_cache_sync(); /* pull the shared block fresh from RAM */
-  volatile unsigned char *s = (volatile unsigned char *)WIFI_SHARED_ADDR;
-  unsigned char *d = (unsigned char *)out;
-  for (unsigned i = 0; i < sizeof(WifiShared); i++)
-    d[i] = s[i];
-  out->sdmmcctl = *(volatile uint16_t *)0x10000020u; /* CFG9 SDMMCCTL (ARM9) */
-}
 
 void audio_play_pcm(uint32_t samples, uint32_t rate, uint32_t depth) {
   os_cache_sync(); /* flush the caller's PCM writes at AUDIO_PCM_ADDR to RAM */

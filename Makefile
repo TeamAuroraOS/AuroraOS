@@ -136,10 +136,11 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_sdmmc.o $(BUILD_DIR)/os_diskio.o \
            $(BUILD_DIR)/os_ff.o $(BUILD_DIR)/os_ffunicode.o \
            $(BUILD_DIR)/os_launch.o $(BUILD_DIR)/os_gpu9.o \
-           $(BUILD_DIR)/os_power.o
+           $(BUILD_DIR)/os_power.o \
+           $(BUILD_DIR)/os_wifi9.o $(BUILD_DIR)/os_touch9.o \
+           $(BUILD_DIR)/os_timer9.o
 
-AUDIO11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/audio11.o \
-                $(BUILD_DIR)/gpu11.o
+CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o                $(BUILD_DIR)/Gpu11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
 AUDIO11_BLOB := $(BUILD_DIR)/audio11_blob.h
 
@@ -167,17 +168,14 @@ $(BUILD_DIR)/audio11_start.o: $(OS_DIR)/audio11_start.s | dirs
 	@echo [AS11] Assembling $<
 	$(AS) $(ARM11_ASFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/audio11.o: $(OS_DIR)/audio11.c $(wildcard $(INC_DIR)/*.h) | dirs
+# One object per ARM11 subsystem; they link into the single core binary.
+$(BUILD_DIR)/%.o: $(OS_DIR)/%.c $(wildcard $(INC_DIR)/*.h) $(OS_DIR)/core11.h | dirs
 	@echo [CC11] Compiling $<
-	$(CC) $(ARM11_CFLAGS) -c $< -o $@
+	$(CC) $(ARM11_CFLAGS) -I$(OS_DIR) -c $< -o $@
 
-$(BUILD_DIR)/gpu11.o: $(OS_DIR)/gpu11.c $(wildcard $(INC_DIR)/*.h) | dirs
-	@echo [CC11] Compiling $<
-	$(CC) $(ARM11_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/audio11.elf: $(AUDIO11_OBJS) $(OS_DIR)/audio11.ld
+$(BUILD_DIR)/audio11.elf: $(CORE11_OBJS) $(OS_DIR)/audio11.ld
 	@echo [LD11] Linking ARM11 audio core
-	$(LD) -T $(OS_DIR)/audio11.ld -nostdlib -nostartfiles -Wl,--build-id=none -Wl,--gc-sections $(AUDIO11_OBJS) -o $@ -lgcc
+	$(LD) -T $(OS_DIR)/audio11.ld -nostdlib -nostartfiles -Wl,--build-id=none -Wl,--gc-sections $(CORE11_OBJS) -o $@ -lgcc
 
 $(AUDIO11_BIN): $(BUILD_DIR)/audio11.elf
 	@echo [BIN11] Creating $@
@@ -187,15 +185,27 @@ $(AUDIO11_BLOB): $(AUDIO11_BIN)
 	@echo [BLOB] Embedding $< '->' $@
 	python tools/bin2c.py $< audio11_bin > $@
 
-$(BUILD_DIR)/os_audio9.o: $(OS_DIR)/audio9.c $(wildcard $(INC_DIR)/*.h) $(AUDIO11_BLOB) | dirs
+$(BUILD_DIR)/os_audio9.o: $(OS_DIR)/Audio9.c $(wildcard $(INC_DIR)/*.h) $(AUDIO11_BLOB) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -I$(BUILD_DIR) -c $< -o $@
 
-$(BUILD_DIR)/os_gpu9.o: $(OS_DIR)/gpu9.c $(wildcard $(INC_DIR)/*.h) | dirs
+$(BUILD_DIR)/os_gpu9.o: $(OS_DIR)/Gpu9.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_screen.o: $(SRC_DIR)/screen.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_wifi9.o: $(OS_DIR)/WiFi9.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_touch9.o: $(OS_DIR)/Touch9.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_timer9.o: $(OS_DIR)/Timer9.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
