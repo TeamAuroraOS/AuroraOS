@@ -22,7 +22,7 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: v0.0.9.**
 | Home Menu + Settings | working | app grid, accent colours, three languages |
 | Display | working | GPU-composited; see [`docs/gpu.md`](docs/gpu.md) |
 | GPU (PICA200) | working | PSC fill + PPF blit, verified on hardware |
-| Audio | working | ARM11 core, test tone and `.aaf` playback |
+| Audio | working | ARM11 CSND core; see [`docs/audio.md`](docs/audio.md) |
 | Touchscreen | working | CTR codec on the ARM11 |
 | Clock + battery | working | MCU over I2C; see [`docs/power.md`](docs/power.md) |
 | Crash handler | working | register dump on an ARM9 or ARM11 fault |
@@ -37,6 +37,7 @@ VRAM.
 
 * [`docs/apps.md`](docs/apps.md): the app container format and loader
 * [`docs/gpu.md`](docs/gpu.md): PICA200 driver and the rendering path
+* [`docs/audio.md`](docs/audio.md): CSND playback and the channel registers
 * [`docs/power.md`](docs/power.md): MCU real-time clock and battery
 * [`docs/wifi.md`](docs/wifi.md): Wi-Fi bring-up, state and findings
 * [`auric-lang/README.md`](auric-lang/README.md): the Auric language and compiler
@@ -61,3 +62,6 @@ they keep the licence of the code they derive from:
 - With system off, hold `START` while booting
 - Select `Aurora` from the list
 - Select `Boot Aurora`
+
+### AI Disclaimer:
+AI was used in the making of most documentation and some in-code comments. Mainstream Corperate AI was not used. A local model was used on the PC of @DisLoPik.
