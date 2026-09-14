@@ -1,21 +1,21 @@
 // Tetris for AuroraOS, written in Auric.
 //
-// Controls:  LEFT/RIGHT move, DOWN soft drop, UP hard drop,
-//            A rotate clockwise, B rotate counter-clockwise,
-//            START restart after a game over, HOME exit to the Home Menu.
+// Controls: LEFT/RIGHT move, DOWN soft drop, UP hard drop, A/B rotate, START
+// restarts after a game over, HOME exits.
 //
-// The playfield is 10x20 cells stored in one flat array, index = row*10 + col.
-// Each tetromino rotation is a 16-bit mask over a 4x4 box: bit (row*4 + col) is
-// set when that square is filled. That keeps all seven pieces and all four of
-// their rotations in a single 28-entry table.
+// The playfield is 10x20 cells in one flat array, index = row*10 + col. Each
+// rotation is a 16-bit mask over a 4x4 box, bit (row*4 + col), so every piece
+// and rotation fits one 28-entry table.
 //
-// Timing is real: gravity and key auto-repeat are driven by millis(), an ARM9
-// hardware timer, not by counting frames. Frame rate therefore changes how
-// smooth the game looks but never how fast it plays.
+// Gravity and key repeat run on millis(), so the frame rate never changes the
+// game speed. draw_static() draws the fixed parts once; each frame repaints the
+// well and any changed numbers.
 //
-// Rendering only repaints what moves. The title, labels and playfield border
-// are drawn once by draw_static(); each frame repaints the well and the side
-// numbers only when they change.
+// Sounds are WAV files in SD:\Aurora\Apps\TETRIS\ (MOVE, ROTATE, LAND, LINE,
+// TETRIS, LEVELUP, GAMEOVER, START, MUSIC). They come from Game Boy Tetris,
+// which is Nintendo's, so they are not in this repository or in TETRIS.BIN;
+// auric-lang/tools/sound_prep.py makes the card copies. A missing file loads as
+// -1 and plays nothing.
 
 let BOARD_W = 10;
 let BOARD_H = 20;
@@ -46,6 +46,17 @@ let shown_next = -1;
 let shown_fps = -1;
 let fps = 0;
 
+// Sound handles from load_sound(); -1 until loaded, or if the file is missing.
+let snd_move = -1;
+let snd_rotate = -1;
+let snd_land = -1;
+let snd_line = -1;
+let snd_tetris = -1;
+let snd_level = -1;
+let snd_over = -1;
+let snd_start = -1;
+let music = -1;
+
 fn init_shapes() {
     // I
     shapes[0] = 0x00F0; shapes[1] = 0x4444;
@@ -68,6 +79,22 @@ fn init_shapes() {
     // Z
     shapes[24] = 0x0063; shapes[25] = 0x0264;
     shapes[26] = 0x0063; shapes[27] = 0x0264;
+}
+
+// Reading the music can take a moment, so say so first.
+fn load_sounds() {
+    clear(BLACK);
+    print("LOADING SOUNDS", 144, 116, AURORA);
+    present();
+    snd_move = load_sound("Aurora/Apps/TETRIS/MOVE.WAV");
+    snd_rotate = load_sound("Aurora/Apps/TETRIS/ROTATE.WAV");
+    snd_land = load_sound("Aurora/Apps/TETRIS/LAND.WAV");
+    snd_line = load_sound("Aurora/Apps/TETRIS/LINE.WAV");
+    snd_tetris = load_sound("Aurora/Apps/TETRIS/TETRIS.WAV");
+    snd_level = load_sound("Aurora/Apps/TETRIS/LEVELUP.WAV");
+    snd_over = load_sound("Aurora/Apps/TETRIS/GAMEOVER.WAV");
+    snd_start = load_sound("Aurora/Apps/TETRIS/START.WAV");
+    music = load_sound("Aurora/Apps/TETRIS/MUSIC.WAV");
 }
 
 fn shape_of(p: int, r: int) -> int {
@@ -176,6 +203,7 @@ fn try_rotate(d: int) {
     let r = (rot + d) % 4;
     if !collides(cur, r, px, py) {
         rot = r;
+        play_sound(snd_rotate);
     }
 }
 
@@ -185,6 +213,7 @@ fn step_down() {
         lock_piece();
         let n = clear_lines();
         if n > 0 {
+            let old_level = level;
             lines = lines + n;
             if n == 1 {
                 score = score + 40 * level;
@@ -196,8 +225,23 @@ fn step_down() {
                 score = score + 1200 * level;
             }
             level = 1 + lines / 10;
+
+            if n >= 4 {
+                play_sound(snd_tetris);
+            } else {
+                play_sound(snd_line);
+            }
+            if level > old_level {
+                play_sound(snd_level);
+            }
+        } else {
+            play_sound(snd_land);
         }
         spawn();
+        if dead {
+            stop_music();
+            play_sound(snd_over);
+        }
     } else {
         py = py + 1;
     }
@@ -216,8 +260,7 @@ fn draw_cell(cx: int, cy: int, v: int) {
     fill_rect(BX + cx * CELL, BY + cy * CELL, CELL - 1, CELL - 1, color_of(v));
 }
 
-// Everything that never changes. Drawn once, then left alone: the backbuffer
-// keeps it, so per-frame work is only the well and the changed numbers.
+// Drawn once; the backbuffer keeps it.
 fn draw_static() {
     clear(BLACK);
 
@@ -322,11 +365,14 @@ fn reset_game() {
     dead = false;
     nxt = rand(7);
     spawn();
+    play_sound(snd_start);
+    play_music(music);
 }
 
 fn main() {
     init_shapes();
     buffered(true);
+    load_sounds();
     reset_game();
     draw_static();
 
@@ -354,9 +400,8 @@ fn main() {
                 try_rotate(3);
             }
 
-            // Move on the press, then repeat while the direction stays held.
-            // Both delays are in real milliseconds, so they feel the same
-            // whatever the frame rate happens to be.
+            // Move on the press, then repeat while held, timed in real
+            // milliseconds.
             let dx = 0;
             if (k & KEY_LEFT) != 0 {
                 dx = -1;
@@ -376,6 +421,7 @@ fn main() {
             if dx != 0 {
                 if !collides(cur, rot, px + dx, py) {
                     px = px + dx;
+                    play_sound(snd_move);
                 }
             }
 
