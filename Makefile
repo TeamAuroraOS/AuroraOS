@@ -67,7 +67,7 @@ ARM9_ENTRY      := 0x08006800
 ARM11_LOAD_ADDR := 0x1FF80000
 ARM11_ENTRY     := 0x1FF80000
 
-.PHONY: all clean rebuild dirs os greentest
+.PHONY: all clean rebuild dirs os greentest assets
 
 all: dirs $(FIRM)
 	@echo ""
@@ -118,6 +118,11 @@ $(BUILD_DIR)/arm11_%.o: $(SRC_DIR)/%.s
 	@echo [AS11] Assembling $<
 	$(AS) $(ARM11_ASFLAGS) -c $< -o $@
 
+# Rebuilds Aurora/assets.pak from icons/ and assets/fonts/.
+assets:
+	python tools/mkassets.py -v
+
+
 clean:
 	@echo [CLEAN] Removing build artifacts...
 	@rm -rf $(BUILD_DIR)
@@ -138,9 +143,15 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_launch.o $(BUILD_DIR)/os_gpu9.o \
            $(BUILD_DIR)/os_power.o \
            $(BUILD_DIR)/os_wifi9.o $(BUILD_DIR)/os_touch9.o \
-           $(BUILD_DIR)/os_timer9.o
+           $(BUILD_DIR)/os_timer9.o $(BUILD_DIR)/os_assets.o \
+           $(BUILD_DIR)/os_ui.o $(BUILD_DIR)/os_files.o \
+           $(BUILD_DIR)/os_image.o $(BUILD_DIR)/os_jpeg.o \
+           $(BUILD_DIR)/os_wav.o $(BUILD_DIR)/os_wavload.o \
+           $(BUILD_DIR)/os_model.o \
+           $(BUILD_DIR)/os_rendertest.o \
+           $(BUILD_DIR)/os_statusbar.o $(BUILD_DIR)/os_fileview.o
 
-CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o                $(BUILD_DIR)/Gpu11.o
+CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
 AUDIO11_BLOB := $(BUILD_DIR)/audio11_blob.h
 
@@ -168,7 +179,6 @@ $(BUILD_DIR)/audio11_start.o: $(OS_DIR)/audio11_start.s | dirs
 	@echo [AS11] Assembling $<
 	$(AS) $(ARM11_ASFLAGS) -c $< -o $@
 
-# One object per ARM11 subsystem; they link into the single core binary.
 $(BUILD_DIR)/%.o: $(OS_DIR)/%.c $(wildcard $(INC_DIR)/*.h) $(OS_DIR)/core11.h | dirs
 	@echo [CC11] Compiling $<
 	$(CC) $(ARM11_CFLAGS) -I$(OS_DIR) -c $< -o $@
@@ -194,6 +204,50 @@ $(BUILD_DIR)/os_gpu9.o: $(OS_DIR)/Gpu9.c $(wildcard $(INC_DIR)/*.h) | dirs
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_screen.o: $(SRC_DIR)/screen.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_assets.o: $(SRC_DIR)/assets.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_ui.o: $(SRC_DIR)/ui.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_files.o: $(OS_DIR)/Files.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_image.o: $(SRC_DIR)/image.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_jpeg.o: $(SRC_DIR)/jpeg.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_wav.o: $(SRC_DIR)/wav.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_wavload.o: $(SRC_DIR)/wavload.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_model.o: $(SRC_DIR)/model.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_rendertest.o: $(OS_DIR)/RenderTest.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_statusbar.o: $(OS_DIR)/StatusBar.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_fileview.o: $(OS_DIR)/FileView.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
