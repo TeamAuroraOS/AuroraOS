@@ -1,4 +1,3 @@
-"""Tests for the Auric type checker / semantic pass."""
 import unittest
 
 from compiler import check_source
@@ -122,6 +121,21 @@ class TypeCheckTest(unittest.TestCase):
     def test_scope_is_local_to_block(self):
         # `t` declared inside the while body is not visible afterwards.
         bad("fn main() { while true { let t = 1; } t = 2; }")
+
+
+class SoundBuiltinTest(unittest.TestCase):
+    def test_sound_builtins(self):
+        ok('let music = -1; fn main() { music = load_sound("AURORA/SND/A.WAV"); '
+           'play_music(music); play_sound(music); stop_music(); stop_sounds(); }')
+
+    def test_load_sound_takes_a_path(self):
+        bad("fn main() { let s = load_sound(3); }")
+
+    def test_load_sound_returns_int(self):
+        bad('fn main() { let s: bool = load_sound("A.WAV"); }')
+
+    def test_play_sound_takes_a_handle(self):
+        bad('fn main() { play_sound("A.WAV"); }')
 
 
 if __name__ == "__main__":

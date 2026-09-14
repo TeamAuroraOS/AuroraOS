@@ -1,15 +1,5 @@
-"""Build the standalone Windows aurc.exe with PyInstaller.
-
-Run from the auric-lang/ directory:
-
-    python packaging/build_exe.py
-
-Produces a single self-contained executable at:
-
-    auric-lang/dist/aurc.exe
-
-The exe still requires arm-none-eabi-gcc (devkitARM) on PATH at *run* time --
-that ARM cross-compiler can't be bundled, but no Python install is needed.
+"""Build auric-lang/dist/aurc.exe with PyInstaller (run from auric-lang/). The
+exe still needs arm-none-eabi-gcc on PATH.
 """
 import sys
 from pathlib import Path

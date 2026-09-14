@@ -1,10 +1,6 @@
-"""Run the whole Auric compiler test suite with the standard library only.
+"""Run the Auric test suite with the standard library only:
 
-    python tests/run_tests.py         # from the auric-lang/ directory
-    python run_tests.py               # from the tests/ directory
-
-Uses unittest discovery; no pytest or other dependency required. Exits non-zero
-if anything fails.
+    python tests/run_tests.py
 """
 import sys
 import unittest

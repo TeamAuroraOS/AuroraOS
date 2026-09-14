@@ -1,8 +1,5 @@
-"""End-to-end tests: pack round-trip, and (when the ARM toolchain is present)
-a full compile of hello.aur to a bootable AUR1 container.
-
-The full-build test is skipped automatically if arm-none-eabi-gcc is not on
-PATH, so the front-end tests still run anywhere.
+"""End-to-end tests: a pack round-trip, and a full hello.aur build when
+arm-none-eabi-gcc is on PATH.
 """
 import shutil
 import struct

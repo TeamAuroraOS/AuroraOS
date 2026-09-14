@@ -25,7 +25,7 @@ fn main() {
    v
  hello.c                       generated freestanding C
    |  arm-none-eabi-gcc        AuroraOS's exact ARM9 flags (from ../Makefile)
-   |  + runtime/auric_runtime.c + ../src/screen.c + runtime/auric_start.s
+   |  + runtime/ + ../src/screen.c, i2c.c, os/Gpu9.c and the SD/WAV stack
    v
  hello.elf  ->  objcopy -O binary  ->  hello.payload.bin
    |  tools/aur_pack.py
@@ -36,8 +36,9 @@ fn main() {
 The generated program is linked at `0x22000000` and run in place, exactly like
 AuroraOS's own payload (`src/os/os.ld`). The runtime shim maps the Auric
 built-ins onto AuroraOS's own API, reusing the real `src/screen.c` for drawing,
-`src/i2c.c` for the HOME button, and `src/os/Gpu9.c` so that a buffered app
-presents each frame with a GPU blit instead of a full-screen CPU copy.
+`src/i2c.c` for the HOME button, `src/os/Gpu9.c` so that a buffered app
+presents each frame with a GPU blit instead of a full-screen CPU copy, and
+`src/wavload.c` with FatFs and the SD driver for `load_sound()`.
 
 ## Prerequisites
 
@@ -110,7 +111,7 @@ python -m compiler.aurc build examples/hello.aur -o AURORAOS.BIN
 
 You can package `aurc` as a single Windows `.exe` so end users don't need Python
 installed. The exe bundles the compiler, the runtime shim, the packer, and a
-snapshot of the AuroraOS headers + `screen.c` it compiles against, so it is
+snapshot of the AuroraOS headers and the sources apps link, so it is
 self-contained. It does **not** need an AuroraOS checkout.
 
 **Build it** (needs `pip install pyinstaller`), from `auric-lang/`:
@@ -145,8 +146,9 @@ auric-lang/
   compiler/    lexer, parser, AST, type checker, C codegen, and the aurc driver
   runtime/     C shim (built-ins -> AuroraOS API), crt0 (auric_start.s), linker script
   tools/       aur_pack.py | AUR1 container packer/inspector (forked from aos_pack.py)
+               sound_prep.py | small mono WAV copies for an app's sound folder
   examples/    hello.aur, demo.aur
-  docs/        language.md | the full v0.2 language reference
+  docs/        language.md | the full v0.3 language reference
   tests/       unittest suite for every compiler stage + end-to-end build
   packaging/   PyInstaller spec + build_exe.py for the standalone aurc.exe
 ```
@@ -162,7 +164,8 @@ See [`docs/language.md`](docs/language.md) for the complete reference. In brief:
   precedence.
 * Built-ins for drawing (`print`, `print_int`, `clear`, `fill_rect`), input
   (`keys_down`, `keys_held`, `wait_key`), frame control (`buffered`, `present`),
-  and timing (`millis`, `rand`, `delay`).
+  timing (`millis`, `rand`, `delay`), and sound from the SD card
+  (`load_sound`, `play_sound`, `play_music`, `stop_music`, `stop_sounds`).
 
 A complete game built on all of this lives in
 [`../Games/Tetris_Source/Tetris.aur`](../Games/Tetris_Source/Tetris.aur).

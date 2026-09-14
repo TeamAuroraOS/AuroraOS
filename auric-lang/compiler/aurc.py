@@ -1,15 +1,5 @@
-"""aurc: the Auric compiler driver.
-
-Ties the whole pipeline together:
-
-    source.aur
-      -> front end (lexer -> parser -> type check -> C codegen)   [pure Python]
-      -> arm-none-eabi-gcc  (AuroraOS's exact ARM9 flags)
-      -> objcopy -O binary                                         [raw payload]
-      -> aur_pack.py                                               [AUR1 .bin]
-
-`arm-none-eabi-gcc` (devkitARM) is a hard dependency: it is detected on PATH and
-a clear, actionable error is printed if it is missing.
+"""aurc: the Auric compiler driver. Front end -> arm-none-eabi-gcc with
+AuroraOS's ARM9 flags -> objcopy -> AUR1 container.
 
 Usage:
     python -m compiler.aurc build examples/hello.aur -o hello.bin
@@ -24,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Allow running both as a module (python -m compiler.aurc) and as a script.
+# Runs both as a module and as a script.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from compiler import AuricError, __version__, compile_to_c  # type: ignore
@@ -50,13 +40,16 @@ else:
     AURORA_SRC = AURORA_ROOT / "src"
     DEFAULT_BUILD_DIR = AURIC_ROOT / "build"
 
-# AuroraOS sources the runtime reuses/links against.
 AURORA_SCREEN = AURORA_SRC / "screen.c"
 AURORA_I2C = AURORA_SRC / "i2c.c"
-# The ARM9 side of the GPU driver, so buffered apps present with a GPU blit
-# instead of a full-screen CPU copy. The ARM11 core stays resident while an app
-# runs, so it is there to service the request.
+# The ARM9 GPU driver, so buffered apps present with a GPU blit.
 AURORA_GPU9 = AURORA_SRC / "os" / "Gpu9.c"
+# load_sound(): the WAV reader, the SD card stack it reads through (FatFs over
+# the SD driver), and the string routines FatFs calls. --gc-sections drops
+# them again from an app that loads no sound.
+AURORA_SOUND = [AURORA_SRC / name for name in
+                ("wavload.c", "ff.c", "ffunicode.c", "diskio.c", "sdmmc.c",
+                 "string.c")]
 
 RUNTIME_C = RUNTIME_DIR / "auric_runtime.c"
 RUNTIME_START = RUNTIME_DIR / "auric_start.s"
@@ -75,9 +68,8 @@ INSTALL_HINT = (
     "/opt/devkitpro/devkitARM/bin (Unix). See https://devkitpro.org/wiki/Getting_Started"
 )
 
-# AuroraOS's exact ARM9 flags (from ../../Makefile: ARM9_ARCH / ARM9_CFLAGS /
-# ARM9_LDFLAGS), plus -ffunction-sections/-fdata-sections so --gc-sections drops
-# the unused parts of screen.c (logo/icon/console). Size-only; arch/ABI unchanged.
+# AuroraOS's ARM9 flags (Makefile), plus -ffunction-sections/-fdata-sections so
+# --gc-sections drops unused code.
 ARM9_ARCH = ["-mcpu=arm946e-s", "-march=armv5te", "-marm"]
 ARM9_CFLAGS = ARM9_ARCH + [
     "-mthumb-interwork", "-ffreestanding", "-fno-builtin", "-nostdlib",
@@ -126,20 +118,15 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
                  load_addr: int = DEFAULT_LOAD_ADDR, magic: str = "AUR1",
                  icon: Path | None = None, keep: bool = False,
                  verbose: bool = False) -> Path:
-    """Compile an .aur file all the way to a packed AUR1 .bin.
-
-    If `icon` is given it is a text icon (see compiler/icon.py); otherwise a
-    generic default icon is embedded. The icon lives at a fixed offset in the
-    payload so AuroraOS can show it on the home screen.
+    """Compile an .aur file to a packed AUR1 .bin. `icon` is a text icon
+    (compiler/icon.py); without one a default icon is embedded.
     """
     src = src_path.read_text(encoding="utf-8")
 
-    # 1. Front end (pure Python). Raises AuricError on a program error.
     c_source = compile_to_c(src)
     icon_bytes = icon_mod.load_icon(icon) if icon else icon_mod.default_icon()
     head_asm = icon_mod.emit_header_asm(icon_bytes)
 
-    # 2. Native toolchain.
     cc = _find_tool(CC)
     objcopy = _find_tool(OBJCOPY)
 
@@ -160,35 +147,36 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     screen_o = work / "screen.o"
     i2c_o = work / "i2c.o"
     gpu9_o = work / "gpu9.o"
+    sound_o = [work / (src.stem + ".o") for src in AURORA_SOUND]
     start_o = work / "auric_start.o"
     elf = work / f"{stem}.elf"
     payload = work / f"{stem}.payload.bin"
 
-    # Compile the icon header, generated program, runtime shim, and the AuroraOS
-    # sources the runtime reuses (screen.c for drawing, i2c.c for the HOME poll).
+    # The icon header, program, runtime and the AuroraOS sources an app links.
     _run([cc, *ARM9_ASFLAGS, *includes, "-c", str(head_s), "-o", str(head_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(gen_c), "-o", str(prog_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(RUNTIME_C), "-o", str(runtime_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_SCREEN), "-o", str(screen_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_I2C), "-o", str(i2c_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_GPU9), "-o", str(gpu9_o)], verbose)
+    for src, obj in zip(AURORA_SOUND, sound_o):
+        _run([cc, *ARM9_CFLAGS, *includes, "-c", str(src), "-o", str(obj)], verbose)
     _run([cc, *ARM9_ASFLAGS, "-c", str(RUNTIME_START), "-o", str(start_o)], verbose)
 
     # Link. Section placement (icon header first, then _start) is fixed by the
     # linker script, so object order here is not significant.
     _run([cc, *ARM9_LDFLAGS, str(head_o), str(start_o), str(prog_o), str(runtime_o),
-          str(screen_o), str(i2c_o), str(gpu9_o), "-o", str(elf), "-lgcc"], verbose)
+          str(screen_o), str(i2c_o), str(gpu9_o), *map(str, sound_o),
+          "-o", str(elf), "-lgcc"], verbose)
 
-    # objcopy -> raw binary payload.
     _run([objcopy, "-O", "binary", str(elf), str(payload)], verbose)
 
-    # 3. Pack into an AUR1 container.
     output.parent.mkdir(parents=True, exist_ok=True)
     _pack(payload, output, load_addr, magic)
 
     if not keep:
         for f in (head_o, head_s, prog_o, runtime_o, screen_o, i2c_o, gpu9_o,
-                  start_o, elf, payload):
+                  start_o, elf, payload, *sound_o):
             f.unlink(missing_ok=True)
 
     return output

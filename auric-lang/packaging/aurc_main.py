@@ -1,8 +1,4 @@
-"""PyInstaller entry point for the standalone aurc.exe.
-
-Kept separate from compiler/aurc.py so the frozen build has a clean, single
-top-level script that just delegates to the real driver.
-"""
+"""PyInstaller entry point for aurc.exe; delegates to compiler/aurc.py."""
 import sys
 
 from compiler.aurc import main

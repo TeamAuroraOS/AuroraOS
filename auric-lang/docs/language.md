@@ -1,10 +1,10 @@
-# Auric v0.2: language reference
+# Auric v0.3: language reference
 
 *"Coding too hard? Try Auric!"*
 
 Auric is a tiny, statically-typed language that **transpiles to freestanding C**
 and compiles into a bootable app for [AuroraOS](../../README.md) on the Nintendo
-3DS. This document is the complete v0.2 spec, the language is deliberately
+3DS. This document is the complete v0.3 spec, the language is deliberately
 small.
 
 ## A whole program
@@ -130,6 +130,11 @@ These map one-to-one onto AuroraOS's API through the runtime shim
 | `rand(n) -> int`                  | pseudo-random int in `[0, n)`                     | seeded from the RTC |
 | `millis() -> int`                 | milliseconds since the app started                 | ARM9 hardware timer |
 | `delay(cycles)`                   | busy-wait ~`cycles` iterations                     | `delay`           |
+| `load_sound(path) -> int`         | read a WAV from the SD card; `-1` if it cannot     | `wav_load`        |
+| `play_sound(handle)`              | play once, on a free effect voice                  | ARM11 voice       |
+| `play_music(handle)`              | loop on the music voice                            | ARM11 voice       |
+| `stop_music()`                    | silence the music                                  | ARM11 voice       |
+| `stop_sounds()`                   | silence every effect                               | ARM11 voice       |
 
 ### Animation and games
 
@@ -166,6 +171,45 @@ while true {
 That way the speed of the game is fixed in real time and the frame rate only
 affects how smooth it looks. See `../../Games/Tetris_Source/Tetris.aur` for a
 complete game built this way.
+
+### Sound
+
+Sounds are WAV files on the SD card, loaded once and then played by handle:
+
+```auric
+let jump = -1;
+let theme = -1;
+
+fn main() {
+    jump = load_sound("Aurora/Apps/MYGAME/JUMP.WAV");
+    theme = load_sound("Aurora/Apps/MYGAME/THEME.WAV");
+    play_music(theme);
+    // ... and on an event:
+    play_sound(jump);
+}
+```
+
+* The path is counted from the root of the card. FatFs is built without long
+  file names, so every folder and file name must be 8.3. Keep an app's files in a
+  folder beside it, named after it (see `docs/apps.md`).
+* Any uncompressed 8 or 16-bit PCM WAV works, mono or stereo. Stereo is mixed to
+  mono, and a file above 32 kHz loads at half its rate, which halves the memory
+  it takes. `tools/sound_prep.py` converts files ahead of time to mono 22,050 Hz,
+  which also makes them quicker to load.
+* Every sound shares one 10 MB pool, nearly four minutes of 22 kHz mono, and at
+  most 32 can be loaded.
+* `load_sound` returns `-1` when a file is missing or unusable, and playing `-1`
+  does nothing, so a game still runs without its sounds.
+* Up to seven effects play at once alongside the music; another takes over one
+  of their voices. `play_music` loops, replacing any music already playing, at
+  about 60% volume so effects carry over it.
+* Sound needs the ARM11 core, so, like the GPU present, it works only when the
+  app was launched from the Home Menu. In a directly booted app every
+  `load_sound` returns `-1`.
+* HOME stops every sound before the Home Menu comes back.
+
+Loading reads the whole file, so a long track takes a moment: draw a message and
+`present()` first, as `Games/Tetris_Source/Tetris.aur` does.
 
 ### The HOME button
 
@@ -212,4 +256,4 @@ multi-dimensional arrays, and passing arrays to functions. The scope stays
 deliberately small; these are candidates for later versions.
 
 Flatten a 2D grid by hand until then, `board[row * WIDTH + col]`, as
-`Games/Tetris.aur` does.
+`Games/Tetris_Source/Tetris.aur` does.

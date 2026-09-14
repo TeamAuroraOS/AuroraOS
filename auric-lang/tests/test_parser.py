@@ -1,4 +1,3 @@
-"""Tests for the Auric parser."""
 import unittest
 
 from compiler import ast, parse_source

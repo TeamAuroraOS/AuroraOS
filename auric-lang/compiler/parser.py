@@ -1,7 +1,5 @@
-"""Auric parser: token stream -> AST.
-
-A straightforward recursive-descent parser with a conventional operator
-precedence climb for expressions. It only ever looks one token ahead.
+"""Auric parser: recursive descent with one token of lookahead and a precedence
+climb for expressions.
 """
 from __future__ import annotations
 

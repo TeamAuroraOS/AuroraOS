@@ -1,9 +1,4 @@
-"""Auric AST node definitions.
-
-Plain dataclasses produced by the parser and consumed by the type checker and
-code generator. Expression nodes gain a `.type` attribute during type checking
-(one of "int", "float", "bool", "string", or "void").
-"""
+"""Auric AST nodes. Expressions gain `.type` during type checking."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -12,7 +7,6 @@ from dataclasses import dataclass, field
 @dataclass
 class Expr:
     line: int = field(default=0, kw_only=True)
-    # Filled in by the type checker.
     type: str | None = field(default=None, kw_only=True, compare=False)
 
 
@@ -133,7 +127,6 @@ class Block(Stmt):
     statements: list[Stmt] = field(default_factory=list)
 
 
-# --- declarations --------------------------------------------------------
 @dataclass
 class Param:
     name: str

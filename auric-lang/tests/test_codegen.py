@@ -1,4 +1,3 @@
-"""Tests for the Auric C code generator (text-level checks)."""
 import unittest
 
 from compiler import compile_to_c
@@ -62,6 +61,17 @@ class CodeGenTest(unittest.TestCase):
     def test_string_escaping(self):
         c = compile_to_c(r'fn main() { print("a\"b\n", 0, 0, WHITE); }')
         self.assertIn(r'"a\"b\n"', c)
+
+
+class SoundCodegenTest(unittest.TestCase):
+    def test_sound_builtins_lower_to_shim(self):
+        c = compile_to_c('fn main() { let s = load_sound("SND/A.WAV"); '
+                         'play_sound(s); play_music(s); stop_music(); stop_sounds(); }')
+        self.assertIn('aur_load_sound("SND/A.WAV")', c)
+        self.assertIn("aur_play_sound(au_s)", c)
+        self.assertIn("aur_play_music(au_s)", c)
+        self.assertIn("aur_stop_music()", c)
+        self.assertIn("aur_stop_sounds()", c)
 
 
 if __name__ == "__main__":

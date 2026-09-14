@@ -1,9 +1,5 @@
-/* Linker script for Auric apps.
- *
- * Mirrors AuroraOS's src/os/os.ld: the payload runs in place at the ARM9 load
- * address (0x22000000, FCRAM, clear of the loader), with the stack high in
- * FCRAM well above code/bss. _start (auric_start.s) must be first.
- */
+/* Apps run in place at the ARM9 load address. _start (auric_start.s) must be
+ * first. */
 OUTPUT_FORMAT("elf32-littlearm")
 OUTPUT_ARCH(arm)
 ENTRY(_start)

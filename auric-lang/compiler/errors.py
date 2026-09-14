@@ -1,9 +1,5 @@
-"""Shared error type for the Auric compiler.
-
-Every stage (lexer, parser, type checker, codegen) raises `AuricError` on a
-problem in the user's program, carrying a 1-based source line/column so the
-driver can print a clear, actionable message. This mirrors the plain, no-frills
-style of AuroraOS's Python tooling (see ../../tools/aos_pack.py).
+"""Shared error type: every stage raises AuricError with a 1-based line and
+column.
 """
 from __future__ import annotations
 

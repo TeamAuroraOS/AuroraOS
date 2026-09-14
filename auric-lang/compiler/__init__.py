@@ -1,10 +1,5 @@
-"""The Auric compiler: a tiny statically-typed language that transpiles to
-freestanding C for AuroraOS (Nintendo 3DS, ARM9).
-
-Pipeline:  source -> lexer -> parser -> type checker -> C code generator.
-
-`compile_to_c()` runs the whole front end and returns generated C. The `aurc`
-driver takes it from there (arm-none-eabi-gcc -> objcopy -> aur_pack).
+"""The Auric compiler: lexer -> parser -> type checker -> C code generator. The
+`aurc` driver compiles and packs the C.
 """
 from __future__ import annotations
 
@@ -15,7 +10,7 @@ from .lexer import Lexer
 from .parser import Parser
 from .typecheck import TypeChecker
 
-__version__ = "0.2"
+__version__ = "0.3"
 
 __all__ = ["AuricError", "Program", "parse_source", "check_source", "compile_to_c",
            "__version__"]

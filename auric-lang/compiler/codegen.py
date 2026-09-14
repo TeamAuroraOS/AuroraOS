@@ -1,17 +1,13 @@
-"""Auric code generator: type-checked AST -> freestanding C.
+"""Auric code generator: type-checked AST -> freestanding C, compiled with
+AuroraOS's ARM9 flags against the runtime (../runtime).
 
-The C is compiled by arm-none-eabi-gcc with AuroraOS's exact ARM9 flags and
-linked against the runtime shim (../runtime). Transpiling to C rather than
-emitting ARM directly is a deliberate choice, per the project plan.
-
-Conventions in the generated C:
-  * every user function/variable is prefixed `au_` so it can never collide with
-    a C keyword or a runtime symbol; `fn main` becomes `au_main`, which the
-    crt0 (auric_start.s) branches to.
-  * built-in calls lower to the shim's `aur_*` helpers.
-  * predefined constants (colours, buttons) lower to macros in auric_runtime.h.
-  * binary/unary expressions are fully parenthesized so C precedence can never
-    change the meaning the type checker validated.
+In the generated C:
+  * user names are prefixed `au_`, so they never collide with C or runtime
+    symbols; `fn main` becomes `au_main`, which auric_start.s calls.
+  * built-ins lower to `aur_*` helpers and constants to auric_runtime.h
+    macros.
+  * expressions are fully parenthesized, so C precedence cannot change what
+    the type checker validated.
 """
 from __future__ import annotations
 

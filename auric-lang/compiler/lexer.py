@@ -1,8 +1,5 @@
-"""Auric lexer: source text -> token stream.
-
-Hand-written scanner, deliberately small to match the language's scope. It
-tracks 1-based line/column on every token so later stages can report precise
-errors. Whitespace and `//` / `/* */` comments are skipped.
+"""Auric lexer: source text -> tokens with 1-based line and column. Whitespace
+and `//` / `/* */` comments are skipped.
 """
 from __future__ import annotations
 
@@ -14,12 +11,10 @@ from .errors import AuricError
 
 class T(Enum):
     """Token kinds."""
-    # literals / names
     INT = auto()
     FLOAT = auto()
     STRING = auto()
     IDENT = auto()
-    # keywords
     FN = auto()
     LET = auto()
     IF = auto()
@@ -34,7 +29,6 @@ class T(Enum):
     KW_FLOAT = auto()
     KW_BOOL = auto()
     KW_STRING = auto()
-    # punctuation
     LPAREN = auto()
     RPAREN = auto()
     LBRACE = auto()
@@ -45,7 +39,6 @@ class T(Enum):
     COLON = auto()
     SEMI = auto()
     ARROW = auto()      # ->
-    # operators
     ASSIGN = auto()     # =
     PLUS = auto()
     MINUS = auto()
@@ -155,7 +148,7 @@ class Lexer:
             while self._peek().isdigit():
                 self._advance()
         text = self.src[start:self.i]
-        # 0x.. hex integers, matching aos_pack.py's int(v, 0) convenience.
+        # 0x.. hex integers.
         if not is_float and text == "0" and self._peek() in ("x", "X"):
             self._advance()
             hstart = self.i

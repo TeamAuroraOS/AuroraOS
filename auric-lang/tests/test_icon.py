@@ -1,4 +1,3 @@
-"""Tests for the Auric app-icon module."""
 import unittest
 
 from compiler import icon

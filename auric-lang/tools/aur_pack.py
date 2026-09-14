@@ -1,28 +1,11 @@
-"""Pack/inspect Auric "AUR1" bootable containers.
-
-Forked from AuroraOS's tools/aos_pack.py. An AUR1 file has the *identical*
-36-byte little-endian header layout as AOS1 (see ../../include/loader.h); only
-the 4-byte magic differs. Auric programs are ARM9-only for v1, so the four
-ARM11 header fields are always zero.
+"""Pack/inspect Auric "AUR1" containers. The 36-byte header is identical to
+AOS1 (include/loader.h) apart from the magic; Auric programs are ARM9-only,
+so the ARM11 fields are zero.
 
     [ 36-byte header ][ arm9 payload ]
 
-    char     magic[4]        "AUR1"
-    uint32_t arm9_offset     offset of the ARM9 payload in the file
-    uint32_t arm9_size
-    uint32_t arm9_load_addr  where the loader copies the ARM9 payload
-    uint32_t arm9_entry      where the loader branches on ARM9
-    uint32_t arm11_offset    always 0 (no ARM11 payload)
-    uint32_t arm11_size      always 0
-    uint32_t arm11_load_addr always 0
-    uint32_t arm11_entry     always 0
-
-Note on booting: AuroraOS's stock loader (boot_aurora) hard-checks for "AOS1"
-magic, so an AUR1 file renamed to AURORAOS.BIN will not boot on the *unmodified*
-loader. The layout is byte-identical, so either:
-  * pack with `--magic AOS1` for a standalone drop-in boot test on the stock
-    loader (proves the pipeline end-to-end), or
-  * use the AUR1 default once AuroraOS is updated (Part 3) to accept both magics.
+The stock loader (boot_aurora) only accepts "AOS1"; pack with `--magic AOS1`
+to boot an app as AURORAOS.BIN.
 """
 import argparse
 import struct
@@ -41,8 +24,7 @@ assert HEADER_SIZE == 36
 # not sit here or it clobbers the code doing the copy. Soft warning only.
 LOADER_ARM9_RANGE = (0x08006800, 0x08100000)
 
-# Default ARM9 payload address in FCRAM, well clear of the loader, the same
-# address AuroraOS itself is packed at.
+# Default ARM9 load address in FCRAM, the same as AuroraOS.
 DEFAULT_ARM9_LOAD = 0x22000000
 
 

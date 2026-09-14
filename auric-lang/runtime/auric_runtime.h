@@ -1,17 +1,8 @@
-/* Auric runtime shim: public surface for generated programs.
- *
- * Generated C (`#include "auric_runtime.h"`) only ever touches the names here:
- * the built-in helpers and the predefined colour/button constants. The
- * implementation (auric_runtime.c) maps them onto AuroraOS's own screen/input
- * API (draw_string, clear_screen, get_keys_down, delay).
- *
- * Colours are packed 0xRRGGBB and unpacked into AuroraOS `Color`s by the shim.
- * Button masks mirror the BUTTON_* bits in ../../include/aurora.h.
- */
+/* The only names generated C uses. Colours are packed 0xRRGGBB; button masks
+ * mirror BUTTON_* in include/aurora.h. */
 #ifndef AURIC_RUNTIME_H
 #define AURIC_RUNTIME_H
 
-/* ---- built-ins ---------------------------------------------------------- */
 /* print(text, x, y, color): draw text on the top screen at (x, y). */
 void aur_print(const char *text, int x, int y, int color);
 /* clear(color): fill the top screen and remember `color` as the text bg. */
@@ -37,11 +28,24 @@ int aur_rand(int n);
 /* millis(): milliseconds since the app started, from an ARM9 hardware timer. */
 int aur_millis(void);
 
+/* load_sound(path): read a WAV file from the SD card, `path` counted from the
+ * card's root. Returns a handle for play_sound()/play_music(), or -1 when the
+ * file is missing, is not 8/16-bit PCM, does not fit in the 10 MB sound pool,
+ * or nothing can play it (an app booted without the Home Menu). */
+int aur_load_sound(const char *path);
+/* play_sound(handle): play once, on whichever effect voice is free. */
+void aur_play_sound(int handle);
+/* play_music(handle): loop on the music voice, replacing what was there. */
+void aur_play_music(int handle);
+/* stop_music(): silence the music voice. */
+void aur_stop_music(void);
+/* stop_sounds(): silence every effect voice; the music keeps playing. */
+void aur_stop_sounds(void);
+
 /* Poll the HOME button; if pressed (and launched from the Home Menu), returns
  * control to AuroraOS and never comes back. Called from every built-in. */
 void aur_check_home(void);
 
-/* ---- predefined constants (colours: packed 0xRRGGBB) -------------------- */
 #define AUR_BLACK     0x000000
 #define AUR_WHITE     0xFFFFFF
 #define AUR_RED       0xFF0000
@@ -55,7 +59,6 @@ void aur_check_home(void);
 #define AUR_GRAY      0xA0A0A0
 #define AUR_DARK_GRAY 0x505050
 
-/* ---- predefined constants (buttons: HID bitmasks) ---------------------- */
 #define AUR_KEY_A      (1 << 0)
 #define AUR_KEY_B      (1 << 1)
 #define AUR_KEY_SELECT (1 << 2)
@@ -67,4 +70,4 @@ void aur_check_home(void);
 #define AUR_KEY_R      (1 << 8)
 #define AUR_KEY_L      (1 << 9)
 
-#endif /* AURIC_RUNTIME_H */
+#endif

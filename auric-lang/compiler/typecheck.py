@@ -1,8 +1,6 @@
-"""Auric semantic pass: scope resolution and static type checking.
-
-Walks the AST, annotates every expression with a `.type`, and rejects programs
-that are ill-typed, use undeclared names, or misuse `void`. Requires a
-`fn main()` entry point. Raises AuricError on the first problem found.
+"""Auric semantic pass: resolves scopes, annotates every expression with
+`.type`, and raises AuricError on the first ill-typed or undeclared use.
+Requires `fn main()`.
 """
 from __future__ import annotations
 

@@ -1,4 +1,3 @@
-"""Tests for the Auric lexer."""
 import unittest
 
 from compiler.errors import AuricError

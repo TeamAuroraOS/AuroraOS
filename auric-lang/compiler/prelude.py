@@ -1,9 +1,5 @@
-"""The Auric prelude: built-in functions and predefined constants.
-
-Kept in one place so the type checker and the code generator agree on names,
-signatures, and the C spellings they lower to. Everything here is backed by the
-runtime shim in ../runtime/auric_runtime.{c,h}, which in turn calls AuroraOS's
-own draw_string / clear_screen / get_keys_down / delay.
+"""Built-in functions and predefined constants, shared by the type checker and
+the code generator and backed by ../runtime/auric_runtime.{c,h}.
 """
 from __future__ import annotations
 
@@ -17,11 +13,7 @@ class Builtin:
     c_name: str               # function to emit in generated C
 
 
-# Built-in calls. Each maps directly onto one AuroraOS API call via the shim.
-#   print(text, x, y, color)  -> draw_string(top screen, ...)
-#   clear(color)              -> clear_screen(top screen, ...)
-#   wait_key(button)          -> loop on get_keys_down()
-#   delay(cycles)             -> delay()
+# Built-in calls, each lowering to one runtime helper.
 BUILTINS: dict[str, Builtin] = {
     "print":     Builtin(("string", "int", "int", "int"), "void", "aur_print"),
     "print_int": Builtin(("int", "int", "int", "int"), "void", "aur_print_int"),
@@ -40,6 +32,12 @@ BUILTINS: dict[str, Builtin] = {
     "rand":      Builtin(("int",), "int", "aur_rand"),
     # Milliseconds since startup, from an ARM9 hardware timer.
     "millis":    Builtin((), "int", "aur_millis"),
+    # Sound: WAV files read from the SD card, mixed by the ARM11 core.
+    "load_sound":  Builtin(("string",), "int", "aur_load_sound"),
+    "play_sound":  Builtin(("int",), "void", "aur_play_sound"),
+    "play_music":  Builtin(("int",), "void", "aur_play_music"),
+    "stop_music":  Builtin((), "void", "aur_stop_music"),
+    "stop_sounds": Builtin((), "void", "aur_stop_sounds"),
 }
 
 
@@ -53,7 +51,6 @@ class Const:
 # ints (the shim unpacks them into AuroraOS `Color`s); buttons mirror the
 # BUTTON_* bits in ../../include/aurora.h.
 CONSTANTS: dict[str, Const] = {
-    # colours (macros defined in auric_runtime.h)
     "BLACK":     Const("int", "AUR_BLACK"),
     "WHITE":     Const("int", "AUR_WHITE"),
     "RED":       Const("int", "AUR_RED"),
@@ -66,7 +63,6 @@ CONSTANTS: dict[str, Const] = {
     "AURORA":    Const("int", "AUR_AURORA"),
     "GRAY":      Const("int", "AUR_GRAY"),
     "DARK_GRAY": Const("int", "AUR_DARK_GRAY"),
-    # buttons
     "KEY_A":      Const("int", "AUR_KEY_A"),
     "KEY_B":      Const("int", "AUR_KEY_B"),
     "KEY_SELECT": Const("int", "AUR_KEY_SELECT"),
