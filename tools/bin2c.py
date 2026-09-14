@@ -1,7 +1,5 @@
-"""Emit a C array for a binary file: `python bin2c.py <in.bin> <varname> > out.h`.
-
-Used by the OS build to embed the ARM11 audio core (audio11.bin) into the ARM9
-OS as a byte blob, so the OS can copy it into place and wake the ARM11 itself.
+"""Emit a C array for a binary file: `python bin2c.py <in.bin> <varname> >
+out.h`. The OS build uses it to embed the ARM11 core.
 """
 import sys
 from pathlib import Path

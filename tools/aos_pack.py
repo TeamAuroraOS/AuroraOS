@@ -26,9 +26,8 @@ HEADER_FMT = "<4sIIIIIIII"  # 4 + 8*4 = 36 bytes
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
 assert HEADER_SIZE == 36
 
-# Memory regions the running loader itself occupies (from arm9.ld / arm11.ld).
-# A loaded payload must NOT be placed on top of these, or it clobbers the code
-# doing the copy. Used only for a soft warning.
+# Memory the running loader occupies (arm9.ld / arm11.ld). A payload placed here
+# would clobber the code doing the copy. Soft warning only.
 LOADER_ARM9_RANGE = (0x08006800, 0x08100000)
 LOADER_ARM11_RANGE = (0x1FF80000, 0x20000000)
 
@@ -69,7 +68,6 @@ def pack(
         arm11_load = 0
         arm11_entry = 0
 
-    # Soft safety check against the running loader's own memory.
     if _overlaps(arm9_load, arm9_size, LOADER_ARM9_RANGE):
         print(
             f"warning: ARM9 payload [{arm9_load:#010x}..{arm9_load + arm9_size:#010x}] "
@@ -140,7 +138,6 @@ def info(path: Path) -> None:
     else:
         print("  ARM11: (none)")
 
-    # Basic integrity checks.
     if arm9_offset + arm9_size > len(data):
         print("  ERROR: ARM9 payload runs past end of file", file=sys.stderr)
     if arm11_size and arm11_offset + arm11_size > len(data):

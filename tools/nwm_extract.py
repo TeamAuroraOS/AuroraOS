@@ -25,10 +25,8 @@ KNOWN_SIZES = {
     "Main.type5": 0x7A2E,
 }
 
-# 8.3 output filenames. AuroraOS's FatFs is built without long-filename support,
-# so the SD copies must be plain 8.3 names to be openable. Copy these to
-# SD:/Aurora/wifi/. The boot path uses only stub_data, stub_code, main_type4,
-# and database; type1/type5 are extracted for completeness.
+# 8.3 names, since AuroraOS's FatFs has no long file names; copy them to
+# SD:/Aurora/wifi/. The boot uses stub_data, stub_code, main_type4 and database.
 SD_NAMES = {
     "stub_data": "STUBDATA.BIN",
     "stub_code": "STUBCODE.BIN",
