@@ -30,6 +30,68 @@ python -m compiler.aurc build examples/hello.aur -o HELLO.BIN
 # then copy HELLO.BIN to SD:\Aurora\Apps\ on the card
 ```
 
+## Sound and other data files
+
+An app's own files go in a folder beside it, named after it:
+
+```
+SD:\Aurora\Apps\TETRIS.BIN
+SD:\Aurora\Apps\TETRIS\MOVE.WAV
+SD:\Aurora\Apps\TETRIS\MUSIC.WAV
+```
+
+The Home Menu skips folders when it scans for apps, so they never become tiles.
+An Auric app reads them with `load_sound()` (see the
+[language reference](../auric-lang/docs/language.md)); the runtime links FatFs,
+the SD driver and the WAV reader for it, and `--gc-sections` drops them again
+from an app that loads nothing.
+
+### Tetris
+
+`Games/Tetris_Source/Tetris.aur` plays nine sounds from `SD:\Aurora\Apps\TETRIS\`.
+They were made from the Game Boy Tetris sound effects and a background track in
+`exclude/music/tetris-sounds`. **Those recordings are copyright material (the
+effects are Nintendo's), so they are not in this repository or in
+`TETRIS.BIN`.** Like the Wi-Fi firmware they stay in the gitignored `exclude/`
+folder and go onto the card by hand; the licence is left as it is. Without the
+folder the game runs silently.
+
+| Card file | Source | Played when |
+|-----------|--------|-------------|
+| `MOVE.WAV` | (18) move_piece | a piece moves sideways |
+| `ROTATE.WAV` | (19) rotate_piece | a piece turns |
+| `LAND.WAV` | (27) piece_landed | a piece locks without clearing a line |
+| `LINE.WAV` | (21) line_clear | one to three lines clear |
+| `TETRIS.WAV` | (22) tetris_4_lines | four lines clear |
+| `LEVELUP.WAV` | (23) level_up_jingle (V1.1) | the level goes up |
+| `GAMEOVER.WAV` | (25) game_over | the stack reaches the top |
+| `START.WAV` | (17) menu_sound | a game starts |
+| `MUSIC.WAV` | tetris-bg-music | loops while playing |
+
+Not used: (20) 2_player_sending_blocks, (23) unused_level_up_jingle (V1.0),
+(24) sample_from_tetris_4_lines, (26) piece_falling_after_line_clear (Aurora's
+Tetris has no clearing animation to play it over) and (28) the rocket ending.
+
+The card copies were made with `auric-lang/tools/sound_prep.py`, which writes
+mono 16-bit WAVs at 22,050 Hz under 8.3 names. The effects were raised 6 dB so
+they carry over the music; the music comes out at 3.7 MB against the original's
+16 MB, so it loads four times faster.
+
+```
+S=exclude/music/tetris-sounds
+O=exclude/sd/Aurora/Apps/TETRIS
+python auric-lang/tools/sound_prep.py -o $O --gain 6 \
+  "$S/Tetris (GB) (18)-move_piece.wav=MOVE.WAV" \
+  "$S/Tetris (GB) (19)-rotate_piece.wav=ROTATE.WAV" \
+  "$S/Tetris (GB) (27)-piece_landed.wav=LAND.WAV" \
+  "$S/Tetris (GB) (21)-line_clear.wav=LINE.WAV" \
+  "$S/Tetris (GB) (22)-tetris_4_lines.wav=TETRIS.WAV" \
+  "$S/Tetris (GB) (23)-level_up_jingle (V1.1).wav=LEVELUP.WAV" \
+  "$S/Tetris (GB) (25)-game_over.wav=GAMEOVER.WAV" \
+  "$S/Tetris (GB) (17)-menu_sound.wav=START.WAV"
+python auric-lang/tools/sound_prep.py -o $O "$S/tetris-bg-music.wav=MUSIC.WAV"
+```
+
 ## How launching works
 
 The running Home Menu lives at `0x22000000`, which is also where apps load, so
@@ -113,6 +175,7 @@ before. The only loader change is that `boot_aurora()` now calls the shared
 | `src/os/os.ld` | `_os_image_end` symbol for the return snapshot |
 | `include/loader.h` | app staging / return-contract / icon constants |
 | `src/i2c.c`, `include/i2c.h` | `I2C_readRegBuf`, used to poll the MCU for the HOME button |
+| `auric-lang/runtime/auric_runtime.c` | the app side: HOME return, GPU present, sound from the SD card |
 
 ## A worked example
 

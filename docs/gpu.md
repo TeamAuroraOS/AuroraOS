@@ -134,6 +134,161 @@ touchscreen.
 - **B**: back.
 - **L**: benchmark. Reports, in real microseconds, the cost of one GPU round
   trip, a whole-screen PSC fill, the CPU filling the same screen, and a present.
+- **R**: render test. See "Render test" below.
+
+## The MPU was switched off
+
+Read from the console with the `L` screen:
+
+```
+c1 0x00052078    bit 0 MPU = 0, bit 2 D-cache = 0, bit 12 I-cache = 0
+c2 0x00000029    regions 0, 3 and 5 cacheable
+c3 0x00000029    regions 0, 3 and 5 bufferable
+
+region 5  0x20000000  128MB  C=1 B=1   FCRAM: code, buffers, shared blocks
+region 7  0x18000000    8MB  C=0 B=0   VRAM
+region 4  0x10000000    2MB  C=0 B=0   I/O registers
+```
+
+The firm leaves the region table complete and correct, FCRAM cacheable and
+bufferable, VRAM and the device range not, and then hands over with the
+protection unit **disabled**. With no unit there are no attributes, so nothing
+was cached and nothing was buffered: every instruction fetch and every store ran
+at raw FCRAM latency. That is the 77 cycles a single framebuffer byte cost, and
+it is why every cache maintenance call in this tree was, until now, a no-op.
+
+`os_mpu_enable()` in `os_launch.s` sets three bits in c1. It defines no regions;
+it turns on what was already configured. Both caches are invalidated first,
+because they hold whatever powered up in them.
+
+**Holding SELECT at boot skips it.** The button register is device memory either
+way, so the read works before the unit is on.
+
+Two things made this safe to switch on. The ARM11 core copy is already bracketed
+by `os_cache_sync()`, and the SD driver is PIO through `REG_SDFIFO32` rather
+than DMA, so card data passes through the CPU and lands in the cache correctly.
+The shared blocks each invalidate their own line before reading.
+
+Measured with it on, against the same screen with it off:
+
+```
+                 caches off    caches on
+cpu bg            90,038 us     8,949 us     10x (30x vs. byte stores)
+edge patch         7,867 us       763 us     10x
+bg paint           1,558 us       855 us
+card               1,981 us     1,542 us
+op (round trip)      402 us       551 us     slower, see below
+blit                 626 us       824 us     slower, see below
+Tetris              ~15 fps      137 fps
+```
+
+The GPU operations got *slower*, and that is correct. Every clean before a GPU
+read used to be a no-op; now it writes dirty lines back to memory, which is the
+whole point of it. Anything that was working only because the caches were off
+would show up here first, as corrupted pixels.
+
+Apps inherit the state. A Home Menu launch does not reset c1, so an Auric app
+runs with the unit and caches on, which is where Tetris's speed-up came from.
+That makes the app runtime's own cache maintenance real as well:
+`auric-lang/runtime/auric_start.s` carries copies of `os_dcache_clean` and
+`os_dcache_clean_range` for `Gpu9.c`, because an app links that file but not
+the OS's launch stub. An app booted directly as `AURORAOS.BIN` has no OS before
+it, so it runs with the unit off, and the same calls are harmless no-ops.
+
+## The cost of a CPU pixel
+
+Measured on hardware with the `L` benchmark, and the single most useful number
+in this tree:
+
+```
+cpu bg 265732us     CPU filling one 320x240 screen
+bg paint  798us     the same background, painted from its cache
+psc       565us     GPU solid-filling the same screen
+blit      641us     GPU moving a finished screen to the panel
+op        405us     a GPU round trip, however small the work
+```
+
+**254 ms for a screen fill is about 222 cycles per pixel, or 74 cycles per byte
+stored.** That is a full FCRAM round trip per store. ARM946E-S allocates cache
+lines on a read miss but *not* on a write miss, so a buffer the CPU only writes
+never enters the cache: every store goes to the write buffer and out to memory,
+and a tight store loop simply saturates it. Aurora never configures the MPU, so
+whatever the firm left is what applies.
+
+The practical rules that follow:
+
+* **Never compose a full screen with the CPU per frame.** Opening Settings used
+  to paint two backgrounds, 571 ms of it, which is exactly what a half-second
+  stall felt like.
+* **Prefer copying to computing.** The background does not change between
+  frames, so it is composed once into FCRAM (`ui_bg_build`) and painted from
+  that copy: a GPU blit at 656 us, against 254 ms to recompute. The patch path
+  copies the rect's column runs from the same cache rather than re-deriving the
+  gradient and re-blending the pattern.
+* **Write words, not bytes.** The cost scales with the number of store
+  instructions, not bytes, so a `u32` store moves four bytes for the price of
+  one. `clear_screen` and `copy_run` both do this.
+* **Do cache maintenance by index, not by address, above a few KB.** The
+  buffer has to leave the cache before the GPU writes it, or blended drawing
+  reads the previous frame back. Doing that by address costs one CP15 operation
+  per line *of the range*, and each costs about 82 cycles: over a 230 KB
+  framebuffer that is 7,200 of them, measured at 8.8 ms, to drop at most the
+  128 lines a 4 KB cache can even hold. `os_dcache_flush()` does the same job
+  in 128 index operations, about 157 us.
+* **Flush before the write, not after.** Cleaning and invalidating first leaves
+  nothing dirty, so there is no stale CPU line to be written back over the
+  GPU's output afterwards. Invalidating *after* a GPU write, without cleaning,
+  would be the other option, but it discards unrelated dirty data too.
+
+What is still expensive is any large blended area, because blending has to read
+what is already there. That read allocates a line, so the writes that follow it
+hit the cache; a blended fill is actually cheaper per pixel than a plain one,
+which is the opposite of what one would guess.
+
+## Input latency and the present pipeline
+
+Making the drawing cheaper turned out not to be what made the UI feel slow.
+Four things did, and none of them were pixels:
+
+**The loop slept 8 ms between polls.** Every screen ended with `delay(60000)`,
+a nop loop that disassembles to six instructions at roughly nine cycles each;
+at the ARM9's 67 MHz that is about 8 ms. The loop could not look at input more
+than about 120 times a second, and slept that long again after every redraw.
+`ui_idle()` in `src/ui.c` replaces it with a hardware-timer wait of 1 ms.
+
+**Directions did not repeat.** `get_keys_down()` is edge-triggered, so holding
+the D-pad moved the cursor once and stopped. Most of what read as slowness was
+not a slow move, it was needing a second press to move again. Directions now
+repeat after 350 ms at 70 ms intervals; everything else stays edge-triggered,
+because holding A must not launch an app repeatedly.
+
+**Every present flushed both caches, twice.** `gpu_run()` called
+`os_cache_sync()` before and after posting, and that routine cleans and
+*invalidates* the whole D-cache and invalidates the entire 8 KB I-cache. Two
+presents per screen change meant four complete cache wipes per keypress, so the
+drawing code was re-fetched cold from FCRAM every frame. The I-cache part was
+pure waste: nothing wrote instructions, only pixels. `os_dcache_clean()` and
+`os_dcache_clean_range()` in `os_launch.s` clean without invalidating and never
+touch the I-cache, so the framebuffer the CPU just wrote stays cached and
+readable for the next redraw.
+
+**The ARM9 waited for each blit.** `gpu_texcopy_async()` posts and returns;
+`ui_idle()` collects the result during the wait that follows. A posted blit is
+still reading the backbuffer, so every primitive in `screen.c` that writes one
+calls `screen_touch()` first, which waits if a copy is reading that buffer.
+That is one compare in the common case and makes the property hold by
+construction, rather than by auditing 43 present call sites.
+
+Two traps found while doing this, both worth knowing:
+
+* `timer_ready()` is not a query. It restarts the timer and recalibrates
+  against the real-time clock, which blocks across two RTC second boundaries.
+  Calling it per frame would have frozen the UI outright. `timer_calibrated()`
+  is the cheap check; calibration happens once at start-up.
+* `GpuShared.seq` is written by the ARM11, so a clean cannot refresh it. Reading
+  it after switching from clean-and-invalidate to clean-only latched a stale
+  value, and the first completion check then passed against an operation that
+  had never run. It needs an explicit line invalidate.
 
 ## What a GPU request costs
 
@@ -222,11 +377,26 @@ paths in `src/screen.c` use it, which is what removed the stair-stepping. Panels
 are filled with `draw_vgradient` / `draw_gradient_round_rect` instead of flat
 colour.
 
-Upscaled 1bpp art (icons, large text) is filtered bilinearly. Supersampling does
-nothing at an integer scale, because every subsample of a destination pixel
-falls inside the same source pixel and coverage only ever comes out 0 or full;
-interpolating between the four neighbouring source pixels is what actually
-softens an edge, and costs less.
+Icons and text no longer scale at all. They are pre-rendered at the exact size
+the UI draws them and blitted 1:1 from the SD asset pack; see
+[`assets.md`](assets.md). The bilinear upscaling that preceded this is still in
+`draw_icon_scaled`, used only as the fallback when the pack is absent.
+
+That path is worth understanding, because both of its problems came from the
+same place. Magnifying 1bpp art cannot add detail, so every edge became a ramp
+`scale` pixels wide: the smoothing *was* the blur. And it cost about 48
+operations per destination pixel (four filtered fetches with bounds checks,
+three interpolations, a framebuffer offset recomputed per pixel) against roughly
+six for a coverage blit. Supersampling would have been worse still and no
+sharper, because at an integer scale every subsample of a destination pixel
+falls inside the same source pixel, so coverage only ever comes out 0 or full.
+
+Rounded corners are now table-driven. Coverage inside a corner depends only on
+the radius, so it is computed once per radius and cached (`corner_table` in
+`src/screen.c`). It used to call `isqrt32`, a 16-iteration loop, once per corner
+pixel: a settings row draws a radius-10 ring and a radius-8 card, about 650
+isqrt calls, so a six-row redraw spent roughly 63,000 loop iterations on corners
+alone. That is what made Settings feel heavier than the Home Menu.
 
 The rasterisers were also rewritten to walk columns with a pointer rather than
 call `draw_pixel` per pixel. The framebuffer runs down a screen column before
@@ -246,6 +416,57 @@ existing 2D UI faster.
 
 If P3D is added later, the display-transfer path already implemented is what
 presents its output.
+
+## Render test
+
+**Settings > GPU Test, R.** Sixty seconds of UI-shaped drawing on the top
+screen, then the mean frame rate. `src/os/RenderTest.c`.
+
+Each frame blits the cached wallpaper, moves six gradient cards with an icon and
+a label each, and presents through the normal async path, so it measures what
+the Home Menu does rather than a raw fill. The bottom screen shows the running
+numbers four times a second, and B stops early.
+
+Frames are counted per second of the calibrated timer, and each sample is
+divided by the microseconds that second really spanned, so a frame straddling
+the boundary does not skew it. The result is the mean of those samples; the
+bottom screen adds the min, max, total frames and elapsed time.
+
+### New 3DS hardware
+
+On a New 3DS the test first asks for the fast ARM11 clock: 804 MHz on the retail
+SoC (CFG11_SOCINFO bit 2), 536 MHz on the LGR1. `aurora_n3ds_hardware()` in
+`src/model.c` posts `AUDIO_CMD_N3DS`, and `src/os/Clock11.c` does the work.
+
+The register is CFG11_MPCORE_CLKCNT (0x10141300): bits 0-2 request a mode, bit
+15 is set when a change has applied, bits 16-18 read back the mode in effect. A
+request only applies once every ARM11 core is in WFI, and interrupt 88 then
+wakes core 0. The sequence follows fastboot3DS and libn3ds: route interrupt 88
+to core 0, set the extra-memory and L2C enable bits in CFG11_MPCORE_CNT, request
+the mode, WFI until bit 15, then set the GPU's New 3DS bits. The L2 cache
+controller itself is left off.
+
+Aurora's ARM11 normally polls with interrupts masked and never sleeps, and a WFI
+that never returns would take audio, touch and the present with it. So:
+
+| Guard | Why |
+|-------|-----|
+| Fire core 0's private timer once and check the CPU interface sees it | if no interrupt reaches the core, WFI would never return; the switch is skipped |
+| Keep that timer running during the wait, give up after about a second | the other core may not be parked in WFI, and then the change never applies |
+| Withdraw a request that did not apply | left in place, it could apply later whenever both cores idled |
+| Save and restore every GIC and timer register touched | the rest of the core expects the interrupt state it had |
+
+Both screens show the outcome, and the bottom one adds the raw register before
+and after: `Clock 00000000 to 00050005` is a switch from mode 0 to mode 5.
+
+Only the ARM11 gets faster. The ARM9, which does the drawing, keeps its clock,
+and the present is a GPU blit the ARM11 only starts, so expect this test's
+number to move little; the gain is for work done on the ARM11. Spin-count
+bounds there get shorter in real time at 3x, so `GPU_POLL_MAX` was tripled. The
+codec's `SPI_GUARD` stays far above a transfer either way, and the `sleep_ms`
+delays run only at start-up, before any switch. The mode holds until reboot.
+
+Not yet tested on hardware.
 
 ## License and credits
 
@@ -274,3 +495,11 @@ device tree) and `smp.c` (New3DS core 2/3 bring-up and SOCMODE clocking).
 
 Other sources: GBATEK "3DS Video", 3dbrew GPU/GPUREG documentation, and libctru's
 `GX_MemoryFill` / `GX_DisplayTransfer` / `GX_TextureCopy` for the mode semantics.
+
+The render test (`src/os/RenderTest.c`) and the New 3DS clock switch
+(`src/os/Clock11.c`, with its ARM9 side in `src/model.c`) are **not** part of the
+GPL-2.0 GPU code; they are GPL-3.0 like the rest of AuroraOS. The clock sequence
+follows **fastboot3DS** `source/arm11/hardware/cpu.c` and **libn3ds**
+`source/arm11/drivers/pdn.c`, both by derrek and profi200 under GPL-3.0-or-later,
+which is compatible. Register layouts come from GBATEK "3DS Config Registers"
+and libn3ds `gic.h` / `timer.h`. `smp.c` above was not used for it.

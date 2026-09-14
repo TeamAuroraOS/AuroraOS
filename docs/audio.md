@@ -8,6 +8,7 @@ command block described in `include/audio.h`.
 |-------|------|
 | ARM9 API, core boot | `src/os/Audio9.c` |
 | Output path + CSND | `src/os/Audio11.c` |
+| WAV reader, shared by the OS and apps | `src/wavload.c` |
 | Codec bus (shared with the touchscreen) | `src/os/Codec11.c` |
 
 ## The channel register layout
@@ -100,6 +101,37 @@ is harmless because that core has already started the same sound itself.
 Note that the ARM11 half only fires once the ARM11 exception vectors are
 installed. `crash11_init()` in `Core11.c` is currently disabled, so an ARM11
 fault is not caught at all today: no beep and no crash screen.
+
+## Voices
+
+Channel 0 belongs to the OS: the test tone, WAV playback in the File Explorer,
+the Music app and the crash beep. Apps get **voices**, CSND channels 1 to 8,
+through two more commands (`include/audio.h`):
+
+| Command | Arguments |
+|---------|-----------|
+| `AUDIO_CMD_VOICE` | `arg0` the voice, loop and 16-bit flags, volume in the top half; `arg1` address; `arg2` bytes; `arg3` rate |
+| `AUDIO_CMD_VOICE_STOP` | `arg0` a bit mask of voices |
+
+A voice reads its samples where they sit, so they must be flushed from the
+ARM9's cache and stay put while it plays. `AUDIO_VOICE_ANY` lets the core choose
+among voices 1 to 7: the next one whose start bit reads clear, or simply the
+next one. Whether that bit clears when a one-shot sound ends has not been
+checked on hardware; if it does not, the choice is plain round-robin, which is
+still correct. Voice 0 is never chosen, so a caller can keep it for music.
+
+The command block holds a single request and the GPU uses it too, so a sender
+waits for the core's acknowledgement before returning. Otherwise a present
+posted straight after would overwrite the request before the core read it.
+
+The Auric runtime keeps voice 0 for music and uses the rest for effects,
+loading WAVs into the PCM buffer at `0x23400000`, which nothing else uses while
+an app runs (`src/wavload.c` is the reader, shared with the File Explorer). The
+Home Menu calls `audio_voices_stop()` at start-up, which is also where it lands
+when an app returns, so an app's music cannot play on over memory the OS has
+taken back. Voices arrived with core version 82; an older core, still running
+after a warm reboot, acknowledges both commands without acting on them, and apps
+stay silent.
 
 ## Audio files
 

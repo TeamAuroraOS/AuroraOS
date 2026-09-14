@@ -46,16 +46,42 @@ percentage, the fill width and the low warning do not depend on it.
 
 ## What the UI shows
 
-The home menu's top bar (`hm_status_bar()` in `src/os/os_main.c`) shows the
-clock, the date, the charge percentage, and a battery pill whose fill is
-proportional to charge. The fill is green while charging, red at 15% or below,
-and the accent colour otherwise. The setup wizard's status bar shows the clock
-and date through the same calls.
+The top status bar (`status_bar_draw()` in `src/os/StatusBar.c`, shared by the
+Home Menu and the setup wizard) shows the clock, the date, the model tag, the
+Wi-Fi and grid indicators, the charge percentage, and a battery pill whose fill
+is proportional to charge. The fill is green while charging, red at 15% or
+below, and the accent colour otherwise. Without the asset pack it falls back to
+the 8x8 font and drawn indicators.
 
 The clock is kept live from the home-menu loop: the MCU is sampled periodically
 rather than every frame (it is a slow bus), and the bar is only repainted when
 the displayed minute actually changes, which, with the GPU doing the present,
 costs one blit a minute.
+
+## Console model
+
+Which console Aurora is running on comes from `CFG11_SOCINFO` (`0x10140FFC`).
+Bit 0 is set on every retail unit; **bit 1 is set on the New 3DS family**, which
+is the bit that matters. `src/model.c` / `include/model.h` wrap it, and the home
+menu's status bar shows an **N** on a New model and nothing on an Old one.
+
+That register is ARM11 config space, so the ARM9 cannot read it directly. The
+ARM11 core samples it once at start-up into `AudioCtrl.socinfo` and the ARM9
+reads it from there. Reading it on the ARM9 would be a single instruction, but
+that side has already been seen to data-abort on ARM11 peripheral registers, and
+a fault during boot is a far worse failure than a missing indicator.
+
+Two consequences follow from where it comes from:
+
+* The model is only known once `audio_boot()` has brought the ARM11 up. That
+  happens before anything is drawn, so the status bar always has it.
+* If that core never starts, `socinfo` stays zero and the model reads as Old.
+  That is the safe default, because it only suppresses an indicator.
+
+**Not verified on hardware.** The bit assignment is the one bare-metal 3DS
+projects use, but it has not been checked on a real New 3DS here. If the letter
+is wrong, `aurora_socinfo()` returns the raw register so the actual value can be
+read out.
 
 ## Known caveat: RTC offset
 
