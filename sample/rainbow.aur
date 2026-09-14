@@ -1,5 +1,3 @@
-// rainbow.aur: a sample Auric app.
-//
 // Fills the top screen with a ROYGBIV rainbow.
 //
 // Build (from auric-lang/):
