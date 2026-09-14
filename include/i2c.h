@@ -15,11 +15,9 @@ typedef enum {
 /* Initialise the I2C buses. Safe to call more than once. */
 void I2C_init(void);
 
-/* Write a single byte to a device register. Returns true on success. */
 bool I2C_writeReg(I2cDevice devId, uint8_t regAddr, uint8_t data);
 
-/* Read `size` bytes from a device register into `out`. Returns true on success.
- * Used to poll the MCU IRQ register (0x10) for HOME/power button events. */
+/* Returns true on success. */
 bool I2C_readRegBuf(I2cDevice devId, uint8_t regAddr, uint8_t *out, uint32_t size);
 
-#endif /* AURORA_I2C_H */
+#endif

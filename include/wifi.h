@@ -1,15 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * AuroraOS Wi-Fi SDIO probe (ARM9 <-> ARM11). The chip is an Atheros AR6014 on a
- * 16-bit TMIO/SDHC host controller ("controller 2", logical 0x10122000) reached
- * from the ARM11. The probe runs in the ARM11 core and reports back through the
- * shared block below. See docs/wifi.md for the full state of the bring-up.
+/* Wi-Fi SDIO probe and firmware boot (ARM9 <-> ARM11). The Atheros AR6014 sits
+ * on TMIO host controller 2, reached from the ARM11. See docs/wifi.md.
  *
  * LICENSE: This Wi-Fi code is licensed GPL-2.0 (not the rest of AuroraOS). It
  * derives register facts and the BMI/HIF bring-up sequence from the ath6kl
  * legacy driver as ported to the 3DS by Octoblimp. Credit: Octoblimp; ath6kl
- * (GPL-2.0). See docs/wifi.md "License and credits".
- */
+ * (GPL-2.0). See docs/wifi.md "License and credits". */
 #ifndef AURORA_WIFI_H
 #define AURORA_WIFI_H
 
@@ -18,10 +14,9 @@
 #define WIFI_SHARED_ADDR 0x233B0000u
 #define WIFI_SDIO_BASE   0x10122000u /* logical; = physical 0x1EC22000 */
 
-/* Firmware staging in shared FCRAM (past the 10 MB audio PCM buffer that ends at
- * 0x23E00000, before the app-launch stage at 0x24000000). The ARM9 loads the
- * copyright NWM blobs from SD into these slots and the ARM11 uploads them over
- * BMI. The blobs are Nintendo copyright: SD-loaded at runtime, never embedded. */
+/* Firmware staging in shared FCRAM, between the audio PCM buffer (ends
+ * 0x23E00000) and the app-launch stage (0x24000000). The blobs are Nintendo
+ * copyright: loaded from SD at runtime, never embedded. */
 #define WIFI_FW_ADDR      0x23E00000u
 #define WIFI_FW_MAGIC     0x46574631u /* "1FWF": ARM9 staged all four blobs */
 #define WIFI_FW_STUBDATA (WIFI_FW_ADDR + 0x00001000u)
@@ -132,8 +127,8 @@ enum {
   WIFI_BOOT_DONE,   /* BMIDone issued, polled the ready flag */
 };
 
-void wifi_probe(void);          /* trigger the ARM11 SDIO/BMI probe */
-void wifi_boot(void);           /* trigger the ARM11 firmware upload + boot */
-void wifi_get(WifiShared *out); /* read results (invalidates cache first) */
+void wifi_probe(void);
+void wifi_boot(void);
+void wifi_get(WifiShared *out); /* Invalidates the cache first. */
 
-#endif /* AURORA_WIFI_H */
+#endif

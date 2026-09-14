@@ -22,28 +22,36 @@
 #define BUTTON_X            (1 << 10)
 #define BUTTON_Y            (1 << 11)
 
+#define AURORA_VERSION "Beta v0.1.0"
+
 #define REG_SDMMC_BASE      0x10006000
 
 #define REG_LCD_TOP_CFG     (*(volatile uint32_t *)0x10400400)
 #define REG_LCD_BOT_CFG     (*(volatile uint32_t *)0x10400500)
 
-/* The physical framebuffers the LCD controller scans out. Drawing code should
- * use VRAM_TOP_LA / VRAM_BOT_A below; these are for code that must bypass the
- * backbuffer and reach the panel directly (the crash handler). */
+/* Physical framebuffers. Normal drawing goes through VRAM_TOP_LA / VRAM_BOT_A. */
 #define VRAM_TOP_PHYS       ((volatile uint8_t *)0x18300000)
 #define VRAM_BOT_PHYS       ((volatile uint8_t *)0x18346500)
 
-/* Backbuffers in cached FCRAM. VRAM is uncached from the ARM9, so rasterising
- * straight into it costs thousands of uncached byte stores per screen; drawing
- * into FCRAM and moving the result in one GPU blit is far cheaper. Placed clear
- * of the Wi-Fi firmware slots (which end by 0x23E70000) and the app-launch
- * staging area at 0x24000000. */
+/* Backbuffers in cached FCRAM, clear of the Wi-Fi firmware slots (which end by
+ * 0x23E70000) and the app-launch staging area at 0x24000000. */
 #define VRAM_TOP_BACK       ((volatile uint8_t *)0x23E80000)
 #define VRAM_BOT_BACK       ((volatile uint8_t *)0x23F00000)
 
-/* The current draw targets. These start out pointing at the physical
- * framebuffers, so code that never calls screen_use_backbuffer() behaves
- * exactly as before; screen_use_backbuffer(1) redirects them to FCRAM. */
+/* Current draw targets: the physical framebuffers until
+ * screen_use_backbuffer(1) redirects them to FCRAM. */
+/* Set while an async blit may still read a backbuffer; drawing into that buffer
+ * waits for it first. */
+extern volatile uint8_t *g_blit_src;
+extern void (*g_screen_wait)(void);
+static inline void screen_touch(volatile uint8_t *fb) {
+  if (g_blit_src == fb) {
+    g_blit_src = 0;
+    if (g_screen_wait)
+      g_screen_wait();
+  }
+}
+
 extern volatile uint8_t *g_fb_top;
 extern volatile uint8_t *g_fb_bot;
 #define VRAM_TOP_LA         (g_fb_top)
@@ -95,17 +103,18 @@ typedef struct {
 #define COLOR_LIGHT_GRAY  ((Color){0xA0, 0xA0, 0xA0})
 #define COLOR_BG_DARK     ((Color){0x10, 0x10, 0x20})
 
-/* Home Menu palette (sampled from the mockups). */
-#define COLOR_HM_BG        ((Color){0x16, 0x16, 0x16})  /* top-screen background */
-#define COLOR_HM_FACET     ((Color){0x24, 0x24, 0x24})  /* faint faceted lines   */
-#define COLOR_HM_BAR       ((Color){0x0C, 0x0C, 0x0C})  /* status / top bar      */
-#define COLOR_HM_CARD      ((Color){0x08, 0x08, 0x08})  /* info card             */
-#define COLOR_HM_SLOT      ((Color){0x2A, 0x2A, 0x2A})  /* app slot              */
-#define COLOR_HM_SLOT_EMPTY ((Color){0x1B, 0x1B, 0x1B}) /* empty app slot        */
-#define COLOR_HM_TEXT2     ((Color){0x9A, 0x9A, 0x9A})  /* secondary text        */
+#define COLOR_HM_BG        ((Color){0x16, 0x16, 0x16})
+#define COLOR_HM_FACET     ((Color){0x24, 0x24, 0x24})
+#define COLOR_HM_BAR       ((Color){0x0C, 0x0C, 0x0C})
+#define COLOR_HM_CARD      ((Color){0x08, 0x08, 0x08})
+#define COLOR_HM_SLOT      ((Color){0x2A, 0x2A, 0x2A})
+#define COLOR_HM_SLOT_EMPTY ((Color){0x1B, 0x1B, 0x1B})
+#define COLOR_HM_TEXT2     ((Color){0x9A, 0x9A, 0x9A})
 
-/* Shaded pairs. Panels are filled top-to-bottom between these rather than
- * flat, which is what stops large areas reading as plastic. */
+/* Card colours for the info card and dialogs (icons/diolog-box.png). */
+#define COLOR_PANEL_TOP    ((Color){0x45, 0x45, 0x49})
+#define COLOR_PANEL_BOT    ((Color){0x39, 0x39, 0x3D})
+
 #define COLOR_HM_BG_TOP    ((Color){0x1F, 0x1F, 0x24})
 #define COLOR_HM_BG_BOT    ((Color){0x0E, 0x0E, 0x12})
 #define COLOR_HM_SLOT_TOP  ((Color){0x36, 0x36, 0x3C})
@@ -124,11 +133,9 @@ void screen_present_bottom(void);
  * With backbuffers on, nothing reaches the panel until screen_present_*(). */
 void screen_use_backbuffer(int on);
 
-/* Blit hook used to present a backbuffer: (src, dst, byte count) -> non-zero on
- * success. The OS points this at gpu_texcopy() once the GPU is up; when it is
- * NULL (the FIRM payload, or before the ARM11 core starts) the present falls
- * back to a CPU copy. screen.c is linked into both builds, so this must stay a
- * hook rather than a direct call into the GPU driver. */
+/* Present hook: (src, dst, bytes) -> non-zero on success. NULL falls back to a
+ * CPU copy. A hook rather than a call because screen.c is also linked into the
+ * firm, which has no GPU driver. */
 extern int (*g_screen_blit)(u32 src, u32 dst, u32 len);
 void clear_screen(volatile u8 *fb, u32 fb_size, Color color);
 void draw_pixel(volatile u8 *fb, int x, int y, int screen_height, Color color);
@@ -140,25 +147,41 @@ void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h, int screen_he
 
 /* Blend `color` into the pixel already there. alpha is 0..256. The anti-aliased
  * primitives below are built on this. */
+void draw_filled_rect_alpha(volatile u8 *fb, int x, int y, int w, int h,
+                            int screen_height, Color color, int alpha);
 void draw_pixel_alpha(volatile u8 *fb, int x, int y, int screen_height,
                       Color color, int alpha);
 
-/* Vertical gradient from `top` to `bottom`. */
 void draw_vgradient(volatile u8 *fb, int x, int y, int w, int h,
                     int screen_height, Color top, Color bottom);
 
-/* Rounded rect filled with a vertical gradient, corners anti-aliased. */
 void draw_gradient_round_rect(volatile u8 *fb, int x, int y, int w, int h,
                               int radius, int screen_height, Color top,
                               Color bottom);
 
-/* Text drawn at `scale` times size with smoothed edges, over whatever is
- * already there. Use draw_string for 1:1 text, which is crisp as-is. */
+/* Text drawn at `scale` times size with smoothed edges. */
 void draw_string_scaled(volatile u8 *fb, int x, int y, int screen_height,
                         const char *str, Color color, int scale);
 void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h, int radius, int screen_height, Color color);
 void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height, const unsigned char *icon_bits, Color color);
 void draw_icon_scaled(volatile u8 *fb, int x, int y, int screen_height, const unsigned char *icon_bits, Color color, int scale);
+
+/* Pack art and text. Declared with opaque struct pointers so aurora.h does not
+ * have to pull in assets.h; callers that draw assets include it themselves. */
+struct Asset;
+struct Font;
+void draw_asset(volatile u8 *fb, int x, int y, int screen_height,
+                const struct Asset *a, Color tint);
+int draw_asset_boxed(volatile u8 *fb, int bx, int by, int bw, int bh,
+                     int screen_height, uint32_t id, Color tint);
+int text_width(const struct Font *f, const char *s);
+int text_line_height(const struct Font *f);
+int text_ascent(const struct Font *f);
+void draw_text(volatile u8 *fb, int x, int baseline, int screen_height,
+               const char *s, Color color, const struct Font *f);
+void draw_text_centered(volatile u8 *fb, int cx, int baseline,
+                        int screen_height, const char *s, Color color,
+                        const struct Font *f);
 
 void console_init(void);
 void console_print(const char *str);

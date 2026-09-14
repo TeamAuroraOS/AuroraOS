@@ -39,4 +39,4 @@ void boot_aurora(void);
 /* ARM9 cache-flush + branch stub. */
 void aurora_jump_arm9(uint32_t entry);
 
-#endif /* AURORA_LOADER_H */
+#endif

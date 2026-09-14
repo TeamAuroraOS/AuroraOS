@@ -7,10 +7,10 @@
 typedef volatile u16 vu16;
 typedef volatile u32 vu32;
 
-/* SD/MMC controller 1 (the physical SD card slot). From GodMode9 */
+/* SD/MMC controller 1 (the SD slot). Register layout and helpers from GodMode9. */
 #define SDMMC_BASE        (0x10006000)
 
-/* 16-bit register offsets from SDMMC_BASE. From GodMode9 */
+/* 16-bit register offsets from SDMMC_BASE. */
 #define REG_SDCMD         (0x00)
 #define REG_SDPORTSEL     (0x02)
 #define REG_SDCMDARG0     (0x04)
@@ -40,7 +40,7 @@ typedef volatile u32 vu32;
 #define REG_SDBLKCOUNT32  (0x108)
 #define REG_SDFIFO32      (0x10C)
 
-/* TMIO status-register bits. From GodMode9 */
+/* TMIO status-register bits. */
 #define TMIO_STAT0_CMDRESPEND     (0x0001)
 #define TMIO_STAT0_DATAEND        (0x0004)
 #define TMIO_STAT0_CARD_REMOVE    (0x0008)
@@ -61,13 +61,13 @@ typedef volatile u32 vu32;
 
 #define TMIO_MASK_ALL             (0x837F031D)
 
-/* "Got worse": any error bit that aborts a command. From GodMode9 */
+/* Any error bit that aborts a command. */
 #define TMIO_MASK_GW (TMIO_STAT1_ILL_ACCESS | TMIO_STAT1_CMDTIMEOUT | \
                       TMIO_STAT1_TXUNDERRUN | TMIO_STAT1_RXOVERFLOW | \
                       TMIO_STAT1_DATATIMEOUT | TMIO_STAT1_STOPBIT_ERR | \
                       TMIO_STAT1_CRCFAIL | TMIO_STAT1_CMD_IDX_ERR)
 
-/* SD controller context. Layout from GodMode9's mmcdevice. */
+/* SD controller context, laid out like GodMode9's mmcdevice. */
 typedef struct mmcdevice {
     u8       *rData;
     const u8 *tData;
@@ -99,7 +99,6 @@ int sdmmc_sdcard_writesectors(u32 sector_no, u32 numsectors, const u8 *in);
 /* Total capacity of the SD card in 512-byte sectors (valid after init). */
 u32 sdmmc_sdcard_size(void);
 
-/* --- MMIO helpers (from GodMode9 sdmmc.h) --- */
 static inline u16 sdmmc_read16(u16 reg) {
     return *(volatile u16 *)(SDMMC_BASE + reg);
 }
@@ -119,4 +118,4 @@ static inline void sdmmc_mask16(u16 reg, u16 clear, u16 set) {
     sdmmc_write16(reg, val);
 }
 
-#endif /* AURORA_SDMMC_H */
+#endif

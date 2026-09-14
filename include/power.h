@@ -3,10 +3,7 @@
 
 #include <stdint.h>
 
-/* MCU real-time clock and battery state.
- *
- * The management MCU (I2C device 3, address 0x4A) carries the console's RTC and
- * battery gauge. Call I2C_init() once before using anything here. */
+/* RTC and battery through the MCU (I2C device 3). Call I2C_init() first. */
 
 typedef struct {
   int year;  /* full year, e.g. 2026 */
@@ -37,4 +34,4 @@ int battery_charging(void);
 /* Raw MCU power-status register, for diagnosing the charging bit. */
 int power_status_raw(void);
 
-#endif /* AURORA_POWER_H */
+#endif

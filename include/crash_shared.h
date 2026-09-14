@@ -1,14 +1,8 @@
-/*
- * Cross-core crash hand-off (ARM9 <-> ARM11).
+/* Cross-core crash block: the ARM11 fault stub fills it and sets the magic
+ * last; the ARM9 polls the magic and shows the crash screen.
  *
- * The ARM11 audio core has no screen/power access, so when it faults its
- * exception stub fills this block in shared FCRAM and sets the magic; the ARM9
- * polls the magic (in get_keys_down) and shows the crash screen on its behalf.
- *
- * Field offsets are relied on by the ARM11 asm stubs in audio11_start.s, keep
- * them in sync (magic 0, cpu 4, core 8, r[0] 12, pc 64, cpsr 68, exc 72,
- * dfsr 76, dfar 80).
- */
+ * audio11_start.s hard-codes the offsets (magic 0, cpu 4, core 8, r[0] 12, pc
+ * 64, cpsr 68, exc 72, dfsr 76, dfar 80). */
 #ifndef AURORA_CRASH_SHARED_H
 #define AURORA_CRASH_SHARED_H
 

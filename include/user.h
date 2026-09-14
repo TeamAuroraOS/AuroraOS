@@ -10,7 +10,6 @@
 #define USER_DAT_SIZE     64        /* fixed on-disk record size            */
 #define USER_NAME_MAX     24        /* incl. NUL terminator                 */
 
-/* Languages offered on the first setup screen. */
 enum {
   LANG_ENGLISH = 0,
   LANG_ESPANOL = 1,
@@ -31,25 +30,21 @@ typedef struct {
   char name[USER_NAME_MAX];
 } UserConfig;
 
-/* Fill cfg with sane defaults (English, Aurora accent, not set up). */
 void user_config_defaults(UserConfig *cfg);
 
-/* Load SD:\Aurora\USER.dat. Returns 1 and fills cfg when the file exists and
- * begins with the "ADAT" magic; returns 0 otherwise (cfg is set to defaults). */
+/* Returns 1 when SD:\Aurora\USER.dat exists and starts with "ADAT"; otherwise
+ * 0, with cfg set to defaults. */
 int  user_config_load(UserConfig *cfg);
 
-/* Serialise cfg (stamping the "ADAT" magic) to SD:\Aurora\USER.dat.
- * Returns 1 on success, 0 on any SD / FatFs error. */
+/* Returns 1 on success, 0 on any SD / FatFs error. */
 int  user_config_save(const UserConfig *cfg);
 
-/* Run the first-time setup wizard on both screens, filling cfg with the user's
- * selections. Returns once the user reaches the final Welcome screen. */
+/* Returns once the user reaches the final Welcome screen. */
 void setup_run(UserConfig *cfg);
 
-/* Shared accent palette (defined in os_setup.c). Index 0 is Aurora teal, the
- * default. Used by both the setup Personalise screen and the Settings menu. */
+/* Defined in os_setup.c. Index 0, Aurora teal, is the default. */
 #define AURORA_ACCENT_COUNT 14
 extern const Color aurora_accent_presets[AURORA_ACCENT_COUNT];
 extern const char *aurora_accent_names[AURORA_ACCENT_COUNT];
 
-#endif /* AURORA_USER_H */
+#endif

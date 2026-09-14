@@ -1,11 +1,5 @@
-/*
- * Audio: the ARM9 <-> ARM11 shared contract.
- *
- * The sound hardware is on the ARM11, the OS is on the ARM9, so the ARM9 posts
- * commands into a block in shared FCRAM and the ARM11 core services them.
- * See docs/audio.md; the CSND register layout in particular is not what the
- * obvious reference implies.
- */
+/* ARM9 <-> ARM11 audio contract: the ARM9 posts commands into a shared FCRAM
+ * block and the ARM11 core services them. See docs/audio.md. */
 #ifndef AURORA_AUDIO_H
 #define AURORA_AUDIO_H
 
@@ -22,14 +16,12 @@
 
 /* FCRAM survives a warm reboot, so a stale core keeps running unless the
  * console is fully powered off. Bump this whenever the core changes. */
-#define AUDIO_CORE_VERSION 79
+#define AUDIO_CORE_VERSION 82
 
 #define AUDIO_PCM_MAX (10u * 1024u * 1024u) /* longer tracks are truncated */
 
-/* The crash beep, rendered once at boot so that playing it costs nothing but
- * starting a CSND channel. The ARM11 fault stub starts it from a faulted
- * context with no usable stack, and CSND keeps playing after that core stops.
- * audio11_start.s hard-codes these values, so change both together. */
+/* Crash beep, rendered at boot so the ARM11 fault stub can start it without a
+ * stack. audio11_start.s hard-codes these values; change both together. */
 #define AUDIO_ERR_ADDR    0x233D0000u /* clear of GpuShared and the PCM buffer */
 #define AUDIO_ERR_RATE    8000u
 #define AUDIO_ERR_FREQ    880u
@@ -48,6 +40,10 @@ enum {
   AUDIO_CMD_WIFI_BOOT = 5, /* upload the SD-staged firmware and boot the chip */
   AUDIO_CMD_GPU = 6,       /* params and results in GpuShared                 */
   AUDIO_CMD_ERROR = 7,     /* the three-beep crash tone                       */
+  AUDIO_CMD_N3DS  = 8,     /* arg0 = CLKCNT mode to request; see n3ds_*       */
+  AUDIO_CMD_VOICE = 9,     /* arg0 = voice | flags, arg1 = address,           */
+                           /* arg2 = bytes, arg3 = rate; see AUDIO_VOICE_*    */
+  AUDIO_CMD_VOICE_STOP = 10, /* arg0 = bit mask of the voices to stop       */
 };
 
 enum {
@@ -84,9 +80,40 @@ typedef struct {
   volatile uint32_t diag5;
   volatile uint32_t diag6;
   volatile uint32_t diag7;
+  /* CFG11_SOCINFO, read once by the ARM11; the ARM9 cannot read that register. */
+  volatile uint32_t socinfo;
+  /* AUDIO_CMD_N3DS: CFG11_MPCORE_CLKCNT as read before and after the attempt,
+   * and the AUDIO_N3DS_* outcome. */
+  volatile uint32_t n3ds_before;
+  volatile uint32_t n3ds_after;
+  volatile uint32_t n3ds_status;
 } AudioCtrl;
 
-/* ARM9 side (src/os/Audio9.c). */
+typedef enum {
+  AUDIO_N3DS_PENDING     = 0,
+  AUDIO_N3DS_APPLIED     = 1, /* the requested mode is now current           */
+  AUDIO_N3DS_ALREADY     = 2, /* it already was; nothing was done            */
+  AUDIO_N3DS_REFUSED     = 3, /* woke on the safety timer, mode unchanged    */
+  AUDIO_N3DS_UNSUPPORTED = 4, /* SOCINFO does not allow the requested mode   */
+  AUDIO_N3DS_NO_WAKE     = 5, /* no interrupt reached the core; not tried    */
+} AudioN3dsStatus;
+
+/* Voices: sounds an app plays, each on its own CSND channel (1..AUDIO_VOICES),
+ * so music and effects overlap. Channel 0 stays with the OS's tone, PCM and
+ * crash beep. The samples are read in place, so they must be in physical RAM
+ * (flushed from the ARM9 cache) and stay put while the voice plays.
+ *
+ * AUDIO_CMD_VOICE arg0: bits 0-7 the voice, or AUDIO_VOICE_ANY for whichever
+ * of voices 1..7 is free (voice 0 is never picked, so a caller can keep it for
+ * music); bit 8 loop; bit 9 16-bit samples (else 8-bit); bits 16-31 volume,
+ * 0x8000 being full. Samples are signed mono. */
+#define AUDIO_VOICES        8u
+#define AUDIO_VOICE_ANY     0xFFu
+#define AUDIO_VOICE_ALL     0xFFu /* AUDIO_CMD_VOICE_STOP: every voice */
+#define AUDIO_VOICE_LOOP    (1u << 8)
+#define AUDIO_VOICE_PCM16   (1u << 9)
+#define AUDIO_VOICE_VOL(v)  (((v) & 0xFFFFu) << 16)
+#define AUDIO_VOICE_VERSION 82 /* the first core that understands voices */
 
 /* Copies the core into place and wakes the ARM11. Idempotent, and blocks
  * briefly for the handshake. */
@@ -109,4 +136,7 @@ void audio_error_beep(void);
  * AUDIO_PCM_MAX. depth is 8 or 16. */
 void audio_play_pcm(uint32_t samples, uint32_t rate, uint32_t depth);
 
-#endif /* AURORA_AUDIO_H */
+/* Stops every app voice and waits for the core to take the request. */
+void audio_voices_stop(void);
+
+#endif

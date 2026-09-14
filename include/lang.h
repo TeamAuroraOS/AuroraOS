@@ -37,7 +37,6 @@ typedef enum {
   STR_PRESS_A_START,
   STR_B_BACK,
 
-  /* Home Menu / Settings */
   STR_SETTINGS,
   STR_WIFI,
   STR_ACCENT_COLOR,
@@ -58,13 +57,21 @@ typedef enum {
   STR_WIFI_TEST,
   STR_GPU_TEST,
 
+  STR_VERSION,
+  STR_CONSOLE,
+  STR_BATTERY,
+  STR_SD_CARD,
+  STR_LICENSE,
+  STR_CHARGING,
+  STR_FREE,
+  STR_NO_CARD,
+
   STR_COUNT
 } StringId;
 
 /* Active language (a LANG_* value). Set from cfg->language. */
 extern int g_lang;
 
-/* Look up a localized string for the active language. */
 const char *L(StringId id);
 
-#endif /* AURORA_LANG_H */
+#endif
