@@ -2,7 +2,6 @@
 
 static mmcdevice handleSD;
 
-/* Coarse millisecond wait, enough for the controller polling loops. */
 static void sdmmc_wait_ms(u32 ms) {
     while (ms--)
         delay(40000);
@@ -26,7 +25,6 @@ static void set_target(mmcdevice *ctx) {
         sdmmc_mask16(REG_SDOPT, 0x8000, 0); /* 4-bit bus */
 }
 
-/* Send an SD command and copy any read/write data through the FIFO. */
 static void sdmmc_send_command(mmcdevice *ctx, u32 cmd, u32 args) {
     const bool getSDRESP = (cmd << 15) >> 31;
     u16 flags = (u16)((cmd << 15) >> 31);
@@ -188,10 +186,8 @@ static void sdmmc_controller_init(void) {
     *(vu16 *)0x10006008 = 0;   /* SDSTOP */
 }
 
-/* from GodMode9 sdmmc.c (SD_Init). Runs the SD identification/selection flow:
-   CMD0 -> CMD8 -> ACMD41 loop -> CMD2 -> CMD3 -> CMD9 -> CMD7 -> ACMD6 ->
-   (optional CMD6 high-speed) -> CMD13 -> CMD16. Returns 0 on success, negative
-   at the stage that failed. */
+/* From GodMode9 sdmmc.c (SD_Init). Returns 0 on success, negative at the stage
+ * that failed. */
 static int SD_Init(void) {
     handleSD.isSDHC = 0;
     handleSD.SDOPT = 0;
@@ -294,8 +290,8 @@ int sdmmc_sdcard_readsector(u32 sector_no, u8 *out) {
 }
 
 int sdmmc_sdcard_writesectors(u32 sector_no, u32 numsectors, const u8 *in) {
-    /* Mirror of readsectors using CMD25 WRITE_MULTIPLE_BLOCK. Non-SDHC cards
-       are byte-addressed, SDHC cards are sector-addressed. From GodMode9. */
+    /* CMD25; non-SDHC cards are byte-addressed, SDHC cards sector-addressed.
+     * From GodMode9. */
     if (handleSD.isSDHC == 0)
         sector_no <<= 9;
     set_target(&handleSD);

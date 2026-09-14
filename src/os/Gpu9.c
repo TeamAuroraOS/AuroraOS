@@ -1,20 +1,20 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * PICA200 GPU, ARM9 side. The registers are ARM11 I/O, so every operation is
- * posted to Gpu11.c and answered in GpuShared. Each call blocks, bounded,
+/* PICA200 GPU, ARM9 side: posts operations to Gpu11.c and blocks, bounded,
  * until the ARM11 bumps the sequence counter.
  *
- * LICENSE: GPL-2.0, not GPL-3.0 like the rest of AuroraOS. See docs/gpu.md.
- */
+ * LICENSE: GPL-2.0, not GPL-3.0 like the rest of AuroraOS. See docs/gpu.md. */
 #include "aurora.h"
 #include "audio.h"
 #include "gpu.h"
 
 extern void os_cache_sync(void);
+/* Clean without invalidating: the GPU needs the pixels written back, and
+ * emptying the I-cache on every operation leaves the drawing code running cold. */
+extern void os_dcache_clean(void);
+extern void os_dcache_clean_range(const void *addr, u32 len);
 
-/* Invalidate one cache line so a poll sees the ARM11's latest write. A full
- * clean+invalidate would work but costs the whole 4 KB cache, and this runs in
- * the completion spin. */
+/* One line, so a poll sees the ARM11's latest write without flushing the whole
+ * cache. */
 static inline void inval_line(const volatile void *p) {
   __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(p) : "memory");
 }
@@ -23,7 +23,7 @@ static AudioCtrl *const ctrl = (AudioCtrl *)AUDIO_CTRL_ADDR;
 static GpuShared *const gs = (GpuShared *)GPU_SHARED_ADDR;
 
 int gpu_alive(void) {
-  os_cache_sync();
+  inval_line(&gs->magic);
   return gs->magic == GPU_MAGIC;
 }
 
@@ -35,34 +35,55 @@ void gpu_get(GpuShared *out) {
     d[i] = s[i];
 }
 
-/* Post the operation already staged in the shared block and wait for the ARM11
- * to finish it. Returns 1 if the operation completed without an error code. */
-static int gpu_run(void) {
-  os_cache_sync();
-  u32 last = gs->seq;
+/* Sequence number of the operation posted but not yet waited on, and whether
+ * one is outstanding at all. */
+static u32 pending_seq;
+static int pending;
+
+/* The parameters must reach RAM before the counter, or the ARM11 can act on a
+ * stale op. A whole-cache clean writes lines in index order, so the two are
+ * cleaned separately. */
+static void gpu_post(void) {
+  os_dcache_clean();                            /* pixels and gs parameters */
+  /* seq is written by the ARM11; without invalidating its line, a stale value
+   * passes the first completion check. */
+  inval_line(&gs->seq);
+  pending_seq = gs->seq;
 
   ctrl->cmd = AUDIO_CMD_GPU;
   ctrl->cmd_seq = ctrl->cmd_seq + 1;
-  os_cache_sync(); /* publish the command + parameters to the ARM11 */
+  os_dcache_clean_range(ctrl, sizeof(*ctrl));   /* then the command itself */
+  pending = 1;
+}
 
-  /* Spin on the sequence counter rather than sleeping between checks. The
-   * engines finish in tens of microseconds, so a delay here set the floor on
-   * what a GPU operation costs and made small ones pointless to offload. The
-   * bound only exists so a wedged GPU or a dead ARM11 core cannot hang the OS. */
+/* Spins rather than sleeps: the engines finish in tens of microseconds. The
+ * bound only stops a dead core from hanging the OS. */
+static int gpu_collect(void) {
+  if (!pending)
+    return 1;
   for (u32 spin = 0; spin < 4000000u; spin++) {
     inval_line(&gs->seq);
-    if (gs->seq != last)
+    if (gs->seq != pending_seq) {
+      pending = 0;
       return gs->err == GPU_ERR_NONE;
+    }
   }
+  pending = 0;
   return 0;
+}
+
+void gpu_wait_idle(void) { (void)gpu_collect(); }
+
+static int gpu_run(void) {
+  gpu_collect(); /* only one operation fits in the shared block */
+  gpu_post();
+  return gpu_collect();
 }
 
 int gpu_init(void) {
   os_cache_sync();
-  /* FCRAM survives a warm reboot and holds garbage on a cold one, so clear the
-   * whole block here rather than trusting any field, in particular `ready`,
-   * which gates every other operation. gpu_init() is required first, so this is
-   * the one place that can safely wipe it. */
+  /* FCRAM holds garbage on a cold boot and survives a warm one, so the whole
+   * block is cleared, including `ready`, which gates every other op. */
   volatile unsigned char *d = (volatile unsigned char *)GPU_SHARED_ADDR;
   for (unsigned i = 0; i < sizeof(GpuShared); i++)
     d[i] = 0;
@@ -87,12 +108,25 @@ int gpu_clear_fb(u32 fb_addr, u32 fb_size, u32 rgb24) {
 }
 
 int gpu_texcopy(u32 src, u32 dst, u32 len) {
-  os_cache_sync();
   gs->op = GPU_OP_TEXCOPY;
   gs->xf_src = src;
   gs->xf_dst = dst;
   gs->xf_len = len;
   return gpu_run();
+}
+
+/* Returns without waiting. Draw into the source buffer again only after
+ * gpu_wait_idle(). */
+int gpu_texcopy_async(u32 src, u32 dst, u32 len) {
+  if (!gpu_alive())
+    return 0;
+  gpu_collect(); /* the shared block holds one operation at a time */
+  gs->op = GPU_OP_TEXCOPY;
+  gs->xf_src = src;
+  gs->xf_dst = dst;
+  gs->xf_len = len;
+  gpu_post();
+  return 1;
 }
 
 int gpu_transfer(u32 src, u32 dst, u32 src_w, u32 src_h, u32 dst_w, u32 dst_h,

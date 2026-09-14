@@ -1,18 +1,11 @@
-/*
- * Audio, ARM11 side: the analog output path and the CSND mixer. The codec bus
- * itself is Codec11.c, shared with the touchscreen. See docs/audio.md.
+/* Analog output path and CSND mixer (ARM11). The output bring-up is ported from
+ * profi200's libn3ds (source/arm11/drivers/{codec,i2s}.c).
  *
- * The output bring-up is ported from profi200's libn3ds
- * (source/arm11/drivers/{codec,i2s}.c).
- *
- * Not done here, and untested as a result: calibration values normally come
- * from the console's HWCAL block, so neutral defaults are used; headphone-jack
- * detection is skipped and output forced to the speaker; no EQ upload; no
- * per-unit depop pulsing.
- */
+ * Not implemented: HWCAL calibration (neutral defaults are used), headphone
+ * detection (output is forced to the speaker), EQ upload and depop pulsing. */
 #include "core11.h"
 
-/* ---- codec registers (page<<8 | offset), from libn3ds codec_regmap.h ---- */
+/* Codec registers (page<<8 | offset), from libn3ds codec_regmap.h. */
 #define CDC_0_2      ((0u << 8) | 2u)
 #define CDC_0_3      ((0u << 8) | 3u)
 #define CDC_GPI_PIN  ((0u << 8) | 57u)  /* GPI1_GPI2_PIN_CTRL */
@@ -57,18 +50,14 @@ static void power_on_dac(void) {
   }
 }
 
-/* Full analog-output bring-up. Sets status via the caller. */
 static void codec_init(void) {
-  /* The bus and the chip reset are Codec11.c's job; this is the analog
-   * output path only. */
-
   cdc_write(CDC_100_67, 0x11);
   cdc_mask(CDC_101_119, 1, 1);
   cdc_mask(CDC_GPI_PIN, 0x66, 0x66);
   cdc_write(CDC_101_122, 1);        /* VREF */
   cdc_mask(CDC_100_34, 0x18, 0x18); /* PLL  */
 
-  /* Headset: force the speaker path (skip headphone-jack GPIO detection). */
+  /* Force the speaker path; headphone detection is skipped. */
   cdc_mask(CDC_HEADSET, 0x20, 0x30); /* HP_EN set, HP-select clear */
   cdc_mask(CDC_100_67, 0x00, 0x80);
   cdc_mask(CDC_100_67, 0x80, 0x80);
@@ -114,13 +103,11 @@ static void codec_init(void) {
 }
 
 
-/* CSND audio (GBATEK) */
 /* CSND master control (0x10103000, u32): bits0-15 vol, bit16 mute (0=on),
  * bit30 = normal, bit31 = allow channel writes (required before ch start). */
 #define CSND_MAIN     0x10103000u
 #define CSND_MAIN_VAL (0x8000u | (1u << 30) | (1u << 31))
 
-/* Channel blocks: 0x10103400 + n*0x20. */
 #define CSND_CH(n)      (0x10103400u + (uint32_t)(n) * 0x20u)
 #define CSND_CH_CNT(n)  (CSND_CH(n) + 0x00) /* u16: flags, bit15 = start      */
 #define CSND_CH_TIMER(n) (CSND_CH(n) + 0x02) /* u16 write-only: period reload  */
@@ -129,10 +116,9 @@ static void codec_init(void) {
 #define CSND_CH_SIZE(n) (CSND_CH(n) + 0x10) /* u32: total size in BYTES          */
 #define CSND_CH_LOOP(n) (CSND_CH(n) + 0x14) /* u32: loop restart phys addr       */
 
-/* Control is 16-bit, and the reload beside it is write-only and holds the
- * two's complement of the period. libctru's `timer << 16` packing is its
- * service's argument format, not a register image, so writing it here loses
- * the divider in a discarded upper half. docs/audio.md has the full story. */
+/* The control register is 16-bit; the reload beside it is write-only and holds
+ * the two's complement of the period. libctru's `timer << 16` is its service's
+ * argument format, not a register image (docs/audio.md). */
 #define CH_LINEAR_INTERP  (1u << 6)  /* resample smoothly instead of nearest  */
 #define CH_REPEAT_LOOP    (1u << 10) /* loop mode 1 = loop infinite           */
 #define CH_REPEAT_ONESHOT (2u << 10) /* loop mode 2 = one-shot                */
@@ -159,34 +145,61 @@ static void csnd_init(void) {
   MMIO32(CSND_MAIN) = CSND_MAIN_VAL;
   dsb();
 }
-static void csnd_stop(void) {
-  MMIO16(CSND_CH_CNT(0)) = 0;
+static void csnd_stop_ch(uint32_t ch) {
+  MMIO16(CSND_CH_CNT(ch)) = 0;
   dsb();
 }
-/* Play `bytes` of PCM at `phys`. fmt = CH_FORMAT_PCM16 (16-bit) or 0 (8-bit);
- * loop != 0 loops forever, else one-shot. */
-static void csnd_play(uint32_t phys, uint32_t bytes, uint32_t rate, uint32_t fmt,
-                      int loop) {
+static void csnd_stop(void) { csnd_stop_ch(0); }
+
+/* Play `bytes` of PCM at `phys` on channel `ch`. fmt = CH_FORMAT_PCM16 (16-bit)
+ * or 0 (8-bit); loop != 0 loops forever, else one-shot; vol 0x8000 is full. */
+static void csnd_play_ch(uint32_t ch, uint32_t phys, uint32_t bytes,
+                         uint32_t rate, uint32_t fmt, int loop, uint32_t vol) {
   uint32_t timer = csnd_timer(rate);
   uint32_t reload = (0x10000u - timer) & 0xFFFFu;
 
-  csnd_stop();
-  MMIO32(CSND_CH_VOL(0)) = 0x80008000u; /* full L + R */
-  MMIO32(CSND_CH_SAD(0)) = phys;
-  MMIO32(CSND_CH_SIZE(0)) = bytes;
-  MMIO32(CSND_CH_LOOP(0)) = phys;
+  csnd_stop_ch(ch);
+  MMIO32(CSND_CH_VOL(ch)) = (vol << 16) | vol; /* L and R alike */
+  MMIO32(CSND_CH_SAD(ch)) = phys;
+  MMIO32(CSND_CH_SIZE(ch)) = bytes;
+  MMIO32(CSND_CH_LOOP(ch)) = phys;
   /* The reload must be in place before the start bit, or the channel begins on
    * whatever the previous sound left there. */
-  MMIO16(CSND_CH_TIMER(0)) = (uint16_t)reload;
+  MMIO16(CSND_CH_TIMER(ch)) = (uint16_t)reload;
   dsb();
-  MMIO16(CSND_CH_CNT(0)) = (uint16_t)(CH_START | CH_ENABLE | CH_LINEAR_INTERP |
-                                      fmt |
-                                      (loop ? CH_REPEAT_LOOP
-                                            : CH_REPEAT_ONESHOT));
+  MMIO16(CSND_CH_CNT(ch)) = (uint16_t)(CH_START | CH_ENABLE | CH_LINEAR_INTERP |
+                                       fmt |
+                                       (loop ? CH_REPEAT_LOOP
+                                             : CH_REPEAT_ONESHOT));
   dsb();
 }
 
-/* Fill the PCM buffer with a square-wave tone; return the sample count. */
+static void csnd_play(uint32_t phys, uint32_t bytes, uint32_t rate, uint32_t fmt,
+                      int loop) {
+  csnd_play_ch(0, phys, bytes, rate, fmt, loop, 0x8000u);
+}
+
+/* Voice v is CSND channel v + 1; channel 0 belongs to the OS. */
+#define VOICE_CH(v) ((v) + 1u)
+
+/* AUDIO_VOICE_ANY: the next of voices 1..7 whose channel reads idle, else
+ * simply the next. Whether the start bit clears when a one-shot ends is
+ * unverified; if it does not, this is plain round-robin. */
+static uint32_t voice_next = 1;
+
+static uint32_t voice_pick(void) {
+  for (uint32_t i = 0; i < AUDIO_VOICES - 1u; i++) {
+    uint32_t v = 1u + (voice_next - 1u + i) % (AUDIO_VOICES - 1u);
+    if (!(MMIO16(CSND_CH_CNT(VOICE_CH(v))) & CH_START)) {
+      voice_next = 1u + v % (AUDIO_VOICES - 1u);
+      return v;
+    }
+  }
+  uint32_t v = voice_next;
+  voice_next = 1u + v % (AUDIO_VOICES - 1u);
+  return v;
+}
+
 static uint32_t gen_tone(uint32_t freq, uint32_t rate) {
   const uint32_t N = 16000;
   const int16_t amp = 0x2800;
@@ -202,9 +215,8 @@ static uint32_t gen_tone(uint32_t freq, uint32_t rate) {
 }
 
 
-/* Render the crash beep: three tones separated by silence, as one buffer that
- * can be played with a single channel start. Done at boot so the fault path
- * never has to build it. */
+/* The crash beep as one buffer, rendered at boot so the fault path never has to
+ * build it. */
 static void audio11_error_prepare(void) {
   int16_t *buf = (int16_t *)AUDIO_ERR_ADDR;
   const int16_t amp = 0x3000;
@@ -248,7 +260,6 @@ void audio11_init(AudioCtrl *ct) {
   dcache_clean();
 }
 
-/* Handle one audio command; returns 1 if it was one of ours. */
 int audio11_command(AudioCtrl *ct, uint32_t cmd, uint32_t arg0) {
   if (cmd == AUDIO_CMD_TONE) {
     uint32_t n = gen_tone(arg0 ? arg0 : 440, TONE_RATE);
@@ -268,6 +279,21 @@ int audio11_command(AudioCtrl *ct, uint32_t cmd, uint32_t arg0) {
   } else if (cmd == AUDIO_CMD_STOP) {
     csnd_stop();
     ct->status = AUDIO_ST_IDLE;
+  } else if (cmd == AUDIO_CMD_VOICE) {
+    uint32_t v = arg0 & 0xFFu;
+    uint32_t vol = (arg0 >> 16) & 0xFFFFu;
+    if (v == AUDIO_VOICE_ANY)
+      v = voice_pick();
+    if (!vol || vol > 0x8000u)
+      vol = 0x8000u;
+    if (v < AUDIO_VOICES && ct->arg2 && ct->arg3)
+      csnd_play_ch(VOICE_CH(v), ct->arg1, ct->arg2, ct->arg3,
+                   (arg0 & AUDIO_VOICE_PCM16) ? CH_FORMAT_PCM16 : 0u,
+                   (arg0 & AUDIO_VOICE_LOOP) != 0, vol);
+  } else if (cmd == AUDIO_CMD_VOICE_STOP) {
+    for (uint32_t v = 0; v < AUDIO_VOICES; v++)
+      if (arg0 & (1u << v))
+        csnd_stop_ch(VOICE_CH(v));
   } else {
     return 0;
   }

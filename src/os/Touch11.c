@@ -1,9 +1,5 @@
-/*
- * Touchscreen, read through the CTR codec.
- *
- * Results are published to the ARM9 in the shared block at TOUCH_SHARED_ADDR
- * (include/touch.h); the ARM9 side is Touch9.c.
- */
+/* Touchscreen through the CTR codec, published at TOUCH_SHARED_ADDR for
+ * Touch9.c. */
 #include "core11.h"
 #include "touch.h"
 

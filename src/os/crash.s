@@ -1,13 +1,9 @@
-/*
- * AuroraOS ARM9 exception entry stubs + register capture.
+/* ARM9 exception stubs: snapshot the registers into g_crash_dump, record the
+ * faulting PC and the reason, switch to the crash stack and call
+ * crash_handle().
  *
- * Each vector stub snapshots the pre-exception registers into g_crash_dump,
- * records the faulting PC (adjusted per exception type) and the reason, switches
- * to a private crash stack, and calls crash_handle() (which never returns).
- *
- * Dump layout (must match CrashDump in include/crash.h):
- *   r0-r12 -> offset 0..48, pc -> 52, cpsr -> 56, exc -> 60, dfsr -> 64, dfar 68
- */
+ * Dump layout, which must match CrashDump in include/crash.h:
+ *   r0-r12 0..48, pc 52, cpsr 56, exc 60, dfsr 64, dfar 68 */
 .section .text
 .arm
 .align 2

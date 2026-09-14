@@ -1,10 +1,4 @@
-/*
- * ARM11 audio core entry (AuroraOS).
- *
- * The firm's ARM11 stub (src/arm11_start.s) wakes here via the mailbox after the
- * ARM9 OS copies this core to 0x23000000. Set up the stack, clear .bss, and call
- * the C entry. If it ever returns, wait forever.
- */
+/* ARM11 core entry: set up the stack, clear .bss and call audio11_main. */
 .section .start, "ax"
 .arm
 .align 4
@@ -29,10 +23,9 @@ _audio11_start:
     b       .Lhang
 .pool
 
-/* ---- ARM11 exception stubs -----------------------------------------------
- * On an ARM11 fault, snapshot the state into the cross-core crash block
- * (CrashShared at 0x23380000; see include/crash_shared.h), set the magic last,
- * and hang. The ARM9 polls the magic and draws the crash screen. */
+/* ARM11 exception stubs: snapshot the state into the cross-core crash block
+ * (include/crash_shared.h), set the magic last and hang; the ARM9 draws the
+ * crash screen. */
 .equ CS_BASE, 0x23380000
 
 .global crash_vec_undef11
@@ -103,11 +96,8 @@ crash_post11:                     @ r1 = CS_BASE
     mov   r0, #0
     mcr   p15, 0, r0, c7, c10, 0
     mcr   p15, 0, r0, c7, c10, 4
-    @ Sound the fault. The beep was rendered into AUDIO_ERR_ADDR at boot, so
-    @ starting it is only register stores: no stack and no call, neither of
-    @ which is safe here. CSND is a DMA engine, so the tone finishes playing
-    @ after this core stops. These values mirror the AUDIO_ERR_* defines in
-    @ include/audio.h and the channel layout in Audio11.c.
+    @ Start the crash beep rendered at boot. Register stores only: there is no
+    @ usable stack here. The values mirror AUDIO_ERR_* in include/audio.h.
     ldr   r1, =0x10103400         @ CSND channel 0
     mov   r0, #0
     strh  r0, [r1, #0x00]         @ stop the channel before reprogramming it

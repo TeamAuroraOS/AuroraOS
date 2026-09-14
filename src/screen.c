@@ -1,6 +1,7 @@
 
 
 #include "aurora.h"
+#include "assets.h"
 #include "aurora_logo.h"
 #include "font.h"
 #include "icons.h"
@@ -14,12 +15,16 @@ static int console_y = 0;
 static Color console_fg = {0xFF, 0xFF, 0xFF};
 static Color console_bg = {0x10, 0x10, 0x20};
 
-/* Draw targets. Default to the panels themselves so any code that never opts in
- * keeps the original direct-to-VRAM behaviour. */
+/* Draw targets: the panels themselves until screen_use_backbuffer(1). */
 volatile u8 *g_fb_top = VRAM_TOP_PHYS;
 volatile u8 *g_fb_bot = VRAM_BOT_PHYS;
 
 int (*g_screen_blit)(u32 src, u32 dst, u32 len) = 0;
+
+/* The backbuffer an async blit is still reading; screen_touch() waits on it.
+ * Null when nothing is outstanding. */
+volatile u8 *g_blit_src = 0;
+void (*g_screen_wait)(void) = 0;
 
 static void copy_words(volatile u8 *dst, const volatile u8 *src, u32 size) {
   volatile u32 *d = (volatile u32 *)dst;
@@ -39,16 +44,17 @@ void screen_use_backbuffer(int on) {
   g_fb_bot = on ? VRAM_BOT_BACK : VRAM_BOT_PHYS;
 }
 
-/* Move a finished backbuffer to the panel. In direct mode this is a no-op, so
- * present calls are always safe to make. */
+/* In direct mode this is a no-op. */
 static void present(volatile u8 *back, volatile u8 *phys, u32 size) {
   if (back == phys)
     return;
-  if (g_screen_blit && g_screen_blit((u32)back, (u32)phys, size))
+  screen_touch(back); /* a previous copy may still be reading this buffer */
+  if (g_screen_blit && g_screen_blit((u32)back, (u32)phys, size)) {
+    if (g_screen_wait)
+      g_blit_src = back; /* posted, not finished: guard it until collected */
     return;
-  /* No GPU yet: copy by word. Still much cheaper than having rasterised
-   * straight into VRAM, because this is one sequential run instead of
-   * thousands of scattered uncached byte stores. */
+  }
+  /* No GPU: copy by word. */
   const u32 *s = (const u32 *)back;
   volatile u32 *d = (volatile u32 *)phys;
   for (u32 i = 0; i < (size >> 2); i++)
@@ -71,6 +77,7 @@ void screen_present_bottom(void) {
 }
 
 void clear_screen(volatile u8 *fb, u32 fb_size, Color color) {
+  screen_touch(fb);
   u32 b = color.b, g = color.g, r = color.r;
   u32 w0 = b | (g << 8) | (r << 16) | (b << 24);
   u32 w1 = g | (r << 8) | (b << 16) | (g << 24);
@@ -86,6 +93,7 @@ void clear_screen(volatile u8 *fb, u32 fb_size, Color color) {
 }
 
 void draw_pixel(volatile u8 *fb, int x, int y, int screen_height, Color color) {
+  screen_touch(fb);
   if (x < 0 || y < 0 || y >= screen_height)
     return;
 
@@ -96,12 +104,11 @@ void draw_pixel(volatile u8 *fb, int x, int y, int screen_height, Color color) {
   fb[offset + 2] = color.r;
 }
 
-/* The framebuffer runs down a screen column before stepping to the next one, so
- * a glyph column is one contiguous descending run. Walking it with a pointer
- * costs a single multiply per column instead of one per pixel, and drops the
- * per-pixel call and bounds test that draw_pixel would repeat 64 times. */
+/* The framebuffer runs down a column, so a glyph column is one contiguous run
+ * walked with a pointer. */
 void draw_char(volatile u8 *fb, int x, int y, int screen_height, char c,
                Color fg, Color bg) {
+  screen_touch(fb);
   if (c < 0x20 || c > 0x7E)
     return;
 
@@ -139,6 +146,9 @@ void draw_string(volatile u8 *fb, int x, int y, int screen_height,
     if (*str == '\n') {
       cx = x;
       y += FONT_HEIGHT;
+    } else if (((unsigned char)*str & 0xC0u) == 0x80u) {
+      /* UTF-8 continuation byte: the lead byte already took the cell, so an
+       * accented letter the 8x8 font lacks leaves one gap, not two. */
     } else {
       draw_char(fb, cx, y, screen_height, *str, fg, bg);
       cx += FONT_WIDTH;
@@ -149,6 +159,7 @@ void draw_string(volatile u8 *fb, int x, int y, int screen_height,
 
 void draw_aurora_logo(volatile u8 *fb, int x0, int y0, int screen_height,
                       Color color) {
+  screen_touch(fb);
   int r0 = 0, r1 = AURORA_LOGO_HEIGHT;
   if (y0 < 0)
     r0 = -y0;
@@ -177,8 +188,48 @@ void draw_aurora_logo(volatile u8 *fb, int x0, int y0, int screen_height,
   }
 }
 
+/* Copy a run, in words once both sides reach a common alignment. The
+ * framebuffer is 3 bytes per pixel, so a column run is rarely word-aligned to
+ * begin with. */
+static void store_run(volatile u8 *d, const u8 *s, u32 n) {
+  /* Both sides must be able to reach the same alignment. An unaligned LDR on
+   * ARMv5 rotates the word instead of faulting, so a mismatch here does not
+   * crash, it silently permutes the colour channels: solid fills come out as
+   * horizontal stripes. */
+  if ((((u32)d ^ (u32)s) & 3u) != 0u) {
+    while (n--)
+      *d++ = *s++;
+    return;
+  }
+  while (n && ((u32)d & 3u)) {
+    *d++ = *s++;
+    n--;
+  }
+  volatile u32 *dw = (volatile u32 *)d;
+  const u32 *sw = (const u32 *)s;
+  u32 words = n >> 2;
+  for (u32 i = 0; i < words; i++)
+    dw[i] = sw[i];
+  d += words << 2;
+  s += words << 2;
+  for (n &= 3u; n; n--)
+    *d++ = *s++;
+}
+
+/* One framebuffer column, reused across a fill. */
+static u8 col_buf[TOP_SCREEN_HEIGHT * BYTES_PER_PIXEL + 4];
+
+/* Every column of a fill starts screen_height*3 bytes after the last, and that
+ * stride is a multiple of four, so one skew serves them all. Building the
+ * column at that offset lets store_run take its word path. */
+static u32 col_skew(int x, int screen_height, int y, int rows) {
+  return (((u32)x * (u32)screen_height + (u32)(screen_height - y - rows)) * 3u) &
+         3u;
+}
+
 void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h,
                       int screen_height, Color color) {
+  screen_touch(fb);
   if (y < 0) {
     h += y;
     y = 0;
@@ -188,24 +239,55 @@ void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h,
   if (w <= 0 || h <= 0)
     return;
 
-  u8 b = color.b, g = color.g, r = color.r;
+  u32 skew = col_skew(x < 0 ? 0 : x, screen_height, y, h);
+  for (int i = 0; i < h; i++) {
+    col_buf[skew + i * 3 + 0] = color.b;
+    col_buf[skew + i * 3 + 1] = color.g;
+    col_buf[skew + i * 3 + 2] = color.r;
+  }
+  u32 run = (u32)h * 3u;
+  for (int px = x; px < x + w; px++) {
+    if (px < 0)
+      continue;
+    store_run(fb + ((u32)px * (u32)screen_height + (u32)(screen_height - y - h)) * 3u,
+              col_buf + skew, run);
+  }
+}
+
+/* Alpha is 0..256 like the rest of the blending here. */
+void draw_filled_rect_alpha(volatile u8 *fb, int x, int y, int w, int h,
+                            int screen_height, Color color, int alpha) {
+  screen_touch(fb);
+  if (alpha <= 0)
+    return;
+  if (alpha >= 256) {
+    draw_filled_rect(fb, x, y, w, h, screen_height, color);
+    return;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (y + h > screen_height)
+    h = screen_height - y;
+  if (w <= 0 || h <= 0)
+    return;
+
+  int inv = 256 - alpha;
+  int cb = color.b * alpha, cg = color.g * alpha, cr = color.r * alpha;
   for (int px = x; px < x + w; px++) {
     volatile u8 *p = fb + ((px * screen_height) + (screen_height - 1 - y)) * 3;
     for (int i = 0; i < h; i++) {
-      p[0] = b;
-      p[1] = g;
-      p[2] = r;
+      p[0] = (u8)((cb + p[0] * inv) >> 8);
+      p[1] = (u8)((cg + p[1] * inv) >> 8);
+      p[2] = (u8)((cr + p[2] * inv) >> 8);
       p -= 3;
     }
   }
 }
 
-/* --- anti-aliasing helpers ------------------------------------------------
- * Edges are drawn by coverage rather than a hard in/out test: a pixel the shape
- * only partly covers is blended into what is already there. Everything is
- * integer; alpha runs 0..256 so the blend is a shift rather than a divide. */
+/* Edges are anti-aliased by coverage. Alpha runs 0..256 so a blend is a shift. */
 
-/* Integer square root, used to turn a squared distance into a distance. */
 static u32 isqrt32(u32 n) {
   u32 rem = 0, root = 0;
   for (int i = 0; i < 16; i++) {
@@ -222,6 +304,7 @@ static u32 isqrt32(u32 n) {
 
 void draw_pixel_alpha(volatile u8 *fb, int x, int y, int screen_height,
                       Color color, int alpha) {
+  screen_touch(fb);
   if (alpha <= 0 || x < 0 || y < 0 || y >= screen_height)
     return;
   if (alpha >= 256) {
@@ -238,17 +321,63 @@ void draw_pixel_alpha(volatile u8 *fb, int x, int y, int screen_height,
 /* One rounded corner: the r-by-r box at (bx,by) against the arc centred on
  * (cx,cy). Coverage falls off across the single pixel straddling the radius,
  * which is what removes the stair-stepping. */
-static void fill_corner(volatile u8 *fb, int bx, int by, int r, int cx0,
-                        int cy0, int screen_height, Color color) {
-  for (int cy = by; cy < by + r; cy++) {
-    for (int cx = bx; cx < bx + r; cx++) {
-      int ex = cx - cx0, ey = cy - cy0;
+/* Corner coverage depends only on the radius, so it is cached per radius. */
+#define CORNER_MAX_R 20
+#define CORNER_SLOTS 4
+static unsigned char corner_cov[CORNER_SLOTS][CORNER_MAX_R * CORNER_MAX_R];
+static int corner_r[CORNER_SLOTS];
+static int corner_slot;
+
+static const unsigned char *corner_table(int r) {
+  unsigned char *t;
+  int s, ex, ey;
+  if (r <= 0 || r > CORNER_MAX_R)
+    return 0;
+  for (s = 0; s < CORNER_SLOTS; s++)
+    if (corner_r[s] == r)
+      return corner_cov[s];
+
+  s = corner_slot;
+  corner_slot = (corner_slot + 1) % CORNER_SLOTS;
+  t = corner_cov[s];
+  for (ey = 1; ey <= r; ey++) {
+    for (ex = 1; ex <= r; ex++) {
       u32 d = isqrt32(((u32)(ex * ex + ey * ey)) << 16); /* 8.8 fixed point */
       int a = (int)(((u32)r << 8) + 128u - d);
+      if (a < 0)
+        a = 0;
+      if (a > 255)
+        a = 255;
+      t[(ey - 1) * r + (ex - 1)] = (unsigned char)a;
+    }
+  }
+  corner_r[s] = r;
+  return t;
+}
+
+static void fill_corner(volatile u8 *fb, int bx, int by, int r, int cx0,
+                        int cy0, int screen_height, Color color) {
+  const unsigned char *t = corner_table(r);
+  for (int cy = by; cy < by + r; cy++) {
+    int ey = cy - cy0;
+    if (ey < 0)
+      ey = -ey;
+    for (int cx = bx; cx < bx + r; cx++) {
+      int ex = cx - cx0, a;
+      if (ex < 0)
+        ex = -ex;
+      if (t && ex >= 1 && ex <= r && ey >= 1 && ey <= r) {
+        a = t[(ey - 1) * r + (ex - 1)];
+        if (a >= 255)
+          a = 256; /* the table saturates at 255; 256 is the opaque store */
+      } else {
+        u32 d = isqrt32(((u32)(ex * ex + ey * ey)) << 16);
+        a = (int)(((u32)r << 8) + 128u - d);
+        if (a > 256)
+          a = 256;
+      }
       if (a <= 0)
         continue;
-      if (a > 256)
-        a = 256;
       draw_pixel_alpha(fb, cx, cy, screen_height, color, a);
     }
   }
@@ -256,6 +385,7 @@ static void fill_corner(volatile u8 *fb, int bx, int by, int r, int cx0,
 
 void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h,
                             int radius, int screen_height, Color color) {
+  screen_touch(fb);
   if (radius < 0)
     radius = 0;
   if (radius > w / 2)
@@ -280,12 +410,11 @@ void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h,
   }
 }
 
-/* Vertical gradient. The framebuffer runs down a column, so the ramp is walked
- * along the fast axis and each shade computed once rather than per pixel. */
+/* The framebuffer runs down a column, so the ramp is walked along that axis and
+ * each shade computed once. */
 void draw_vgradient(volatile u8 *fb, int x, int y, int w, int h,
                     int screen_height, Color top, Color bottom) {
-  Color ramp[BOT_SCREEN_HEIGHT > TOP_SCREEN_HEIGHT ? BOT_SCREEN_HEIGHT
-                                                   : TOP_SCREEN_HEIGHT];
+  screen_touch(fb);
   int r0 = 0, r1 = h;
 
   if (y < 0)
@@ -294,33 +423,32 @@ void draw_vgradient(volatile u8 *fb, int x, int y, int w, int h,
     r1 = screen_height - y;
   if (r0 >= r1 || w <= 0)
     return;
-  if (r1 > (int)(sizeof(ramp) / sizeof(ramp[0])))
-    r1 = (int)(sizeof(ramp) / sizeof(ramp[0]));
+  if (r1 > TOP_SCREEN_HEIGHT)
+    r1 = TOP_SCREEN_HEIGHT;
 
+  /* Build the column once. Addresses descend as the row number rises, so the
+   * run starts at the bottom row and the buffer is filled in that order. */
+  u32 skew = col_skew(x < 0 ? 0 : x, screen_height, y, r1);
   for (int row = r0; row < r1; row++) {
     int tt = (h > 1) ? (row * 255) / (h - 1) : 0;
-    ramp[row].r = (u8)((top.r * (255 - tt) + bottom.r * tt) / 255);
-    ramp[row].g = (u8)((top.g * (255 - tt) + bottom.g * tt) / 255);
-    ramp[row].b = (u8)((top.b * (255 - tt) + bottom.b * tt) / 255);
+    u32 i = skew + (u32)(r1 - 1 - row) * 3u;
+    col_buf[i + 0] = (u8)((top.b * (255 - tt) + bottom.b * tt) / 255);
+    col_buf[i + 1] = (u8)((top.g * (255 - tt) + bottom.g * tt) / 255);
+    col_buf[i + 2] = (u8)((top.r * (255 - tt) + bottom.r * tt) / 255);
   }
 
+  u32 run = (u32)(r1 - r0) * 3u;
   for (int px = x; px < x + w; px++) {
     if (px < 0)
       continue;
-    volatile u8 *p =
-        fb + ((px * screen_height) + (screen_height - 1 - (y + r0))) * 3;
-    for (int row = r0; row < r1; row++) {
-      p[0] = ramp[row].b;
-      p[1] = ramp[row].g;
-      p[2] = ramp[row].r;
-      p -= 3;
-    }
+    store_run(fb + ((u32)px * (u32)screen_height +
+                    (u32)(screen_height - y - r1)) * 3u,
+              col_buf + skew, run);
   }
 }
 
-/* A rounded rect filled with a vertical gradient, corners anti-aliased. The
- * body is drawn as a gradient and the corners blended on top of whatever the
- * gradient left, so the rounding stays smooth over the shading. */
+/* The corners are blended over the gradient body, so the rounding stays smooth
+ * over the shading. */
 void draw_gradient_round_rect(volatile u8 *fb, int x, int y, int w, int h,
                               int radius, int screen_height, Color top,
                               Color bottom) {
@@ -364,6 +492,7 @@ void draw_gradient_round_rect(volatile u8 *fb, int x, int y, int w, int h,
 
 void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height,
                   const unsigned char *icon_bits, Color color) {
+  screen_touch(fb);
   int r0 = 0, r1 = ICON_SIZE;
   if (y < 0)
     r0 = -y;
@@ -392,12 +521,8 @@ void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height,
   }
 }
 
-/* Upscaled 1bpp art, smoothed by bilinear filtering.
- *
- * Supersampling does nothing here: at an integer scale every subsample of a
- * destination pixel falls inside the same source pixel, so coverage only ever
- * comes out 0 or full. Interpolating between the four neighbouring source
- * pixels is what actually softens the edge, and it is cheaper too. */
+/* Upscaled 1bpp art, smoothed by bilinear filtering: at an integer scale,
+ * supersampling would only ever give zero or full coverage. */
 
 /* One source pixel as 0 or 256; anything off the edge reads as empty. */
 static int bitmap_texel(const unsigned char *bits, int row_bytes, int size,
@@ -448,9 +573,7 @@ void draw_icon_scaled(volatile u8 *fb, int x, int y, int screen_height,
                      ICON_ROW_BYTES, color, scale);
 }
 
-/* Text at a larger size, smoothed the same way. The 8x8 font blown up with
- * whole pixels looks like a staircase; blending the edges reads as a heavier
- * weight instead. Body text stays at 1:1, where it is already crisp. */
+/* Text at a larger size, smoothed the same way. */
 void draw_string_scaled(volatile u8 *fb, int x, int y, int screen_height,
                         const char *str, Color color, int scale) {
   int cx = x;
@@ -469,6 +592,175 @@ void draw_string_scaled(volatile u8 *fb, int x, int y, int screen_height,
     }
     str++;
   }
+}
+
+/* Pack art is stored at the size it is drawn, so these are straight blits.
+ * Coverage 0..255 is widened to 0..256 so an opaque pixel is a plain store. */
+
+static int fb_width(volatile u8 *fb) {
+  return (fb == VRAM_TOP_PHYS || fb == VRAM_TOP_BACK) ? TOP_SCREEN_WIDTH
+                                                      : BOT_SCREEN_WIDTH;
+}
+
+/* One tinted coverage rectangle, walked down framebuffer columns. */
+static void blit_cov(volatile u8 *fb, int x, int y, int screen_height,
+                     const u8 *src, int stride, int w, int h, Color c) {
+  int r0 = 0, r1 = h, col, wmax = fb_width(fb);
+  if (y < 0)
+    r0 = -y;
+  if (y + r1 > screen_height)
+    r1 = screen_height - y;
+  if (r0 >= r1)
+    return;
+
+  for (col = 0; col < w; col++) {
+    int px = x + col, row;
+    const u8 *s;
+    volatile u8 *p;
+    if (px < 0)
+      continue;
+    if (px >= wmax)
+      break;
+    s = src + r0 * stride + col;
+    p = fb + ((px * screen_height) + (screen_height - 1 - (y + r0))) * 3;
+    for (row = r0; row < r1; row++) {
+      int a = *s;
+      if (a) {
+        if (a >= 255) {
+          p[0] = c.b;
+          p[1] = c.g;
+          p[2] = c.r;
+        } else {
+          int a8 = a + (a >> 7), inv = 256 - a8;
+          p[0] = (u8)((c.b * a8 + p[0] * inv) >> 8);
+          p[1] = (u8)((c.g * a8 + p[1] * inv) >> 8);
+          p[2] = (u8)((c.r * a8 + p[2] * inv) >> 8);
+        }
+      }
+      s += stride;
+      p -= 3;
+    }
+  }
+}
+
+static void blit_rgba(volatile u8 *fb, int x, int y, int screen_height,
+                      const u8 *src, int w, int h) {
+  int r0 = 0, r1 = h, col, wmax = fb_width(fb);
+  if (y < 0)
+    r0 = -y;
+  if (y + r1 > screen_height)
+    r1 = screen_height - y;
+  if (r0 >= r1)
+    return;
+
+  for (col = 0; col < w; col++) {
+    int px = x + col, row;
+    const u8 *s;
+    volatile u8 *p;
+    if (px < 0)
+      continue;
+    if (px >= wmax)
+      break;
+    s = src + (r0 * w + col) * 4;
+    p = fb + ((px * screen_height) + (screen_height - 1 - (y + r0))) * 3;
+    for (row = r0; row < r1; row++) {
+      int a = s[3];
+      if (a) {
+        if (a >= 255) {
+          p[0] = s[2];
+          p[1] = s[1];
+          p[2] = s[0];
+        } else {
+          int a8 = a + (a >> 7), inv = 256 - a8;
+          p[0] = (u8)((s[2] * a8 + p[0] * inv) >> 8);
+          p[1] = (u8)((s[1] * a8 + p[1] * inv) >> 8);
+          p[2] = (u8)((s[0] * a8 + p[2] * inv) >> 8);
+        }
+      }
+      s += w * 4;
+      p -= 3;
+    }
+  }
+}
+
+void draw_asset(volatile u8 *fb, int x, int y, int screen_height,
+                const Asset *a, Color tint) {
+  screen_touch(fb);
+  if (!a || !a->data)
+    return;
+  if (a->type == ASSET_TYPE_RGBA)
+    blit_rgba(fb, x, y, screen_height, a->data, a->w, a->h);
+  else
+    blit_cov(fb, x, y, screen_height, a->data, a->w, a->w, a->h, tint);
+}
+
+/* Glyphs are coverage rendered from Figtree, drawn with the same blit. `y` is
+ * the baseline. */
+
+/* A malformed sequence is taken a byte at a time; the checks stop at a NUL. */
+static unsigned utf8_next(const char **s) {
+  const unsigned char *p = (const unsigned char *)*s;
+  unsigned c = p[0];
+  if (c >= 0xC0u && c < 0xE0u && (p[1] & 0xC0u) == 0x80u) {
+    *s += 2;
+    return ((c & 0x1Fu) << 6) | (p[1] & 0x3Fu);
+  }
+  if (c >= 0xE0u && c < 0xF0u && (p[1] & 0xC0u) == 0x80u &&
+      (p[2] & 0xC0u) == 0x80u) {
+    *s += 3;
+    return ((c & 0x0Fu) << 12) | ((p[1] & 0x3Fu) << 6) | (p[2] & 0x3Fu);
+  }
+  *s += 1;
+  return c;
+}
+
+static const AssetGlyph *glyph_of(const Font *f, unsigned cp) {
+  unsigned i;
+  if (!f || !f->head)
+    return 0;
+  i = cp - f->head->first; /* wraps high below the first code point */
+  return i < f->head->count ? &f->glyphs[i] : 0;
+}
+
+int text_width(const Font *f, const char *s) {
+  int w = 0;
+  while (s && *s) {
+    const AssetGlyph *g = glyph_of(f, utf8_next(&s));
+    if (g)
+      w += g->adv;
+  }
+  return w;
+}
+
+int text_line_height(const Font *f) {
+  return (f && f->head) ? f->head->line_height : FONT_HEIGHT;
+}
+
+int text_ascent(const Font *f) {
+  return (f && f->head) ? f->head->ascent : FONT_HEIGHT;
+}
+
+void draw_text(volatile u8 *fb, int x, int baseline, int screen_height,
+               const char *s, Color color, const Font *f) {
+  screen_touch(fb);
+  if (!f || !f->head)
+    return;
+  while (s && *s) {
+    const AssetGlyph *g = glyph_of(f, utf8_next(&s));
+    if (!g)
+      continue;
+    if (g->w && g->h)
+      blit_cov(fb, x + g->left, baseline - g->top, screen_height,
+               f->atlas + (u32)g->ay * f->head->atlas_w + g->ax,
+               f->head->atlas_w, g->w, g->h, color);
+    x += g->adv;
+  }
+}
+
+void draw_text_centered(volatile u8 *fb, int cx, int baseline,
+                        int screen_height, const char *s, Color color,
+                        const Font *f) {
+  draw_text(fb, cx - text_width(f, s) / 2, baseline, screen_height, s, color, f);
 }
 
 static void console_scroll(void) {

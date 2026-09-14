@@ -1,10 +1,6 @@
-/*
- * CTR codec bus: NSPI transport and register access.
- *
- * The codec chip carries the analog audio path and the touchscreen ADC, so
- * this layer is shared by Audio11.c and Touch11.c rather than owned by either.
- * Ported from profi200's libn3ds (source/arm11/drivers/{codec,spi}.c).
- */
+/* CTR codec bus: NSPI transport and register access, shared by Audio11.c and
+ * Touch11.c. Ported from profi200's libn3ds
+ * (source/arm11/drivers/{codec,spi}.c). */
 #include "core11.h"
 
 static uint32_t g_spi_timeouts = 0; /* diagnostics: SPI waits that maxed out */
@@ -24,8 +20,8 @@ static void nspi_wait_done(void) {
     g_spi_timeouts++;
 }
 
-/* Faithful port of NSPI_sendRecv for the codec device (always bus 2). `dev`
- * carries the DEV_CS_HIGH flag exactly as the codec calls use it. */
+/* Port of libn3ds NSPI_sendRecv for the codec (bus 2); `dev` carries
+ * DEV_CS_HIGH as the codec calls use it. */
 static void nspi_sendrecv(uint32_t dev, const uint8_t *in, uint8_t *out,
                           uint32_t inSize, uint32_t outSize) {
   const uint32_t cntParams = NSPI_EN | CODEC_CSCLK;
@@ -60,7 +56,6 @@ static void nspi_sendrecv(uint32_t dev, const uint8_t *in, uint8_t *out,
     MMIO8(NSPI_CS) = 0; /* NSPI_CS_HIGH = 0 */
 }
 
-/* ---- CTR audio codec register access (page<<8 | offset) ---- */
 #define CODEC_DEV (DEV_CS_HIGH | 0x03u) /* NSPI_DEV_CS_HIGH | NSPI_DEV_CTR_CODEC */
 
 static uint8_t cdc_page = 0xFF;

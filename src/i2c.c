@@ -1,4 +1,3 @@
-/* Minimal I2C driver for the MCU power path. */
 #include "i2c.h"
 
 #define I2C1_REGS_BASE (0x10161000) /* bus 0 */

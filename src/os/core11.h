@@ -1,11 +1,3 @@
-/*
- * Shared internals for the ARM11 core's modules.
- *
- * The core is one binary built from Core11.c plus a file per subsystem
- * (Audio11, Touch11, WiFi11, Gpu11, Codec11). This header carries what they
- * all need: register access, cache maintenance, timing, the SoC I/O block
- * addresses, and each module's entry points.
- */
 #ifndef AURORA_CORE11_H
 #define AURORA_CORE11_H
 
@@ -20,7 +12,6 @@ typedef volatile uint32_t vu32;
 #define MMIO16(a) (*(vu16 *)(a))
 #define MMIO32(a) (*(vu32 *)(a))
 
-/* Cache maintenance */
 static inline void dsb(void) {
   __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
 }
@@ -28,9 +19,8 @@ static inline void dcache_clean(void) {
   __asm__ volatile("mcr p15, 0, %0, c7, c10, 0" ::"r"(0) : "memory");
   dsb();
 }
-/* Single-line cache maintenance, for the command poll. Cleaning or
- * invalidating the whole cache every pass is what kept command latency tied to
- * the touch sampling interval. */
+/* One cache line, for the command poll; a whole-cache operation per pass is too
+ * slow. */
 static inline void dcache_inval_line(const void *p) {
   __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(p) : "memory");
 }
@@ -46,12 +36,10 @@ static inline void spin(uint32_t n) {
   while (n--)
     __asm__ volatile("nop");
 }
-/* Coarse millisecond sleep (over-sleeps slightly; only used for codec settle
- * delays, so erring long is fine). ~300k nops/ms is comfortably >= 1 ms at the
- * ARM11's clock. */
+/* Coarse and over-sleeps, which is fine for the codec settle delays it is used
+ * for. */
 static inline void sleep_ms(uint32_t ms) { spin(ms * 300000u); }
 
-/* SoC I/O: SPI, PDN, CFG11 */
 /* IO_COMMON_BASE = 0x10100000 on the ARM11 (libn3ds mem_map). */
 #define IO_BASE 0x10100000u
 
@@ -89,9 +77,6 @@ static inline void sleep_ms(uint32_t ms) { spin(ms * 300000u); }
 
 #define SPI_GUARD 200000u /* bound the busy-waits so a mis-config can't hang */
 
-/* ---- Codec11.c: NSPI transport and CTR codec register access -------------
- * The CTR codec carries both the audio path and the touchscreen ADC, so the
- * bus belongs to neither and is shared. */
 #define CDC_SOFT_RST ((100u << 8) | 1u)
 void codec11_bus_init(void);
 uint8_t cdc_read(uint16_t reg);
@@ -101,7 +86,6 @@ uint32_t cdc_read_word(uint16_t reg);
 void cdc_read_buf(uint16_t reg, uint8_t *buf, uint32_t size);
 uint32_t codec11_spi_timeouts(void);
 
-/* ---- Audio11.c ---- */
 void audio11_init(AudioCtrl *ct);
 /* Handle one audio command; returns 1 if it was one of ours. */
 int audio11_command(AudioCtrl *ct, uint32_t cmd, uint32_t arg0);
@@ -109,15 +93,16 @@ int audio11_command(AudioCtrl *ct, uint32_t cmd, uint32_t arg0);
 /* Play the three-beep crash tone (pre-rendered at boot). */
 void audio11_error_play(void);
 
-/* ---- Touch11.c ---- */
 void touch11_init(void);
 void touch11_poll(void);
 
-/* ---- WiFi11.c ---- */
 void wifi11_probe(void);
 void wifi11_boot(void);
 
-/* ---- Gpu11.c ---- */
 void gpu11_run(void);
 
-#endif /* AURORA_CORE11_H */
+/* AUDIO_CMD_N3DS: ask for New 3DS clock mode `mode` and report the outcome in
+ * ct->n3ds_before, n3ds_after and n3ds_status. */
+void clock11_set(AudioCtrl *ct, uint32_t mode);
+
+#endif

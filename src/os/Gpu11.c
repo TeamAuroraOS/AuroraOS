@@ -1,22 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * PICA200 GPU, ARM11 side. Core11.c dispatches here on AUDIO_CMD_GPU.
- * See docs/gpu.md.
- *
- * PSC fills memory and PPF copies it. Both are plain DMA engines, so unlike
- * P3D they need no command list or shader state, only a clock enable. Every
- * wait is bounded: a wedged engine must stall one operation rather than the
- * core, which still has a touchscreen to poll.
+/* PICA200 GPU, ARM11 side, dispatched from Core11.c on AUDIO_CMD_GPU. PSC and
+ * PPF are plain DMA engines that need only a clock enable. Every wait is
+ * bounded, so a wedged engine stalls one operation rather than the core.
  *
  * LICENSE: GPL-2.0, not GPL-3.0 like the rest of AuroraOS. Derived from the
- * Linux Nintendo 3DS PICA200 driver (ctr_pica.c). See docs/gpu.md.
- */
+ * Linux Nintendo 3DS PICA200 driver (ctr_pica.c). See docs/gpu.md. */
 #include "gpu.h"
 
 typedef volatile uint32_t vu32;
 #define GREG(off) (*(vu32 *)(GPU_REG_BASE + (off)))
 
-/* --- PICA200 registers (offsets from GPU_REG_BASE) --- */
+/* PICA200 registers, as offsets from GPU_REG_BASE. */
 #define R_HW_ID        0x0000
 #define R_CLOCK        0x0004
 #define R_PSC0_START   0x0010
@@ -43,9 +37,10 @@ typedef volatile uint32_t vu32;
 #define PPF_CNT_DONE (1u << 8)
 #define PPF_FLAG_RAW_COPY (1u << 3) /* linear blit: no de-tiling, no conversion */
 
-/* Bound on every completion poll. A full-screen fill takes well under a
- * millisecond, so this is a generous ceiling, not a working budget. */
-#define GPU_POLL_MAX 200000u
+/* Bound on every completion poll, counted in passes and sized for the 804 MHz
+ * clock, where a pass is a third as long. A full-screen fill takes well under a
+ * millisecond. */
+#define GPU_POLL_MAX 600000u
 
 static inline void dsb(void) {
   __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
@@ -80,8 +75,8 @@ static void gpu_ack_p3d(void) {
   (void)GREG(R_BUSY);
 }
 
-/* Enable the engine clocks, drop any state inherited from the firm, and read the
- * hardware ID. The ID read is the proof that the block is actually reachable. */
+/* Enables the engine clocks, clears state inherited from the firm and reads the
+ * hardware ID, which proves the block is reachable. */
 static void gpu_op_init(GpuShared *g) {
   g->busy_before = GREG(R_BUSY);
 
@@ -101,8 +96,8 @@ static void gpu_op_init(GpuShared *g) {
   uint32_t w = 0;
   while ((GREG(R_BUSY) & BUSY_P3D) && ++w < GPU_POLL_MAX)
     ;
-  /* If inherited P3D work never drained, `waits` saturates and busy_before keeps
-   * bit31, both visible on the test screen. It is not treated as an init
+  /* If inherited P3D work never drained, `waits` saturates and busy_before
+   * keeps bit31, both visible on the test screen. It is not treated as an init
    * failure: PSC and PPF are independent engines and work regardless. */
   g->waits = w;
   g->step = GPU_STEP_IDLE;
@@ -157,8 +152,7 @@ static void gpu_op_fill(GpuShared *g) {
     g->step = GPU_STEP_DONE;
 }
 
-/* Trigger a PPF operation whose registers are already programmed, then wait
- * (bounded) for completion and acknowledge it. Shared by both PPF modes. */
+/* Starts a programmed PPF operation, waits (bounded) and acknowledges it. */
 static void gpu_ppf_start_wait(GpuShared *g) {
   GREG(R_PPF_CNT) = PPF_CNT_GO;
   dsb();
@@ -185,8 +179,8 @@ static void gpu_ppf_start_wait(GpuShared *g) {
     g->step = GPU_STEP_DONE;
 }
 
-/* PPF display transfer. The destination rectangle may be smaller than the source
- * (the engine downscales in that case) but never larger. */
+/* PPF display transfer. The destination rectangle may be smaller than the
+ * source (the engine downscales in that case) but never larger. */
 static void gpu_op_transfer(GpuShared *g) {
   uint32_t sw = g->xf_src_w, sh = g->xf_src_h;
   uint32_t dw = g->xf_dst_w, dh = g->xf_dst_h;
@@ -260,7 +254,6 @@ static void gpu_op_texcopy(GpuShared *g) {
   gpu_ppf_start_wait(g);
 }
 
-/* Entry point: called from the ARM11 command loop for AUDIO_CMD_GPU. */
 void gpu11_run(void) {
   GpuShared *g = (GpuShared *)GPU_SHARED_ADDR;
 

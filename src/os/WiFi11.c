@@ -1,21 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Wi-Fi, ARM11 side. The ARM9 posts requests through the command block and
- * reads results from WifiShared; the ARM9 side is WiFi9.c.
- */
+/* Wi-Fi, ARM11 side: requests come through the command block and results go to
+ * WifiShared (ARM9 side: WiFi9.c). */
 #include "core11.h"
 #include "wifi.h"
 
-/* ==== Wi-Fi driver (GPL-2.0) ====
- * The Wi-Fi SDIO/BMI code in this file (from here to the end of the Wi-Fi
- * section) is licensed GPL-2.0, separately from the rest of AuroraOS. It derives
- * register facts and the BMI/HIF bring-up sequence from the ath6kl legacy driver
- * as ported to the 3DS by Octoblimp. Credit: Octoblimp; ath6kl (GPL-2.0). See
- * docs/wifi.md "License and credits".
+/* LICENSE: The Wi-Fi SDIO/BMI code in this file is GPL-2.0, separately from the
+ * rest of AuroraOS. It derives register facts and the BMI/HIF bring-up sequence
+ * from the ath6kl legacy driver as ported to the 3DS by Octoblimp. Credit:
+ * Octoblimp; ath6kl (GPL-2.0). See docs/wifi.md "License and credits".
  *
- * Wi-Fi SDIO probe of the Atheros host controller at WIFI_SDIO_BASE. Reuses the
- * 16-bit TMIO register layout of Aurora's SD driver (src/sdmmc.h). Every loop is
- * bounded and each phase is published so a bad MMIO access stalls, not hangs. */
+ * The host controller reuses the 16-bit TMIO layout of src/sdmmc.h. Every loop
+ * is bounded and each phase is published, so a bad access stalls instead of
+ * hanging. */
 #define WB16(off) MMIO16(WIFI_SDIO_BASE + (off))
 
 #define WR_CMD     0x00
@@ -49,8 +45,8 @@ static void wifi_setckl(uint32_t data) {
   WB16(WR_CLKCTL) = (uint16_t)((1u << 8) | (data & 0x2FF));
 }
 
-/* Transcription of sdmmc.c sdmmc_controller_init() + set_target() against the
- * Wi-Fi base. The SD-slot-only "mount fix" CFG poke is deliberately omitted. */
+/* sdmmc.c controller init and set_target against the Wi-Fi base, without the
+ * SD-slot mount fix. */
 static void wifi_ctrl_init(void) {
   WB16(WR_DATACTL32) &= 0xF7FFu;
   WB16(WR_DATACTL32) &= 0xEFFFu;
@@ -133,7 +129,6 @@ static void wifi_cmd(WifiShared *w, WifiCmd *e, uint16_t cmd16, uint32_t arg) {
   e->ok = (s0 & WSTAT0_CMDRESPEND) ? 1u : 2u;
 }
 
-/* Append one command to the log (bounded) and return its entry. */
 static WifiCmd *wifi_logcmd(WifiShared *w, uint16_t cmd16, uint32_t arg) {
   if (w->nlog >= WIFI_LOG_MAX)
     return &w->log[WIFI_LOG_MAX - 1];
@@ -144,11 +139,8 @@ static WifiCmd *wifi_logcmd(WifiShared *w, uint16_t cmd16, uint32_t arg) {
   return e;
 }
 
-/* Wi-Fi chip reset line: GPIO_DATA4_DATA_OUT_WIFI (ARM11 GPIO). GBATEK: bit0 =
- * "Wifi Enable (0=Reset, need re-upload wifi firmware, 1=On)", wired to the
- * chip's RESET/SYS_RST_L. Setting bit0 brings the Atheros chip out of reset so
- * it powers up and answers on the SDIO bus. This is the piece NWM gets done via
- * the mcu::NWM / GPIO OS services; bare-metal it is set directly. */
+/* Wi-Fi reset line, GPIO_DATA4 bit0 (GBATEK: 0 = reset, firmware must be
+ * re-uploaded; 1 = on). */
 #define WIFI_GPIO_WIFI 0x10147028u
 
 #define WR_FIFO     0x30  /* SD_FIFO (16-bit data port) */
@@ -157,10 +149,11 @@ static WifiCmd *wifi_logcmd(WifiShared *w, uint16_t cmd16, uint32_t arg) {
 #define WSTAT1_TXRQ  0x0200u
 
 /* CMD53 (IO_RW_EXTENDED) byte-mode transfer of `len` bytes (a multiple of 4)
- * to/from function `func` at `addr`. The Function-1 mailbox is a CMD53 interface.
- * Uses DATA16 mode (SD_DATACTL 0xD8 bit1 = 0), driving the 16-bit FIFO (0x30) via
- * STAT1 RXRDY(0x100)/TXRQ(0x200). `incr`=1 increments the address; `buf` must be
- * 4-byte aligned. Returns 0 on success, negative on error/timeout. */
+ * to/from function `func` at `addr`. The Function-1 mailbox is a CMD53
+ * interface. Uses DATA16 mode (SD_DATACTL 0xD8 bit1 = 0), driving the 16-bit
+ * FIFO (0x30) via STAT1 RXRDY(0x100)/TXRQ(0x200). `incr`=1 increments the
+ * address; `buf` must be 4-byte aligned. Returns 0 on success, negative on
+ * error/timeout. */
 static int wifi_cmd53(WifiShared *w, uint32_t func, uint32_t addr,
                       uint32_t *buf, uint32_t len, int is_write, int incr) {
   uint32_t bytes = (len + 3u) & ~3u;
@@ -227,8 +220,8 @@ static int wifi_cmd53(WifiShared *w, uint32_t func, uint32_t addr,
 /* Diagnostic register window (ath6kl ar6000_SetAddressWindowRegister /
  * ReadRegDiag / WriteRegDiag). Reads/writes any target SOC address over SDIO,
  * independent of the target CPU. WINDOW_DATA 0x474, WINDOW_WRITE_ADDR 0x478,
- * WINDOW_READ_ADDR 0x47C. The address's upper 3 bytes are written first, the LSB
- * last (which initiates the access). Credit: Octoblimp / ath6kl. */
+ * WINDOW_READ_ADDR 0x47C. The address's upper 3 bytes are written first, the
+ * LSB last (which initiates the access). Credit: Octoblimp / ath6kl. */
 static void wifi_diag_setwin(WifiShared *w, uint32_t reg, uint32_t addr) {
   WifiCmd t;
   wifi_cmd(w, &t, WCMD52, WCMD52_WR(1, reg + 1, (addr >> 8) & 0xFFu));
@@ -255,8 +248,8 @@ static void wifi_diag_write(WifiShared *w, uint32_t addr, uint32_t data) {
   wifi_diag_setwin(w, 0x478u, addr); /* WINDOW_WRITE_ADDR */
 }
 
-/* BMI receive one 32-bit word: poll RX_LOOKAHEAD_VALID (0x405) bit0, then read 4
- * bytes from mailbox 0 byte-by-byte via CMD52 (bmiBufferReceive). */
+/* BMI receive one 32-bit word: poll RX_LOOKAHEAD_VALID (0x405) bit0, then read
+ * 4 bytes from mailbox 0 byte-by-byte via CMD52 (bmiBufferReceive). */
 static uint32_t wifi_bmi_recv(WifiShared *w) {
   WifiCmd t;
   for (int i = 0; i < 1500; i++) {
@@ -364,10 +357,8 @@ static void wifi_bmi_send(WifiShared *w, const uint8_t *buf, int len) {
     w->fw_chk = (g_nc_hi & 0xFFu) | ((g_nc_stub & 0xFFu) << 8) |
                 ((g_nc_main & 0xFFu) << 16); /* per-phase no-credit breakdown */
     g_bmi_consec_nc++;
-    /* Abort before too many un-credited writes accumulate: a healthy boot has
-     * only ~8 (structural, harmless); more than ~25 means credits have stalled
-     * (bad chip state) and continuing would corrupt the firmware. Clean abort
-     * (no freeze, no silent corruption), power-cycle and retry. */
+    /* A healthy boot has about 8 un-credited writes; more than 25 means credits
+     * have stalled, and continuing would corrupt the firmware. */
     if (w->bmi_nocred > 25) {
       g_bmi_abort = 1;
       w->bmi_sends++;
@@ -375,8 +366,8 @@ static void wifi_bmi_send(WifiShared *w, const uint8_t *buf, int len) {
       return;
     }
   }
-  /* Write the command via a single CMD53 block transfer, end-aligned so the last
-   * byte lands on the mailbox EOM address 0xFFF (base = 0x1000 - len). BMI
+  /* Write the command via a single CMD53 block transfer, end-aligned so the
+   * last byte lands on the mailbox EOM address 0xFFF (base = 0x1000 - len). BMI
    * command lengths are all multiples of 4. */
   static uint32_t sbuf[80];
   for (int i = 0; i < len; i++)
@@ -399,11 +390,11 @@ static void wifi_bmi_write_word(WifiShared *w, uint32_t addr, uint32_t val) {
   wifi_bmi_send(w, cmd, 16);
 }
 
-/* ---- BMI command set (bmi.c: BMIWriteMemory/Execute/Done/SOCRegister/LZ) ----
- * BMI command IDs and the four-blob AR6014 boot sequence are from Octoblimp's
- * ath6kl legacy 3DS port. Commands are written to mailbox 0 via CMD53 (EOM-
- * aligned) and responses read back via CMD52. Each command is capped to the
- * 128-byte target FIFO; the BMI credit gates one command at a time. */
+/* BMI commands (bmi.c: BMIWriteMemory/Execute/Done/SOCRegister/LZ). The IDs and
+ * the AR6014 boot sequence are from Octoblimp's ath6kl legacy 3DS port.
+ * Commands go to mailbox 0 by CMD53, end-aligned; responses come back by CMD52.
+ * Each is capped to the 128-byte target FIFO, and the BMI credit gates one at a
+ * time. */
 #define BMI_DONE              1u
 #define BMI_WRITE_MEMORY      3u
 #define BMI_EXECUTE          4u
@@ -557,12 +548,10 @@ static void wifi_bringup(WifiShared *w) {
   w->boot_ready = 0;
   dcache_clean();
 
-  /* Full reset pulse of the Wi-Fi chip: drive the reset line low, then high, so
-   * the chip re-enters BMI mode from a clean state. A plain "set bit0 = 1" is a
-   * no-op when the chip is already on and does NOT recover it after the ARM9 has
-   * touched the shared SDMMC block to load firmware from SD (which leaves the
-   * chip unresponsive until it is reset). GBATEK: GPIO_DATA4 bit0 = Wi-Fi reset
-   * (0 = reset, needs firmware re-upload; 1 = on). */
+  /* Full reset pulse, so the chip re-enters BMI from a clean state. Setting
+   * bit0 alone does nothing when the chip is already on, and the chip stays
+   * unresponsive after the ARM9 has used the shared SDMMC block to load
+   * firmware. */
   w->gpio_before = MMIO16(WIFI_GPIO_WIFI);
   MMIO16(WIFI_GPIO_WIFI) = (uint16_t)(w->gpio_before & ~1u); /* assert reset */
   dcache_clean();
@@ -654,7 +643,8 @@ static void wifi_bringup(WifiShared *w) {
     wifi_cmd(w, &ci, WCMD52, WCMD52_WR(0, 0x04, 0x03));
   }
 
-  /* Function-1 HIF register block 0x400..0x40F (HOST_INT_STATUS etc. per ath6kl). */
+  /* Function-1 HIF register block 0x400..0x40F (HOST_INT_STATUS etc. per
+   * ath6kl). */
   for (int i = 0; i < 16; i++) {
     wifi_cmd(w, &tmp, WCMD52, WCMD52_RD(1, 0x400 + i));
     w->hif[i] = (uint8_t)(tmp.resp & 0xFFu);
@@ -708,12 +698,13 @@ static void wifi_probe_run(void) {
 
 /* HTC (host-target comm) sits on the mailbox once BMI hands off. After boot the
  * running firmware posts one HTC control message, HTC_READY, on mailbox 0. Poll
- * HOST_INT_STATUS(0x400) mbox0-data + RX_LOOKAHEAD_VALID(0x405), read the 4-byte
- * HTC frame header from the lookahead register (0x408) for the payload length,
- * then drain the full message from mailbox 0. HTC frame header = EndpointID(1),
- * Flags(1), PayloadLen(2); payload follows a 6-byte header (2 control bytes).
- * HTC_READY_MSG = MessageID(2, =1), CreditCount(2), CreditSize(2), MaxEp(1).
- * Reference: ath6kl htc.c HTCWaitTarget / DevPollMboxMsgRecv. Credit: Octoblimp. */
+ * HOST_INT_STATUS(0x400) mbox0-data + RX_LOOKAHEAD_VALID(0x405), read the
+ * 4-byte HTC frame header from the lookahead register (0x408) for the payload
+ * length, then drain the full message from mailbox 0. HTC frame header =
+ * EndpointID(1), Flags(1), PayloadLen(2); payload follows a 6-byte header (2
+ * control bytes). HTC_READY_MSG = MessageID(2, =1), CreditCount(2),
+ * CreditSize(2), MaxEp(1). Reference: ath6kl htc.c HTCWaitTarget /
+ * DevPollMboxMsgRecv. Credit: Octoblimp. */
 #define HTC_HDR_LENGTH   6u
 #define HTC_MSG_READY_ID 1u
 
@@ -738,10 +729,9 @@ static void wifi_htc_wait_ready(WifiShared *w) {
   w->htc_regs = 0;
   w->boot_ready = 0;
 
-  /* Watch mailbox 0 for a pending message from the very start (no settle first):
-   * poll RX_LOOKAHEAD_VALID(0x405) bit0 or HOST_INT_STATUS(0x400) mbox-data bits.
-   * Occasionally sample the NWM ready flag (HI+0x58) via the diag window. Bail if
-   * CMD52 stops being acked so the core can't freeze for minutes. */
+  /* Watch mailbox 0 from the start: RX_LOOKAHEAD_VALID (0x405) bit0 or the
+   * HOST_INT_STATUS (0x400) mailbox bits, sampling the NWM ready flag (HI+0x58)
+   * now and then. Bail if CMD52 stops being acked. */
   uint32_t t0 = w->timeouts;
   int have = 0;
   for (int i = 0; i < 6000; i++) { /* ~1 s, bounded so the core returns to its
@@ -765,9 +755,9 @@ static void wifi_htc_wait_ready(WifiShared *w) {
       ;
   }
 
-  /* Diagnostic snapshot: HOST_INT_STATUS 0x400 | CPU_INT 0x401 | ERROR_INT 0x402
-   * | RX_LOOKAHEAD_VALID 0x405, so an assert (error/cpu int) after boot is
-   * visible even when no mailbox message ever appears. */
+  /* Diagnostic snapshot: HOST_INT_STATUS 0x400 | CPU_INT 0x401 | ERROR_INT
+   * 0x402 | RX_LOOKAHEAD_VALID 0x405, so an assert (error/cpu int) after boot
+   * is visible even when no mailbox message ever appears. */
   {
     uint32_t his, cpu, err, lav;
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x400));
@@ -788,8 +778,9 @@ static void wifi_htc_wait_ready(WifiShared *w) {
   w->htc_look = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) |
                 ((uint32_t)hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
   if (!have) {
-    /* Nothing flagged: peek mailbox 0 directly (CMD52) and grab mbox_frame(0x404)
-     * in case the firmware posted but the lookahead register isn't showing it. */
+    /* Nothing flagged: peek mailbox 0 directly (CMD52) and grab
+     * mbox_frame(0x404) in case the firmware posted but the lookahead register
+     * isn't showing it. */
     uint32_t mb = 0;
     for (int i = 0; i < 4; i++) {
       wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, WIFI_MBOX0 + i));
@@ -864,10 +855,8 @@ static void wifi_boot_firmware(WifiShared *w) {
                      fw->stubdata_len);
   wifi_bmi_write_mem(w, AR6014_PARTC_DST, (const uint8_t *)WIFI_FW_STUBCODE,
                      fw->stubcode_len);
-  /* Verify the raw upload landed byte-for-byte: read the stub_code start back
-   * via the diag window now, before it runs and before anything overwrites it.
-   * fw_dbrd should equal fw_dbex (the first word of the blob just sent). This
-   * is the conclusive test of whether mailbox writes deliver intact. */
+  /* Read the start of stub_code back through the diag window before it runs;
+   * fw_dbrd should equal fw_dbex, proving mailbox writes arrive intact. */
   {
     const uint32_t *sc = (const uint32_t *)WIFI_FW_STUBCODE;
     w->fw_dbrd = wifi_diag_read(w, AR6014_PARTC_DST);
@@ -901,16 +890,13 @@ static void wifi_boot_firmware(WifiShared *w) {
     return;
   }
 
-  /* 4. Arm target mailbox interrupts before the handoff, then watch for HTC_READY.
-   * The AR6K driver applies this target-side configuration before unmasking its
-   * host-side SDIO event loop. */
+  /* 4. Arm target mailbox interrupts before the handoff, then watch for
+   * HTC_READY. The AR6K driver applies this target-side configuration before
+   * unmasking its host-side SDIO event loop. */
   wifi_htc_enable_ints(w);
 
-  /* Hand off from BMI, then IMMEDIATELY watch the mailbox for HTC_READY. The
-   *    firmware posts HTC_READY and, on the AR6014, asserts / aborts if the host
-   *    is slow to answer the HTC handshake, a message posted-then-cleared would
-   *    be missed by a delayed poll, so start watching the instant BMIDone lands
-   *    (the NWM ready flag is polled inside, occasionally, via the diag window). */
+  /* Watch for HTC_READY the moment BMIDone lands: the AR6014 aborts if the host
+   * answers the handshake late. */
   wifi_bmi_done(w);
   w->boot_step = WIFI_BOOT_DONE;
   dcache_clean();

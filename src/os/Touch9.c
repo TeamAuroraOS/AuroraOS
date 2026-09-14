@@ -1,15 +1,9 @@
-/*
- * Touchscreen, ARM9 side.
- *
- * The panel is sampled by the ARM11 (Touch11.c), which publishes raw ADC values
- * to the shared block at TOUCH_SHARED_ADDR. This turns those into screen pixels
- * and provides the press-edge helper the UI uses.
- */
+/* Turns the ARM11's raw touch ADC values into screen pixels. */
 #include "aurora.h"
 #include "touch.h"
 
-/* Touchscreen raw-ADC -> screen-pixel calibration. Defaults are a first guess;
- * tune them by eye (flip min/max to invert an axis). Raw ADC is 12-bit. */
+/* Raw 12-bit ADC -> screen-pixel calibration. A first guess, tuned by eye; swap
+ * min and max to invert an axis. */
 #define TS_X_MIN 0x0D0
 #define TS_X_MAX 0xF00
 #define TS_Y_MIN 0x0F0
@@ -45,9 +39,8 @@ int touch_read(int *sx, int *sy, int *rawx, int *rawy) {
   return 1;
 }
 
-/* Press-edge tap: fires once when a new touch begins. The shared prev-state
- * makes a tap that opens a new screen not immediately re-fire there (the finger
- * must lift and press again), matching the A-button edge behaviour. */
+/* Fires once when a new touch begins; a finger still down on a new screen must
+ * lift first. */
 static int touch_prev = 0;
 int touch_tap(int *x, int *y) {
   int sx = 0, sy = 0;

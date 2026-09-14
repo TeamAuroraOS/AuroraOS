@@ -1,7 +1,4 @@
-/* Links the AuroraOS ARM11 audio core to run in place at AUDIO_CORE_ADDR
-   (0x23000000 in FCRAM). The ARM9 OS copies the raw binary there and wakes the
-   ARM11 into it. Stack lives at 0x23200000; the command block (0x23300000) and
-   PCM buffer (0x23400000) sit above and are referenced by absolute address. */
+/* ARM11 core, run in place at AUDIO_CORE_ADDR (0x23000000). */
 OUTPUT_FORMAT("elf32-littlearm")
 OUTPUT_ARCH(arm)
 ENTRY(_audio11_start)
@@ -39,7 +36,6 @@ SECTIONS
         _abss_end = .;
     } > FCRAM
 
-    /* Stack grows down from here (2 MB above the load address). */
     _audio11_stack_top = 0x23200000;
 
     /DISCARD/ :

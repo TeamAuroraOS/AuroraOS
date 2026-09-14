@@ -1,5 +1,4 @@
-/* Links the AuroraOS payload to run in place at 0x22000000 (FCRAM).
-   Stack lives higher up in FCRAM, well clear of code/bss. */
+/* AuroraOS payload, run in place at 0x22000000. */
 OUTPUT_FORMAT("elf32-littlearm")
 OUTPUT_ARCH(arm)
 ENTRY(_os_start)
@@ -27,10 +26,9 @@ SECTIONS
         . = ALIGN(4);
     } > FCRAM
 
-    /* End of the loadable image (text+rodata+data). The Home Menu snapshots
-       [_os_start .. _os_image_end) so it can restore itself when an app exits
-       via HOME. .bss is NOLOAD, so it is not part of the snapshot; the OS
-       re-clears it on restart. */
+    /* End of the loadable image. The Home Menu snapshots [_os_start,
+     * _os_image_end) to restore itself after an app; .bss is NOLOAD and
+     * re-cleared on restart. */
     _os_image_end = .;
 
     .bss (NOLOAD) :

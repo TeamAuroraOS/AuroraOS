@@ -2,7 +2,6 @@
 #include "diskio.h"
 #include "sdmmc.h"
 
-/* Cached drive status. STA_NOINIT until disk_initialize() succeeds. */
 static DSTATUS sd_status = STA_NOINIT;
 
 DSTATUS disk_status(BYTE pdrv) {
@@ -16,7 +15,7 @@ DSTATUS disk_initialize(BYTE pdrv) {
     return STA_NOINIT;
 
   if (sdmmc_sdcard_init() == 0)
-    sd_status = 0; /* ready */
+    sd_status = 0;
   else
     sd_status = STA_NOINIT | STA_NODISK;
 

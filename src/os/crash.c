@@ -1,10 +1,5 @@
-/*
- * AuroraOS custom crash screen (ARM9).
- *
- * Blue (#0000FF) on both screens: a big sad face on the top screen, and the
- * crash reason + CPU register dump on the bottom. Replaces the default hang /
- * upstream crash handler. See include/crash.h and src/os/crash.s.
- */
+/* Crash screen: blue on both screens, a sad face on top, the reason and
+ * register dump below. */
 #include "audio.h"
 #include "crash.h"
 #include "crash_shared.h"
@@ -14,7 +9,6 @@
 /* Shared with crash.s (filled by the exception stubs). */
 CrashDump g_crash_dump;
 
-/* From crash.s. */
 extern void crash_vec_undef(void);
 extern void crash_vec_pabt(void);
 extern void crash_vec_dabt(void);
@@ -23,11 +17,9 @@ extern void crash_hang(void);
 /* From os_launch.s: clean+invalidate caches so the new vectors are fetched. */
 extern void os_cache_sync(void);
 
-#define COLOR_CRASH ((Color){0x00, 0x00, 0xFF}) /* #0000ff */
+#define COLOR_CRASH ((Color){0x00, 0x00, 0xFF})
 #define SH_T TOP_SCREEN_HEIGHT
 #define SH_B BOT_SCREEN_HEIGHT
-
-/* Formatting */
 
 static char *scpy(char *d, const char *s) {
   while ((*d = *s)) {
@@ -54,8 +46,6 @@ static const char *reason_name(u32 exc) {
   }
 }
 
-/* Drawing helpers */
-
 static void disc(int cx, int cy, int r, Color c) {
   draw_filled_round_rect(VRAM_TOP_LA, cx - r, cy - r, 2 * r, 2 * r, r, SH_T, c);
 }
@@ -72,7 +62,6 @@ static void thick_line(int x0, int y0, int x1, int y1, int t, Color c) {
   }
 }
 
-/* Big sad face centred on the top screen: two eyes, angled brows, a frown. */
 static void draw_sad_face(void) {
   Color w = COLOR_WHITE;
   int cx = TOP_SCREEN_WIDTH / 2;
@@ -154,7 +143,7 @@ static void draw_dump(CrashDump *d) {
   /* The auto-power-off countdown is drawn along the bottom by crash_handle(). */
 }
 
-/* Power the console off via the MCU (same sequence as os_power_off). */
+/* Same sequence as os_power_off. */
 static void crash_power_off(void) {
   I2C_init();
   I2C_writeReg(I2C_DEV_MCU, 0x22, 1 << 0); /* LCDs off */
@@ -164,11 +153,8 @@ static void crash_power_off(void) {
     __asm__ volatile("mcr p15, 0, r0, c7, c0, 4");
 }
 
-/* Wait ~1 real second using the MCU real-time clock (reg 0x30, first byte =
- * seconds), which is an actual clock; busy-loops are not. Returns as soon as
- * the seconds value changes. The delay(40000) chunk both paces the polling and,
- * if the RTC never advances, bounds the wait to a ~2 s busy fallback so it can
- * never hang. */
+/* Waits about one real second by watching the MCU RTC seconds register. The
+ * delay chunks bound it to a ~2 s busy wait if the RTC never advances. */
 static void crash_wait_1s(void) {
   u8 start = 0, now = 0;
   I2C_readRegBuf(I2C_DEV_MCU, 0x30, &start, 1);
@@ -181,8 +167,6 @@ static void crash_wait_1s(void) {
   }
 }
 
-/* Entry */
-
 void crash_handle(CrashDump *d) {
   /* Mask IRQ + FIQ so nothing disturbs the final screen. */
   __asm__ volatile("mrs r0, cpsr\n\t"
@@ -192,15 +176,12 @@ void crash_handle(CrashDump *d) {
                    :
                    : "r0", "memory");
 
-  /* Sound the fault before anything is drawn, so it is heard even if the screen
-   * work goes wrong. When the ARM11 is what died this posts into a core that
-   * will never answer, which is harmless: that core's own fault stub has
-   * already started the same tone. */
+  /* Before drawing, so it is heard even if drawing fails. If the ARM11 died,
+   * its own fault stub has already started the tone. */
   audio_error_beep();
 
-  /* Draw straight to the panels from here on. The fault may well be the ARM11
-   * core or the GPU, so the crash screen must not depend on a backbuffer that
-   * something else has to present. */
+  /* Draw straight to the panels: the fault may be in the GPU or the ARM11 core
+   * that presents. */
   screen_use_backbuffer(0);
 
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_CRASH);
@@ -242,8 +223,7 @@ void crash_force(void) {
   crash_handle(&g_crash_dump);
 }
 
-/* Poll the cross-core crash block for an ARM11 fault. Fast path: invalidate the
- * one cache line and read the magic. On a hit, sync and show the crash. */
+/* Fast path: invalidate one cache line and read the magic. */
 void crash_poll_arm11(void) {
   volatile CrashShared *cs = (volatile CrashShared *)CRASH_SHARED_ADDR;
   __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(CRASH_SHARED_ADDR)

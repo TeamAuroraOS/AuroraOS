@@ -1,11 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Wi-Fi, ARM9 side: posts requests to the ARM11 (WiFi11.c) and reads results
- * back out of WifiShared.
+/* Wi-Fi, ARM9 side: posts requests to WiFi11.c and reads WifiShared back.
  *
  * LICENSE: GPL-2.0, ath6kl-derived; credit Octoblimp. See docs/wifi.md
- * "License and credits".
- */
+ * "License and credits". */
 #include "aurora.h"
 #include "audio.h"
 #include "wifi.h"
@@ -14,8 +11,6 @@ extern void os_cache_sync(void);
 
 static AudioCtrl *const ctrl = (AudioCtrl *)AUDIO_CTRL_ADDR;
 
-/* Wi-Fi (GPL-2.0): wifi_probe/wifi_get are part of the GPL-2.0 Wi-Fi driver
- * (ath6kl-derived; credit Octoblimp). See docs/wifi.md "License and credits". */
 void wifi_probe(void) {
   os_cache_sync();
   ctrl->cmd = AUDIO_CMD_WIFI;
@@ -23,8 +18,7 @@ void wifi_probe(void) {
   os_cache_sync();
 }
 
-/* Trigger the firmware upload + boot. The caller (os_main) must have staged the
- * SD firmware into the WIFI_FW slots and set the WifiFw header first. */
+/* The caller must have staged the SD firmware into the WIFI_FW slots first. */
 void wifi_boot(void) {
   os_cache_sync();
   ctrl->cmd = AUDIO_CMD_WIFI_BOOT;

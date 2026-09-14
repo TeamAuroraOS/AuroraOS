@@ -1,22 +1,12 @@
-/*
- * Audio, ARM9 side: posts commands to the ARM11 core.
- *
- * audio_boot() brings up that whole core, not just audio, since the same
- * binary carries the touchscreen, Wi-Fi and GPU modules. It lives here because
- * the embedded blob is generated alongside this file.
- *
- * Starts the ARM11 audio core and posts commands to it through the shared block
- * at AUDIO_CTRL_ADDR. The ARM11 core binary is embedded here as a byte blob
- * (build/audio11_blob.h, generated from audio11.bin) so the OS can copy it into
- * place and wake the ARM11 itself, no firm changes and cache coherency stays
- * under the OS's control via os_cache_sync().
- */
+/* ARM9 side of the ARM11 core. audio_boot() copies the embedded core binary
+ * (build/audio11_blob.h) into place and wakes the ARM11; the rest posts
+ * commands to AUDIO_CTRL_ADDR. */
 #include "aurora.h"
 #include "audio.h"
 #include "audio11_blob.h" /* generated: audio11_bin[], audio11_bin_len */
 
-/* Clean+invalidate the ARM9 caches (src/os/os_launch.s). Used both to push
- * writes to physical RAM for the ARM11/CSND and to re-read the ARM11's replies. */
+/* Clean+invalidate the ARM9 caches: pushes writes out for the ARM11 and CSND,
+ * and re-reads the ARM11's replies. */
 extern void os_cache_sync(void);
 
 static AudioCtrl *const ctrl = (AudioCtrl *)AUDIO_CTRL_ADDR;
@@ -55,14 +45,12 @@ void audio_boot(void) {
   if (ctrl->magic == AUDIO_MAGIC)
     return; /* core already running (e.g. after a HOME return) */
 
-  /* Reset the command block. */
   ctrl->magic = 0;
   ctrl->status = AUDIO_ST_NONE;
   ctrl->cmd_seq = 0;
   ctrl->ack_seq = 0;
   ctrl->cmd = AUDIO_CMD_NONE;
 
-  /* Copy the ARM11 core into place. */
   volatile unsigned char *dst = (volatile unsigned char *)AUDIO_CORE_ADDR;
   for (unsigned i = 0; i < audio11_bin_len; i++)
     dst[i] = audio11_bin[i];
@@ -73,7 +61,6 @@ void audio_boot(void) {
   *(volatile uint32_t *)AUDIO_ARM11_MAILBOX = AUDIO_CORE_ADDR;
   os_cache_sync();
 
-  /* Wait (bounded) for the core to report alive. */
   for (int t = 0; t < 200; t++) {
     os_cache_sync();
     if (ctrl->magic == AUDIO_MAGIC)
@@ -95,6 +82,20 @@ void audio_play_tone(uint32_t freq_hz) { post(AUDIO_CMD_TONE, freq_hz); }
 void audio_stop(void) { post(AUDIO_CMD_STOP, 0); }
 
 void audio_error_beep(void) { post(AUDIO_CMD_ERROR, 0); }
+
+void audio_voices_stop(void) {
+  if (!audio_alive())
+    return;
+  post(AUDIO_CMD_VOICE_STOP, AUDIO_VOICE_ALL);
+  /* The GPU is about to use the one-request block, so wait until the core has
+   * taken this request. An older core acks it without acting on it. */
+  for (int t = 0; t < 2000; t++) {
+    os_cache_sync();
+    if (ctrl->ack_seq == ctrl->cmd_seq)
+      return;
+    delay(2000);
+  }
+}
 
 void audio_play_pcm(uint32_t samples, uint32_t rate, uint32_t depth) {
   os_cache_sync(); /* flush the caller's PCM writes at AUDIO_PCM_ADDR to RAM */

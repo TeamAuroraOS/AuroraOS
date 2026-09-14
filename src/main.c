@@ -128,7 +128,7 @@ static void draw_splash_screen(void) {
   draw_aurora_logo(VRAM_TOP_LA, logo_x, logo_y, TOP_SCREEN_HEIGHT,
                    COLOR_WHITE);
 
-  const char *version = "v0.0.9";
+  const char *version = AURORA_VERSION;
   int ver_len = (int)str_len(version);
   int ver_x = (TOP_SCREEN_WIDTH - ver_len * FONT_WIDTH) / 2;
   int ver_y = 165;
@@ -137,7 +137,6 @@ static void draw_splash_screen(void) {
               ver_color);
 }
 
-/* Launcher tile layout for the three main actions. */
 #define TILE_SIZE       80
 #define TILE_Y          70
 #define TILE_GAP        16
@@ -531,7 +530,6 @@ int main(void) {
 
     if (kdown & BUTTON_A) {
       if (selection == 0) {
-        /* Boot Aurora: load AURORAOS.BIN (the OS) and jump into it. */
         boot_aurora();
         draw_home_screen(selection);
       } else if (selection == 1) {

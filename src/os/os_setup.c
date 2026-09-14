@@ -1,4 +1,6 @@
+#include "statusbar.h"
 #include "aurora.h"
+#include "ui.h"
 #include "aurora_logo.h"
 #include "ff.h"
 #include "font.h"
@@ -7,31 +9,31 @@
 #include "touch.h"
 #include "user.h"
 
-/* One row per string id (see lang.h); columns are English / Espanol / Francais.
- * Font is ASCII-only, so translations drop accents. */
+/* One row per string id (lang.h): English, Spanish, French. Accented letters
+ * are \u escapes so the file stays ASCII; the pack fonts cover Latin-1. */
 int g_lang = 0;
 
 static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_LANGUAGE     */ {"Language", "Idioma", "Langue"},
-    /* STR_NETWORK      */ {"Network", "Red", "Reseau"},
+    /* STR_NETWORK      */ {"Network", "Red", "R\u00E9seau"},
     /* STR_DETAILS      */ {"Details", "Datos", "Profil"},
     /* STR_PERSONAL     */ {"Personal", "Color", "Couleur"},
-    /* STR_WELCOME      */ {"Welcome", "Listo", "Pret"},
+    /* STR_WELCOME      */ {"Welcome", "Listo", "Pr\u00EAt"},
     /* STR_GET_STARTED  */ {"Get started", "Comenzar", "Commencer"},
     /* STR_NET_L1       */
     {"Set up a wireless network connection to use",
-     "Configura una conexion de red inalambrica",
-     "Configurez une connexion reseau sans fil"},
+     "Configura una conexi\u00F3n de red inal\u00E1mbrica",
+     "Configurez une connexion r\u00E9seau sans fil"},
     /* STR_NET_L2       */
     {"online features such as the Aurora Store.",
      "para usar funciones como la Aurora Store.",
      "pour les fonctions en ligne (Aurora Store)."},
     /* STR_WIFI_UNAVAIL */
-    {"Wi-Fi is not available yet.", "El Wi-Fi aun no esta disponible.",
+    {"Wi-Fi is not available yet.", "El Wi-Fi a\u00FAn no est\u00E1 disponible.",
      "Le Wi-Fi n'est pas encore disponible."},
     /* STR_SKIP         */ {"Skip", "Omitir", "Passer"},
     /* STR_NET_HINT     */
-    {"A / START: Skip    B: Back", "A / START: Omitir   B: Atras",
+    {"A / START: Skip    B: Back", "A / START: Omitir   B: Atr\u00E1s",
      "A / START: Passer   B: Retour"},
     /* STR_USER_L1      */
     {"Enter your details so Aurora knows what to",
@@ -39,13 +41,13 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
      "Entrez vos infos pour qu'Aurora sache"},
     /* STR_USER_L2      */
     {"call you and when your birthday is.",
-     "como llamarte y tu fecha de nacimiento.",
+     "c\u00F3mo llamarte y tu fecha de nacimiento.",
      "comment vous appeler et votre naissance."},
     /* STR_USER_NAME    */ {"User name", "Nombre", "Nom"},
-    /* STR_DAY          */ {"Day", "Dia", "Jour"},
+    /* STR_DAY          */ {"Day", "D\u00EDa", "Jour"},
     /* STR_MONTH        */ {"Month", "Mes", "Mois"},
-    /* STR_YEAR         */ {"Year", "Ano", "Annee"},
-    /* STR_BACK         */ {"Back", "Atras", "Retour"},
+    /* STR_YEAR         */ {"Year", "A\u00F1o", "Ann\u00E9e"},
+    /* STR_BACK         */ {"Back", "Atr\u00E1s", "Retour"},
     /* STR_NEXT         */ {"Next", "Siguiente", "Suivant"},
     /* STR_USER_HINT    */
     {"<>: move  ^v: change  A: select", "<>: mover  ^v: cambiar  A: elegir",
@@ -57,36 +59,46 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
      "Elige un color de acento para Aurora.",
      "Choisissez une couleur d'accent pour Aurora."},
     /* STR_PERS_HINT    */
-    {"D-Pad: choose   A: Next   B: Back", "D-Pad: elegir  A: Sig.  B: Atras",
+    {"D-Pad: choose   A: Next   B: Back",
+     "D-Pad: elegir  A: Sig.  B: Atr\u00E1s",
      "D-Pad: choisir A: Suiv. B: Retour"},
     /* STR_PRESS_A_START*/
-    {"Press (A) to start using Aurora!", "Pulsa (A) para empezar con Aurora!",
-     "Appuyez sur (A) pour demarrer Aurora!"},
-    /* STR_B_BACK       */ {"B: Back", "B: Atras", "B: Retour"},
-    /* STR_SETTINGS     */ {"Settings", "Ajustes", "Reglages"},
+    {"Press (A) to start using Aurora!",
+     "\u00A1Pulsa (A) para empezar con Aurora!",
+     "Appuyez sur (A) pour d\u00E9marrer Aurora!"},
+    /* STR_B_BACK       */ {"B: Back", "B: Atr\u00E1s", "B: Retour"},
+    /* STR_SETTINGS     */ {"Settings", "Ajustes", "R\u00E9glages"},
     /* STR_WIFI         */ {"Wi-Fi", "Wi-Fi", "Wi-Fi"},
     /* STR_ACCENT_COLOR */
     {"Accent Color", "Color de acento", "Couleur d'accent"},
-    /* STR_BRIGHTNESS   */ {"Brightness", "Brillo", "Luminosite"},
-    /* STR_ABOUT        */ {"About", "Acerca", "A propos"},
+    /* STR_BRIGHTNESS   */ {"Brightness", "Brillo", "Luminosit\u00E9"},
+    /* STR_ABOUT        */ {"About", "Acerca de", "\u00C0 propos"},
     /* STR_OFF          */ {"Off", "No", "Non"},
     /* STR_PICK_ACCENT  */
     {"Pick an accent colour", "Elige un color", "Choisir une couleur"},
     /* STR_A_APPLY_B_BACK*/
-    {"A: Apply   B: Back", "A: Aplicar  B: Atras", "A: Appliquer B: Retour"},
-    /* STR_POWER_OFF    */ {"Power Off", "Apagar", "Eteindre"},
-    /* STR_SYSTEM       */ {"System", "Sistema", "Systeme"},
-    /* STR_EMPTY_SLOT   */ {"Empty Slot", "Vacio", "Vide"},
+    {"A: Apply   B: Back", "A: Aplicar  B: Atr\u00E1s", "A: Appliquer B: Retour"},
+    /* STR_POWER_OFF    */ {"Power Off", "Apagar", "\u00C9teindre"},
+    /* STR_SYSTEM       */ {"System", "Sistema", "Syst\u00E8me"},
+    /* STR_EMPTY_SLOT   */ {"Empty Slot", "Vac\u00EDo", "Vide"},
     /* STR_LOADING      */ {"Loading...", "Cargando...", "Chargement..."},
-    /* STR_MUSIC        */ {"Music", "Musica", "Musique"},
+    /* STR_MUSIC        */ {"Music", "M\u00FAsica", "Musique"},
     /* STR_NO_TRACKS    */
     {"No .aaf files found", "No hay archivos .aaf", "Aucun fichier .aaf"},
     /* STR_PLAYING      */ {"Playing", "Reproduciendo", "Lecture"},
-    /* STR_STOPPED      */ {"Stopped", "Detenido", "Arrete"},
+    /* STR_STOPPED      */ {"Stopped", "Detenido", "Arr\u00EAt\u00E9"},
     /* STR_DEBUG_CRASH  */
     {"Force Debug Crash", "Forzar Fallo", "Forcer un Crash"},
     /* STR_WIFI_TEST    */ {"Wi-Fi Test", "Wi-Fi", "Wi-Fi"},
     /* STR_GPU_TEST     */ {"GPU Test", "GPU", "GPU"},
+    /* STR_VERSION      */ {"Version", "Versi\u00F3n", "Version"},
+    /* STR_CONSOLE      */ {"Console", "Consola", "Console"},
+    /* STR_BATTERY      */ {"Battery", "Bater\u00EDa", "Batterie"},
+    /* STR_SD_CARD      */ {"SD card", "Tarjeta SD", "Carte SD"},
+    /* STR_LICENSE      */ {"License", "Licencia", "Licence"},
+    /* STR_CHARGING     */ {"charging", "cargando", "en charge"},
+    /* STR_FREE         */ {"free", "libres", "libres"},
+    /* STR_NO_CARD      */ {"No card", "Sin tarjeta", "Pas de carte"},
 };
 
 const char *L(StringId id) {
@@ -98,8 +110,8 @@ const char *L(StringId id) {
   return T[id][l];
 }
 
-/* Index 0 is Aurora teal, the default. Ordered to roughly match the swatch
- * grid in mockup/setup6.png. Also used by the Settings accent picker. */
+/* Index 0, Aurora teal, is the default. Also used by the Settings accent
+ * picker. */
 const Color aurora_accent_presets[AURORA_ACCENT_COUNT] = {
     {0x64, 0xE8, 0xC8},
     {0xFF, 0x3B, 0x30},
@@ -128,7 +140,6 @@ static u32 slen(const char *s) {
   return n;
 }
 
-/* Unsigned int -> decimal string (no sign). */
 static void uint_str(u32 v, char *out) {
   char tmp[12];
   int i = 0;
@@ -144,10 +155,18 @@ static void uint_str(u32 v, char *out) {
   out[p] = '\0';
 }
 
-/* Transparent text: draws only set glyph pixels (no background box), so it sits
- * cleanly over the gradient/glow on the welcome screen. */
+/* The layout was made for an 8px bitmap line; this centres a pack-font line on
+ * the midline that line had at `y8`. */
+static int mid8(int y8, const Font *f) { return y8 + FONT_HEIGHT / 2 - ui_th(f) / 2; }
+
+/* Glyphs only, no background box, over the gradient and glow. The bitmap loop
+ * is the fallback without the pack. */
 static void text_tr(volatile u8 *fb, int x, int y, int sh, const char *s,
                     Color fg) {
+  if (ui_have(&ui_font)) {
+    ui_text(fb, x, mid8(y, &ui_font), sh, s, fg, COLOR_HM_BG, &ui_font);
+    return;
+  }
   int cx = x;
   while (*s) {
     char c = *s++;
@@ -168,16 +187,13 @@ static void text_tr(volatile u8 *fb, int x, int y, int sh, const char *s,
 
 static void text_center_tr(volatile u8 *fb, int y, int screen_w, int sh,
                            const char *s, Color fg) {
-  int x = (screen_w - (int)slen(s) * FONT_WIDTH) / 2;
-  text_tr(fb, x, y, sh, s, fg);
+  text_tr(fb, (screen_w - ui_tw(&ui_font, s)) / 2, y, sh, s, fg);
 }
 
-/* Filled disc (used to build the progress icons). */
 static void disc(volatile u8 *fb, int cx, int cy, int r, int sh, Color c) {
   draw_filled_round_rect(fb, cx - r, cy - r, 2 * r, 2 * r, r, sh, c);
 }
 
-/* Thick line as a run of small blocks (progress check mark). */
 static void thick_line(volatile u8 *fb, int x0, int y0, int x1, int y1, int t,
                        int sh, Color c) {
   int dx = x1 - x0, dy = y1 - y0;
@@ -194,26 +210,8 @@ static void thick_line(volatile u8 *fb, int x0, int y0, int x1, int y1, int t,
 
 #define SH_TOP TOP_SCREEN_HEIGHT
 
-static void status_bar(void) {
-  RtcTime now;
-  char tbuf[8], dbuf[12];
+static void status_bar(void) { status_bar_draw(); }
 
-  if (rtc_read(&now)) {
-    rtc_format_time(&now, tbuf);
-    rtc_format_date(&now, dbuf);
-  } else {
-    tbuf[0] = '-'; tbuf[1] = '-'; tbuf[2] = ':';
-    tbuf[3] = '-'; tbuf[4] = '-'; tbuf[5] = '\0';
-    dbuf[0] = '\0';
-  }
-
-  draw_filled_rect(VRAM_TOP_LA, 0, 0, TOP_SCREEN_WIDTH, 22, SH_TOP,
-                   COLOR_HM_BAR);
-  draw_string(VRAM_TOP_LA, 10, 7, SH_TOP, tbuf, COLOR_WHITE, COLOR_HM_BAR);
-  draw_string(VRAM_TOP_LA, 60, 7, SH_TOP, dbuf, COLOR_HM_TEXT2, COLOR_HM_BAR);
-}
-
-/* One progress icon centred at (cx,cy) in the given colour. */
 static void step_icon(int step, int cx, int cy, Color col) {
   volatile u8 *fb = VRAM_TOP_LA;
   switch (step) {
@@ -250,8 +248,8 @@ static void step_icon(int step, int cx, int cy, Color col) {
   }
 }
 
-/* Progress bar: completed steps white, the active step in `accent`, future
- * steps dimmed. Labels STR_LANGUAGE..STR_WELCOME are consecutive (0..4). */
+/* Completed steps white, the active one in `accent`, future ones dimmed. Labels
+ * STR_LANGUAGE..STR_WELCOME are consecutive. */
 static void step_bar(int active, Color accent) {
   static const int cxs[5] = {40, 120, 200, 280, 360};
   for (int i = 0; i < 5; i++) {
@@ -259,13 +257,12 @@ static void step_bar(int active, Color accent) {
         (i == active) ? accent : (i < active ? COLOR_WHITE : COLOR_HM_TEXT2);
     const char *lab = L((StringId)(STR_LANGUAGE + i));
     step_icon(i, cxs[i], 166, col);
-    int lx = cxs[i] - (int)slen(lab) * FONT_WIDTH / 2;
-    text_tr(VRAM_TOP_LA, lx, 194, SH_TOP, lab, col);
+    ui_text(VRAM_TOP_LA, cxs[i] - ui_tw(&ui_small, lab) / 2,
+            mid8(194, &ui_small), SH_TOP, lab, col, COLOR_HM_BG, &ui_small);
   }
 }
 
-/* Standard step top screen: status bar, up to two lines of body copy, and the
- * progress bar with `step` active in the current accent colour. */
+/* Status bar, up to two body lines and the progress bar with `step` active. */
 static void setup_top(int step, const char *l1, const char *l2, Color accent) {
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_HM_BG);
   status_bar();
@@ -278,22 +275,34 @@ static void setup_top(int step, const char *l1, const char *l2, Color accent) {
 
 #define SH_BOT BOT_SCREEN_HEIGHT
 
+/* Rounded-rect corners blend with what is behind them, so repeated in-place
+ * redraws would harden them. The background is flat here, so clearing the
+ * corner boxes first keeps a redraw identical to a fresh one. */
+static void patch_corners(int x, int y, int w, int h, int r) {
+  draw_filled_rect(VRAM_BOT_A, x, y, r, r, SH_BOT, COLOR_HM_BG);
+  draw_filled_rect(VRAM_BOT_A, x + w - r, y, r, r, SH_BOT, COLOR_HM_BG);
+  draw_filled_rect(VRAM_BOT_A, x, y + h - r, r, r, SH_BOT, COLOR_HM_BG);
+  draw_filled_rect(VRAM_BOT_A, x + w - r, y + h - r, r, r, SH_BOT, COLOR_HM_BG);
+}
+
 static void button(int x, int y, int w, int h, const char *label, int sel,
                    Color accent) {
+  patch_corners(x - 2, y - 2, w + 4, h + 4, 10);
   draw_filled_round_rect(VRAM_BOT_A, x - 2, y - 2, w + 4, h + 4, 10, SH_BOT,
                          sel ? accent : COLOR_HM_BG);
   draw_filled_round_rect(VRAM_BOT_A, x, y, w, h, 8, SH_BOT, COLOR_HM_SLOT);
-  int tl = (int)slen(label) * FONT_WIDTH;
-  draw_string(VRAM_BOT_A, x + (w - tl) / 2, y + (h - FONT_HEIGHT) / 2, SH_BOT,
-              label, COLOR_WHITE, COLOR_HM_SLOT);
+  ui_text(VRAM_BOT_A, x + (w - ui_tw(&ui_bold, label)) / 2,
+          y + (h - ui_th(&ui_bold)) / 2, SH_BOT, label, COLOR_WHITE,
+          COLOR_HM_SLOT, &ui_bold);
 }
 
 static void bottom_title(const char *s) {
-  draw_string(VRAM_BOT_A, 12, 12, SH_BOT, s, COLOR_HM_TEXT2, COLOR_HM_BG);
+  ui_text(VRAM_BOT_A, 12, mid8(12, &ui_small), SH_BOT, s, COLOR_HM_TEXT2,
+          COLOR_HM_BG, &ui_small);
 }
 
-/* Branded welcome screen (mockup/setup1.png): green glow, AURORA wordmark and
- * version on top; language list + Get started on the bottom. */
+/* Welcome screen (mockup/setup1.png): glow, wordmark and version on top; the
+ * language list and Get started below. */
 
 static void glow_top(void) {
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_HM_BG);
@@ -318,30 +327,58 @@ static void glow_top(void) {
                  COLOR_WHITE);
   int lx = (TOP_SCREEN_WIDTH - AURORA_LOGO_WIDTH) / 2;
   draw_aurora_logo(VRAM_TOP_LA, lx, 78, SH_TOP, COLOR_WHITE);
-  text_tr(VRAM_TOP_LA, 12, 214, SH_TOP, "v0.0.7", COLOR_HM_TEXT2);
+  ui_text(VRAM_TOP_LA, 12, mid8(214, &ui_small), SH_TOP, AURORA_VERSION,
+          COLOR_HM_TEXT2, COLOR_HM_BG, &ui_small);
 }
 
-static const char *lang_names[LANG_COUNT] = {"English", "Espanol", "Francais"};
+static const char *lang_names[LANG_COUNT] = {"English", "Espa\u00F1ol",
+                                              "Fran\u00E7ais"};
+
+#define LANG_RX   12
+#define LANG_RW   (BOT_SCREEN_WIDTH - 24)
+#define LANG_RH   40
+#define LANG_Y0   34
+#define LANG_STEP 48
+
+/* The rect is opaque and a fixed size, so redrawing a row erases its last
+ * state. */
+static void lang_row(int i, int sel, Color accent) {
+  int y = LANG_Y0 + i * LANG_STEP;
+  int on = (i == sel);
+  patch_corners(LANG_RX, y, LANG_RW, LANG_RH, 8);
+  draw_filled_round_rect(VRAM_BOT_A, LANG_RX, y, LANG_RW, LANG_RH, 8, SH_BOT,
+                         on ? accent : COLOR_HM_SLOT);
+  ui_text(VRAM_BOT_A, LANG_RX + 16, y + (LANG_RH - ui_th(&ui_font)) / 2, SH_BOT,
+          lang_names[i], COLOR_WHITE, on ? accent : COLOR_HM_SLOT, &ui_font);
+  if (on) { /* check mark on the selected language */
+    thick_line(VRAM_BOT_A, LANG_RX + LANG_RW - 30, y + LANG_RH / 2,
+               LANG_RX + LANG_RW - 24, y + LANG_RH / 2 + 6, 2, SH_BOT,
+               COLOR_WHITE);
+    thick_line(VRAM_BOT_A, LANG_RX + LANG_RW - 24, y + LANG_RH / 2 + 6,
+               LANG_RX + LANG_RW - 14, y + LANG_RH / 2 - 6, 2, SH_BOT,
+               COLOR_WHITE);
+  }
+}
+
+/* The caption is in the language being chosen, so it is redrawn with the rows. */
+static void lang_button(Color accent) {
+  button((BOT_SCREEN_WIDTH - 200) / 2, BOT_SCREEN_HEIGHT - 38, 200, 30,
+         L(STR_GET_STARTED), 1, accent);
+}
 
 static void lang_bottom(int sel, Color accent) {
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
   bottom_title("Home Menu");
-  int rx = 12, rw = BOT_SCREEN_WIDTH - 24, rh = 40, y0 = 34, step = 48;
-  for (int i = 0; i < LANG_COUNT; i++) {
-    int y = y0 + i * step;
-    int on = (i == sel);
-    draw_filled_round_rect(VRAM_BOT_A, rx, y, rw, rh, 8, SH_BOT,
-                           on ? accent : COLOR_HM_SLOT);
-    draw_string(VRAM_BOT_A, rx + 16, y + (rh - FONT_HEIGHT) / 2, SH_BOT,
-                lang_names[i], COLOR_WHITE, on ? accent : COLOR_HM_SLOT);
-    if (on) /* check mark on the selected language */
-      thick_line(VRAM_BOT_A, rx + rw - 30, y + rh / 2, rx + rw - 24,
-                 y + rh / 2 + 6, 2, SH_BOT, COLOR_WHITE),
-          thick_line(VRAM_BOT_A, rx + rw - 24, y + rh / 2 + 6, rx + rw - 14,
-                     y + rh / 2 - 6, 2, SH_BOT, COLOR_WHITE);
-  }
-  button((BOT_SCREEN_WIDTH - 200) / 2, BOT_SCREEN_HEIGHT - 38, 200, 30,
-         L(STR_GET_STARTED), 1, accent);
+  for (int i = 0; i < LANG_COUNT; i++)
+    lang_row(i, sel, accent);
+  lang_button(accent);
+  screen_present_bottom();
+}
+
+static void lang_update(int old_sel, int sel, Color accent) {
+  lang_row(old_sel, sel, accent);
+  lang_row(sel, sel, accent);
+  lang_button(accent);
   screen_present_bottom();
 }
 
@@ -374,18 +411,18 @@ static void step_language(UserConfig *cfg) {
     if (sel != prev) {
       cfg->language = (u8)sel;
       g_lang = sel; /* re-render the button etc. in the chosen language */
-      lang_bottom(sel, accent);
+      lang_update(prev, sel, accent);
     }
     if ((k & (BUTTON_A | BUTTON_START)) || go) {
       cfg->language = (u8)sel;
       return; /* Get started -> next step (no Back on the first screen) */
     }
-    delay(60000);
+    ui_idle();
   }
 }
 
-/* Wi-Fi is not implemented yet, so per the brief this screen offers only a Skip
- * button (B still steps back). */
+/* Wi-Fi is not implemented, so this screen only offers Skip; B still steps
+ * back. */
 
 typedef enum { NAV_NEXT, NAV_BACK } Nav;
 
@@ -413,11 +450,11 @@ static Nav step_network(UserConfig *cfg) {
       return NAV_NEXT;
     if (k & BUTTON_B)
       return NAV_BACK;
-    delay(60000);
+    ui_idle();
   }
 }
 
-/* D-pad navigable QWERTY for the user-name field (no touch driver yet). */
+/* Key rows of the user-name keyboard. */
 
 static const char *kb_rows[4] = {
     "1234567890",
@@ -439,56 +476,90 @@ static char kb_apply_caps(char c, int caps) {
   return c;
 }
 
-static void kb_draw(const char *name, int row, int col, int caps,
-                    Color accent) {
-  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+#define KB_KW    27
+#define KB_KH    26
+#define KB_GAP   3
+#define KB_Y0    52
+#define KB_YSTEP (KB_KH + KB_GAP)
 
-  /* Text field showing the name being typed (or a placeholder). */
+/* Redrawn whole, so a deleted character's cell is cleared. */
+static void kb_field(const char *name) {
   draw_filled_round_rect(VRAM_BOT_A, 12, 10, BOT_SCREEN_WIDTH - 24, 30, 8,
                          SH_BOT, COLOR_HM_SLOT);
   if (name[0])
-    draw_string(VRAM_BOT_A, 20, 18, SH_BOT, name, COLOR_WHITE, COLOR_HM_SLOT);
+    ui_text(VRAM_BOT_A, 20, 10 + (30 - ui_th(&ui_font)) / 2, SH_BOT, name,
+            COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
   else
-    draw_string(VRAM_BOT_A, 20, 18, SH_BOT, L(STR_KB_ENTER_NAME),
-                COLOR_HM_TEXT2, COLOR_HM_SLOT);
+    ui_text(VRAM_BOT_A, 20, 10 + (30 - ui_th(&ui_font)) / 2, SH_BOT,
+            L(STR_KB_ENTER_NAME), COLOR_HM_TEXT2, COLOR_HM_SLOT, &ui_font);
+}
 
-  int kw = 27, kh = 26, gap = 3, y0 = 52, ystep = kh + gap;
-  for (int r = 0; r < 4; r++) {
+/* One key. Rows 0..3 are letters, row 4 is Caps / Space / Del / OK. Every key
+ * paints an opaque face of a fixed size, so a key can be repainted alone. */
+static void kb_key(int r, int c, int row, int col, int caps, Color accent) {
+  int on = (r == row && c == col);
+  if (r < 4) {
     int n = kb_row_len(r);
-    int roww = n * kw + (n - 1) * gap;
-    int x0 = (BOT_SCREEN_WIDTH - roww) / 2;
-    for (int c = 0; c < n; c++) {
-      int x = x0 + c * (kw + gap), y = y0 + r * ystep;
-      int on = (r == row && c == col);
-      draw_filled_round_rect(VRAM_BOT_A, x, y, kw, kh, 5, SH_BOT,
-                             on ? accent : COLOR_HM_SLOT);
-      char ch[2] = {kb_apply_caps(kb_rows[r][c], caps), 0};
-      draw_string(VRAM_BOT_A, x + (kw - FONT_WIDTH) / 2,
-                  y + (kh - FONT_HEIGHT) / 2, SH_BOT, ch, COLOR_WHITE,
-                  on ? accent : COLOR_HM_SLOT);
-    }
+    int roww = n * KB_KW + (n - 1) * KB_GAP;
+    int x = (BOT_SCREEN_WIDTH - roww) / 2 + c * (KB_KW + KB_GAP);
+    int y = KB_Y0 + r * KB_YSTEP;
+    char ch[2] = {kb_apply_caps(kb_rows[r][c], caps), 0};
+    patch_corners(x, y, KB_KW, KB_KH, 5);
+    draw_filled_round_rect(VRAM_BOT_A, x, y, KB_KW, KB_KH, 5, SH_BOT,
+                           on ? accent : COLOR_HM_SLOT);
+    ui_text(VRAM_BOT_A, x + (KB_KW - ui_tw(&ui_font, ch)) / 2,
+            y + (KB_KH - ui_th(&ui_font)) / 2, SH_BOT, ch, COLOR_WHITE,
+            on ? accent : COLOR_HM_SLOT, &ui_font);
+    return;
   }
-  /* Action row: Caps / Space / Del / OK. */
-  int ay = y0 + 4 * ystep;
-  int aw[4] = {56, 96, 56, 56}, ax = 20;
-  for (int c = 0; c < 4; c++) {
-    int on = (row == 4 && col == c);
-    int w = aw[c];
-    Color face = COLOR_HM_SLOT;
-    if (c == 0 && caps)
-      face = accent; /* Caps lit when active */
-    draw_filled_round_rect(VRAM_BOT_A, ax - 2, ay - 2, w + 4, kh + 4, 6, SH_BOT,
-                           on ? accent : COLOR_HM_BG);
-    draw_filled_round_rect(VRAM_BOT_A, ax, ay, w, kh, 5, SH_BOT, face);
-    int tl = (int)slen(kb_special[c]) * FONT_WIDTH;
-    draw_string(VRAM_BOT_A, ax + (w - tl) / 2, ay + (kh - FONT_HEIGHT) / 2,
-                SH_BOT, kb_special[c], COLOR_WHITE, face);
-    ax += w + 8;
+
+  static const int aw[4] = {56, 96, 56, 56};
+  int ay = KB_Y0 + 4 * KB_YSTEP, ax = 20;
+  for (int i = 0; i < c; i++)
+    ax += aw[i] + 8;
+  Color face = (c == 0 && caps) ? accent : COLOR_HM_SLOT; /* Caps lit when on */
+  patch_corners(ax - 2, ay - 2, aw[c] + 4, KB_KH + 4, 6);
+  draw_filled_round_rect(VRAM_BOT_A, ax - 2, ay - 2, aw[c] + 4, KB_KH + 4, 6,
+                         SH_BOT, on ? accent : COLOR_HM_BG);
+  draw_filled_round_rect(VRAM_BOT_A, ax, ay, aw[c], KB_KH, 5, SH_BOT, face);
+  ui_text(VRAM_BOT_A, ax + (aw[c] - ui_tw(&ui_small, kb_special[c])) / 2,
+          ay + (KB_KH - ui_th(&ui_small)) / 2, SH_BOT, kb_special[c],
+          COLOR_WHITE, face, &ui_small);
+}
+
+static void kb_all_keys(int row, int col, int caps, Color accent) {
+  for (int r = 0; r < 4; r++)
+    for (int c = 0; c < kb_row_len(r); c++)
+      kb_key(r, c, row, col, caps, accent);
+  for (int c = 0; c < 4; c++)
+    kb_key(4, c, row, col, caps, accent);
+}
+
+static void kb_draw(const char *name, int row, int col, int caps,
+                    Color accent) {
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+  kb_field(name);
+  kb_all_keys(row, col, caps, accent);
+  screen_present_bottom();
+}
+
+/* Moving the cursor touches two keys. A caps change relabels every letter, and
+ * a press can change the name, so those redraw more. */
+static void kb_update(const char *name, int orow, int ocol, int row, int col,
+                      int caps, int caps_changed, int name_changed,
+                      Color accent) {
+  if (name_changed)
+    kb_field(name);
+  if (caps_changed) {
+    kb_all_keys(row, col, caps, accent);
+  } else {
+    kb_key(orow, ocol, row, col, caps, accent);
+    kb_key(row, col, row, col, caps, accent);
   }
   screen_present_bottom();
 }
 
-/* Edit `name` (buffer of USER_NAME_MAX incl. NUL) on the keyboard. */
+/* `name` is a USER_NAME_MAX buffer, including the NUL. */
 static void keyboard_edit(char *name, Color accent) {
   int row = 1, col = 0, caps = 0;
   int len = (int)slen(name);
@@ -496,6 +567,7 @@ static void keyboard_edit(char *name, Color accent) {
   while (1) {
     u32 k = get_keys_down();
     int changed = 0;
+    int orow = row, ocol = col, ocaps = caps, olen = len;
 
     if (k & BUTTON_DUP) {
       row = (row > 0) ? row - 1 : 4;
@@ -597,8 +669,9 @@ static void keyboard_edit(char *name, Color accent) {
     }
 
     if (changed || commit)
-      kb_draw(name, row, col, caps, accent);
-    delay(60000);
+      kb_update(name, orow, ocol, row, col, caps, caps != ocaps, len != olen,
+                accent);
+    ui_idle();
   }
 }
 
@@ -622,46 +695,74 @@ static void clamp_date(UserConfig *cfg) {
 
 static void date_box(int x, int y, const char *label, u32 val, int digits,
                      int sel, Color accent) {
-  draw_string(VRAM_BOT_A, x, y - 14, SH_BOT, label, COLOR_HM_TEXT2, COLOR_HM_BG);
   int w = (digits == 4) ? 68 : 52, h = 40;
+  /* The label is antialiased and redrawn in place, so its strip is cleared
+   * first. */
+  draw_filled_rect(VRAM_BOT_A, x - 2, y - 20, w + 4, 18, SH_BOT, COLOR_HM_BG);
+  ui_text(VRAM_BOT_A, x, y - 19, SH_BOT, label, COLOR_HM_TEXT2, COLOR_HM_BG,
+          &ui_small);
+  patch_corners(x - 2, y - 2, w + 4, h + 4, 8);
   draw_filled_round_rect(VRAM_BOT_A, x - 2, y - 2, w + 4, h + 4, 8, SH_BOT,
                          sel ? accent : COLOR_HM_BG);
   draw_filled_round_rect(VRAM_BOT_A, x, y, w, h, 6, SH_BOT, COLOR_HM_SLOT);
   char s[8];
   uint_str(val, s);
-  int n = (int)slen(s);
-  int tl = n * FONT_WIDTH;
-  draw_string(VRAM_BOT_A, x + (w - tl) / 2, y + (h - FONT_HEIGHT) / 2, SH_BOT, s,
-              COLOR_WHITE, COLOR_HM_SLOT);
+  ui_text(VRAM_BOT_A, x + (w - ui_tw(&ui_title, s)) / 2,
+          y + (h - ui_th(&ui_title)) / 2, SH_BOT, s, COLOR_WHITE, COLOR_HM_SLOT,
+          &ui_title);
+}
+
+/* One focusable item: 0 name, 1..3 the date fields, 4 Back, 5 Next. Each
+ * paints an opaque frame of a fixed size, so it can be repainted alone. */
+static void user_item(const UserConfig *cfg, int i, int focus, Color accent) {
+  switch (i) {
+    case 0:
+      patch_corners(12, 30, BOT_SCREEN_WIDTH - 24, 34, 8);
+      draw_filled_round_rect(VRAM_BOT_A, 12, 30, BOT_SCREEN_WIDTH - 24, 34, 8,
+                             SH_BOT, (focus == 0) ? accent : COLOR_HM_BG);
+      draw_filled_round_rect(VRAM_BOT_A, 15, 33, BOT_SCREEN_WIDTH - 30, 28, 6,
+                             SH_BOT, COLOR_HM_SLOT);
+      if (cfg->name[0])
+        ui_text(VRAM_BOT_A, 24, 33 + (28 - ui_th(&ui_font)) / 2, SH_BOT,
+                cfg->name, COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
+      else
+        ui_text(VRAM_BOT_A, 24, 33 + (28 - ui_th(&ui_font)) / 2, SH_BOT,
+                L(STR_USER_NAME), COLOR_HM_TEXT2, COLOR_HM_SLOT, &ui_font);
+      break;
+    case 1:
+      date_box(40, 96, L(STR_DAY), cfg->birth_day, 2, focus == 1, accent);
+      break;
+    case 2:
+      date_box(120, 96, L(STR_MONTH), cfg->birth_month, 2, focus == 2, accent);
+      break;
+    case 3:
+      date_box(200, 96, L(STR_YEAR), cfg->birth_year, 4, focus == 3, accent);
+      break;
+    case 4:
+      button(40, 168, 100, 32, L(STR_BACK), focus == 4, accent);
+      break;
+    default:
+      button(180, 168, 100, 32, L(STR_NEXT), focus == 5, accent);
+      break;
+  }
 }
 
 static void user_bottom(const UserConfig *cfg, int focus, Color accent) {
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
   bottom_title("Home Menu");
-
-  /* Name field */
-  draw_filled_round_rect(VRAM_BOT_A, 12, 30, BOT_SCREEN_WIDTH - 24, 34,
-                         8, SH_BOT, (focus == 0) ? accent : COLOR_HM_BG);
-  draw_filled_round_rect(VRAM_BOT_A, 15, 33, BOT_SCREEN_WIDTH - 30, 28, 6,
-                         SH_BOT, COLOR_HM_SLOT);
-  if (cfg->name[0])
-    draw_string(VRAM_BOT_A, 24, 40, SH_BOT, cfg->name, COLOR_WHITE,
-                COLOR_HM_SLOT);
-  else
-    draw_string(VRAM_BOT_A, 24, 40, SH_BOT, L(STR_USER_NAME), COLOR_HM_TEXT2,
-                COLOR_HM_SLOT);
-
-  /* Date row */
-  date_box(40, 96, L(STR_DAY), cfg->birth_day, 2, focus == 1, accent);
-  date_box(120, 96, L(STR_MONTH), cfg->birth_month, 2, focus == 2, accent);
-  date_box(200, 96, L(STR_YEAR), cfg->birth_year, 4, focus == 3, accent);
-
-  /* Buttons */
-  button(40, 168, 100, 32, L(STR_BACK), focus == 4, accent);
-  button(180, 168, 100, 32, L(STR_NEXT), focus == 5, accent);
-
+  for (int i = 0; i < 6; i++)
+    user_item(cfg, i, focus, accent);
   text_center_tr(VRAM_BOT_A, BOT_SCREEN_HEIGHT - 16, BOT_SCREEN_WIDTH, SH_BOT,
                  L(STR_USER_HINT), COLOR_HM_TEXT2);
+  screen_present_bottom();
+}
+
+/* Moving focus touches two items; changing a date value touches one. */
+static void user_update(const UserConfig *cfg, int old_focus, int focus,
+                        Color accent) {
+  user_item(cfg, old_focus, focus, accent);
+  if (focus != old_focus)
+    user_item(cfg, focus, focus, accent);
   screen_present_bottom();
 }
 
@@ -675,7 +776,7 @@ static Nav step_user(UserConfig *cfg) {
   user_bottom(cfg, focus, accent);
   while (1) {
     u32 k = get_keys_down();
-    int redraw = 0;
+    int redraw = 0, full = 0, old_focus = focus;
 
     if (k & BUTTON_DLEFT) {
       focus = (focus > 0) ? focus - 1 : 5;
@@ -701,7 +802,7 @@ static Nav step_user(UserConfig *cfg) {
         keyboard_edit(cfg->name, accent);
         setup_top(2, L(STR_USER_L1), L(STR_USER_L2), accent);
         screen_present_top();
-        redraw = 1;
+        redraw = full = 1;
       } else if (focus == 4) {
         return NAV_BACK;
       } else if (focus == 5) {
@@ -717,7 +818,7 @@ static Nav step_user(UserConfig *cfg) {
         keyboard_edit(cfg->name, accent);
         setup_top(2, L(STR_USER_L1), L(STR_USER_L2), accent);
         screen_present_top();
-        redraw = 1;
+        redraw = full = 1;
       } else if (touch_in(tx, ty, 40, 96, 52, 40)) {
         cfg->birth_day = (u8)(cfg->birth_day + (ty < 116 ? 1 : -1));
         clamp_date(cfg);
@@ -742,9 +843,11 @@ static Nav step_user(UserConfig *cfg) {
     if (k & BUTTON_START)
       return NAV_NEXT;
 
-    if (redraw)
+    if (full)
       user_bottom(cfg, focus, accent);
-    delay(60000);
+    else if (redraw)
+      user_update(cfg, old_focus, focus, accent);
+    ui_idle();
   }
 }
 
@@ -756,23 +859,42 @@ static Nav step_user(UserConfig *cfg) {
 #define PY 44
 #define PROWS ((AURORA_ACCENT_COUNT + PCOLS - 1) / PCOLS)
 
-static void accent_bottom(int sel) {
-  Color accent = aurora_accent_presets[sel];
-  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
-  bottom_title("Home Menu");
-  for (int i = 0; i < AURORA_ACCENT_COUNT; i++) {
-    int col = i % PCOLS, row = i / PCOLS;
-    int x = PX + col * (PSW + PGAP), y = PY + row * (PSW + PGAP);
-    if (i == sel) /* selection ring */
-      draw_filled_round_rect(VRAM_BOT_A, x - 4, y - 4, PSW + 8, PSW + 8, PSW / 2,
-                             SH_BOT, COLOR_WHITE);
-    disc(VRAM_BOT_A, x + PSW / 2, y + PSW / 2, PSW / 2, SH_BOT,
-         (i == sel) ? COLOR_HM_BG : aurora_accent_presets[i]);
-    disc(VRAM_BOT_A, x + PSW / 2, y + PSW / 2,
-         (i == sel) ? PSW / 2 - 4 : PSW / 2, SH_BOT, aurora_accent_presets[i]);
-  }
+/* One palette swatch. Unlike the other widgets the selection ring sits outside
+ * the swatch, so a deselected cell has to have that area cleared first. */
+static void accent_cell(int i, int sel) {
+  int col = i % PCOLS, row = i / PCOLS;
+  int x = PX + col * (PSW + PGAP), y = PY + row * (PSW + PGAP);
+  if (i == sel)
+    draw_filled_round_rect(VRAM_BOT_A, x - 4, y - 4, PSW + 8, PSW + 8, PSW / 2,
+                           SH_BOT, COLOR_WHITE);
+  else
+    draw_filled_rect(VRAM_BOT_A, x - 4, y - 4, PSW + 8, PSW + 8, SH_BOT,
+                     COLOR_HM_BG);
+  disc(VRAM_BOT_A, x + PSW / 2, y + PSW / 2, PSW / 2, SH_BOT,
+       (i == sel) ? COLOR_HM_BG : aurora_accent_presets[i]);
+  disc(VRAM_BOT_A, x + PSW / 2, y + PSW / 2,
+       (i == sel) ? PSW / 2 - 4 : PSW / 2, SH_BOT, aurora_accent_presets[i]);
+}
+
+/* Both buttons carry the accent, so they follow the selection. */
+static void accent_buttons(Color accent) {
   button(40, 198, 100, 30, L(STR_BACK), 0, accent);
   button(180, 198, 100, 30, L(STR_NEXT), 1, accent);
+}
+
+static void accent_bottom(int sel) {
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+  bottom_title("Home Menu");
+  for (int i = 0; i < AURORA_ACCENT_COUNT; i++)
+    accent_cell(i, sel);
+  accent_buttons(aurora_accent_presets[sel]);
+  screen_present_bottom();
+}
+
+static void accent_update(int old_sel, int sel) {
+  accent_cell(old_sel, sel);
+  accent_cell(sel, sel);
+  accent_buttons(aurora_accent_presets[sel]);
   screen_present_bottom();
 }
 
@@ -819,7 +941,7 @@ static Nav step_personalise(UserConfig *cfg) {
       /* Live preview: recolour the progress bar's active step. */
       setup_top(3, L(STR_PERS_L1), 0, aurora_accent_presets[sel]);
       screen_present_top();
-      accent_bottom(sel);
+      accent_update(prev, sel);
     }
     if (k & (BUTTON_A | BUTTON_START)) {
       cfg->accent = (u8)sel;
@@ -827,7 +949,7 @@ static Nav step_personalise(UserConfig *cfg) {
     }
     if (k & BUTTON_B)
       return NAV_BACK;
-    delay(60000);
+    ui_idle();
   }
 }
 
@@ -866,7 +988,7 @@ static Nav step_welcome(UserConfig *cfg) {
       return NAV_NEXT;
     if (k & BUTTON_B)
       return NAV_BACK;
-    delay(60000);
+    ui_idle();
   }
 }
 

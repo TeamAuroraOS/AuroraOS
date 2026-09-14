@@ -1,10 +1,5 @@
-/*
- * Microsecond timing, ARM9 side.
- *
- * An ARM9 hardware timer does the counting, calibrated against one MCU
- * real-time-clock second so the figures are real microseconds and do not
- * depend on any assumed clock constant. Used by the render benchmark.
- */
+/* ARM9 hardware timer, calibrated against one MCU RTC second so readings are
+ * real microseconds. */
 #include "aurora.h"
 #include "power.h"
 #include "timer.h"
@@ -57,6 +52,8 @@ int timer_ready(void) {
   ticks_per_s = calibrate();
   return ticks_per_s != 0;
 }
+
+int timer_calibrated(void) { return ticks_per_s != 0; }
 
 u32 timer_hz(void) { return ticks_per_s; }
 

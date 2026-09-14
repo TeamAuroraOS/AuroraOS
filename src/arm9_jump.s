@@ -16,7 +16,7 @@ aurora_jump_arm9:
 .Lway:
     mcr     p15, 0, r0, c7, c14, 2  @ clean+invalidate D-cache line (index/seg)
     adds    r0, r0, #0x40000000     @ advance to next way; carry set when it wraps
-    bcc     .Lway                   @ ...loop until all 4 ways done
+    bcc     .Lway
     add     r1, r1, #0x20           @ next cache line (32 bytes)
     cmp     r1, #0x400              @ 32 lines * 32 bytes per way
     bne     .Lline
