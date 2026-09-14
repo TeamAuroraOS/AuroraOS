@@ -6,7 +6,10 @@ CC         := $(PREFIX)gcc
 AS         := $(PREFIX)gcc
 LD         := $(PREFIX)gcc
 OBJCOPY    := $(PREFIX)objcopy
-FIRMTOOL   := python -m firmtool
+# devkitPro's msys python is usually first on PATH and lacks firmtool, so use
+# the first Python that can import it. Override with FIRMTOOL=... if needed.
+FIRMTOOL_PY = $(firstword $(foreach p,python py python3 C:/Python314/python.exe,$(if $(shell $(p) -c "import firmtool" >/dev/null 2>&1 && echo y),$(p))))
+FIRMTOOL   ?= $(or $(FIRMTOOL_PY),python) -m firmtool
 
 SRC_DIR    := src
 INC_DIR    := include
