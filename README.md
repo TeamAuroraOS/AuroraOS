@@ -122,4 +122,4 @@ distribution; it is kept as-is and recorded here and in `docs/assets.md`.
 - Select `Boot Aurora`
 
 ### AI Disclaimer:
-AI was used in the making of most documentation and some in-code comments. Mainstream Corperate AI was not used. A local model was used on the PC of @DisLoPik.
+AI was used in the making of most documentation and some in-code comments. AI was used for the writing of arm assembly, Mainstream Corperate AI was not used. A local model was used on the PC of @DisLoPik.
