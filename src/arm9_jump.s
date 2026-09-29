@@ -29,5 +29,5 @@ aurora_jump_arm9:
     orr     r0, r0, #0xC0
     msr     cpsr_c, r0
 
-    bx      r12                     @ into the payload
+    bx      r12
 .size aurora_jump_arm9, .-aurora_jump_arm9

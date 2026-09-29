@@ -12,27 +12,30 @@
 
   
 
-Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.0.**
+Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.1.**
 -  *Built using knowledge from GodMode9 and Luma source code.*
 
 ## What works
 
 | Area | State | Notes |
 |------|-------|-------|
-| Home Menu + Settings | working | app grid, accent colours, three languages, About page |
+| Home Menu + Settings | working | app grid, accent colours, three languages, About page with More Info (eMMC CID) and credits |
 | Icons, wallpaper, type | working | real art + Figtree from SD, with accents; see [`docs/assets.md`](docs/assets.md) |
 | File Explorer | working | browse the card, per-type icons, TXT/LOG viewer, hex editor; see [`docs/files.md`](docs/files.md) |
+| File operations | working | copy, move, rename, delete and new folder, with long file names |
+| Screenshots | working | L+R saves both screens as a BMP; see [`docs/input.md`](docs/input.md) |
 | Images | working | BMP, PNG and baseline JPEG, scaled to fit |
 | WAV playback | working | 8/16-bit PCM, mono or stereo (MP3 not yet) |
 | Display | working | GPU-composited; see [`docs/gpu.md`](docs/gpu.md) |
 | GPU (PICA200) | working | PSC fill + PPF blit, verified on hardware |
 | Audio | working | ARM11 CSND core, eight voices for apps; see [`docs/audio.md`](docs/audio.md) |
-| Touchscreen | working | CTR codec on the ARM11 |
+| Touchscreen | working | CTR codec on the ARM11, with calibration in Settings |
+| ARM11 core updates | working | a core from another build is swapped out without a power-off, from core 83 on; see [`docs/audio.md`](docs/audio.md) |
 | Clock + battery | working | MCU over I2C; see [`docs/power.md`](docs/power.md) |
 | Console model | working | New/Old from CFG11_SOCINFO; "N" in the status bar |
 | Crash handler | working | register dump plus a three-beep error tone on a fault |
 | Apps ([Auric](auric-lang/README.md)) | working | sound from the SD card; see [`docs/apps.md`](docs/apps.md) |
-| Wi-Fi | **paused** | firmware boots, HTC handshake unsolved: [`docs/wifi.md`](docs/wifi.md) |
+| Wi-Fi | in progress | chip enumerates, firmware boots and has sent HTC_READY; fixing an upload regression, then the HTC handshake: [`docs/wifi.md`](docs/wifi.md) |
 
 The UI renders into a cached FCRAM backbuffer and the GPU moves each finished
 screen to the panel in one blit, rather than rasterising straight into uncached
@@ -59,8 +62,10 @@ The ARM11 files link into one core binary, which the ARM9 embeds and wakes;
 `src/screen.c`, `src/power.c`, `src/i2c.c`, `src/sdmmc.c`, `src/os/Timer9.c`,
 `src/assets.c`, `src/ui.c`, `src/image.c`, `src/jpeg.c`, `src/wav.c`,
 `src/wavload.c`, `src/model.c`, the status bar in `src/os/StatusBar.c`, the File
-Explorer in `src/os/Files.c` with its viewers in `src/os/FileView.c`, and the
-render test in `src/os/RenderTest.c`.
+Explorer in `src/os/Files.c` with its viewers in `src/os/FileView.c` and its
+operations in `src/os/FileOps.c`, screenshots in `src/os/Screenshot.c`, touch
+calibration in `src/os/TouchCal.c`, and the render test in
+`src/os/RenderTest.c`.
 
 Art and fonts are built into `Aurora/assets.pak` by `tools/mkassets.py` (with
 `tools/png_read.py` and `tools/ttf.py`) from `icons/` and `assets/fonts/`, and
@@ -70,7 +75,8 @@ loaded at boot by `src/assets.c`. Run `make assets` after changing either.
 
 * [`docs/apps.md`](docs/apps.md): the app container format and loader
 * [`docs/assets.md`](docs/assets.md): the SD asset pack, icons and fonts
-* [`docs/files.md`](docs/files.md): the File Explorer, text viewer, hex editor, image and audio decoding
+* [`docs/files.md`](docs/files.md): the File Explorer, file operations, text viewer, hex editor, image and audio decoding
+* [`docs/input.md`](docs/input.md): touch calibration and screenshots
 * [`docs/gpu.md`](docs/gpu.md): PICA200 driver and the rendering path
 * [`docs/audio.md`](docs/audio.md): CSND playback and the channel registers
 * [`docs/power.md`](docs/power.md): MCU real-time clock and battery
@@ -106,6 +112,9 @@ distribution; it is kept as-is and recorded here and in `docs/assets.md`.
 - Optional: copy apps such as `Games/Tetris.BIN` to `SD:\Aurora\Apps\`. Tetris
   plays sounds from `SD:\Aurora\Apps\TETRIS\` when they are there; see
   [`docs/apps.md`](docs/apps.md)
+- Optional, for Settings > Wi-Fi Test only: extract the Wi-Fi firmware from
+  your own console's NWM module with `tools/nwm_extract.py` and copy it to
+  `SD:\Aurora\wifi\`; see [`docs/wifi.md`](docs/wifi.md)
 ## How to Open:
 - Make sure [loading custom firms](https://wiki.hacks.guide/wiki/3DS:Luma3DS/Configuration#Enable_loading_external_FIRMs_and_modules) is enabled.
 - With system off, hold `START` while booting

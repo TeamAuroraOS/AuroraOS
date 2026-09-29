@@ -2,12 +2,44 @@
 #include "aurora.h"
 #include "touch.h"
 
-/* Raw 12-bit ADC -> screen-pixel calibration. A first guess, tuned by eye; swap
- * min and max to invert an axis. */
+/* Used until Settings > Touch Calibration saves a measured one. A first guess,
+ * tuned by eye. */
 #define TS_X_MIN 0x0D0
 #define TS_X_MAX 0xF00
 #define TS_Y_MIN 0x0F0
 #define TS_Y_MAX 0xF00
+
+/* The real spans are about 0xE00. One under a tenth of that comes from taps that
+ * were not measured properly, and would divide the screen into a few pixels. */
+#define TS_MIN_SPAN 256
+
+static TouchCal cal = {TS_X_MIN, TS_X_MAX, TS_Y_MIN, TS_Y_MAX};
+
+void touch_cal_default(TouchCal *c) {
+  c->x_min = TS_X_MIN;
+  c->x_max = TS_X_MAX;
+  c->y_min = TS_Y_MIN;
+  c->y_max = TS_Y_MAX;
+}
+
+void touch_cal_get(TouchCal *c) { *c = cal; }
+
+static int span_ok(int a, int b) {
+  int d = b - a;
+  return d >= TS_MIN_SPAN || d <= -TS_MIN_SPAN;
+}
+
+int touch_cal_set(const TouchCal *c) {
+  if (!span_ok(c->x_min, c->x_max) || !span_ok(c->y_min, c->y_max))
+    return 0;
+  cal = *c;
+  return 1;
+}
+
+int touch_cal_is_default(void) {
+  return cal.x_min == TS_X_MIN && cal.x_max == TS_X_MAX &&
+         cal.y_min == TS_Y_MIN && cal.y_max == TS_Y_MAX;
+}
 
 int touch_read(int *sx, int *sy, int *rawx, int *rawy) {
   volatile TouchShared *ts = (volatile TouchShared *)TOUCH_SHARED_ADDR;
@@ -22,8 +54,8 @@ int touch_read(int *sx, int *sy, int *rawx, int *rawy) {
   if (rawy)
     *rawy = ry;
 
-  int x = (rx - (TS_X_MIN)) * 320 / ((TS_X_MAX) - (TS_X_MIN));
-  int y = (ry - (TS_Y_MIN)) * 240 / ((TS_Y_MAX) - (TS_Y_MIN));
+  int x = (rx - cal.x_min) * 320 / (cal.x_max - cal.x_min);
+  int y = (ry - cal.y_min) * 240 / (cal.y_max - cal.y_min);
   if (x < 0)
     x = 0;
   if (x > 319)

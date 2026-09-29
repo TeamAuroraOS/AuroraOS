@@ -4,6 +4,7 @@
 #include "aurora_logo.h"
 #include "ff.h"
 #include "font.h"
+#include "keyboard.h"
 #include "lang.h"
 #include "power.h"
 #include "touch.h"
@@ -99,6 +100,49 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_CHARGING     */ {"charging", "cargando", "en charge"},
     /* STR_FREE         */ {"free", "libres", "libres"},
     /* STR_NO_CARD      */ {"No card", "Sin tarjeta", "Pas de carte"},
+    /* STR_CORE_OLD     */
+    {"An old ARM11 core is running", "N\u00FAcleo ARM11 antiguo activo",
+     "Ancien coeur ARM11 actif"},
+    /* STR_CORE_OLD_HINT*/
+    {"Power off to load the new one", "Apaga para cargar el nuevo",
+     "\u00C9teignez pour charger le nouveau"},
+    /* STR_LATER        */ {"Later", "M\u00E1s tarde", "Plus tard"},
+    /* STR_TOUCH_CAL    */
+    {"Touch Calibration", "Calibrar pantalla", "Calibrer l'\u00E9cran"},
+    /* STR_CAL_TAP      */
+    {"Tap the centre of each target", "Toca el centro de cada punto",
+     "Touchez le centre de chaque cible"},
+    /* STR_CAL_HINT     */
+    {"A stylus gives the best result.   B: Cancel",
+     "Mejor con el l\u00E1piz.   B: Cancelar",
+     "Utilisez le stylet.   B: Annuler"},
+    /* STR_CAL_POINT    */ {"Point", "Punto", "Point"},
+    /* STR_CAL_CHECK    */
+    {"Draw on the screen to check", "Dibuja en la pantalla para probar",
+     "Dessinez pour v\u00E9rifier"},
+    /* STR_CAL_CHECK_HINT*/
+    {"A: Save   X: Redo   B: Cancel", "A: Guardar  X: Repetir  B: Cancelar",
+     "A: Enregistrer X: Refaire B: Annuler"},
+    /* STR_CAL_RETRY    */
+    {"The taps did not line up. Try again.",
+     "Los toques no cuadran. Int\u00E9ntalo de nuevo.",
+     "Les touches ne concordent pas. R\u00E9essayez."},
+    /* STR_CAL_SAVED    */ {"Calibration saved", "Calibraci\u00F3n guardada",
+                            "Calibrage enregistr\u00E9"},
+    /* STR_CAL_SAVE_FAILED*/
+    {"Applied, but not saved to the card", "Aplicada, pero no guardada",
+     "Appliqu\u00E9, mais pas enregistr\u00E9"},
+    /* STR_CUSTOM       */ {"Custom", "Propia", "Perso"},
+    /* STR_DEFAULT      */ {"Default", "Est\u00E1ndar", "D\u00E9faut"},
+    /* STR_MORE_INFO    */ {"More Info", "M\u00E1s info", "Plus d'infos"},
+    /* STR_SOFTWARE_UPDATE*/
+    {"Software Update", "Actualizaci\u00F3n", "Mise \u00E0 jour"},
+    /* STR_UPDATE_NONE  */
+    {"Unsupported On This Version", "No disponible", "Non disponible"},
+    /* STR_EMMC_CID     */ {"eMMC CID", "eMMC CID", "eMMC CID"},
+    /* STR_DEVICE       */ {"Device", "Dispositivo", "Appareil"},
+    /* STR_NOT_AVAILABLE*/
+    {"Not available", "No disponible", "Non disponible"},
 };
 
 const char *L(StringId id) {
@@ -110,8 +154,7 @@ const char *L(StringId id) {
   return T[id][l];
 }
 
-/* Index 0, Aurora teal, is the default. Also used by the Settings accent
- * picker. */
+/* Index 0, Aurora teal, is the default. */
 const Color aurora_accent_presets[AURORA_ACCENT_COUNT] = {
     {0x64, 0xE8, 0xC8},
     {0xFF, 0x3B, 0x30},
@@ -248,8 +291,7 @@ static void step_icon(int step, int cx, int cy, Color col) {
   }
 }
 
-/* Completed steps white, the active one in `accent`, future ones dimmed. Labels
- * STR_LANGUAGE..STR_WELCOME are consecutive. */
+/* Labels STR_LANGUAGE..STR_WELCOME must stay consecutive. */
 static void step_bar(int active, Color accent) {
   static const int cxs[5] = {40, 120, 200, 280, 360};
   for (int i = 0; i < 5; i++) {
@@ -262,7 +304,6 @@ static void step_bar(int active, Color accent) {
   }
 }
 
-/* Status bar, up to two body lines and the progress bar with `step` active. */
 static void setup_top(int step, const char *l1, const char *l2, Color accent) {
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_HM_BG);
   status_bar();
@@ -300,9 +341,6 @@ static void bottom_title(const char *s) {
   ui_text(VRAM_BOT_A, 12, mid8(12, &ui_small), SH_BOT, s, COLOR_HM_TEXT2,
           COLOR_HM_BG, &ui_small);
 }
-
-/* Welcome screen (mockup/setup1.png): glow, wordmark and version on top; the
- * language list and Get started below. */
 
 static void glow_top(void) {
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_HM_BG);
@@ -350,7 +388,7 @@ static void lang_row(int i, int sel, Color accent) {
                          on ? accent : COLOR_HM_SLOT);
   ui_text(VRAM_BOT_A, LANG_RX + 16, y + (LANG_RH - ui_th(&ui_font)) / 2, SH_BOT,
           lang_names[i], COLOR_WHITE, on ? accent : COLOR_HM_SLOT, &ui_font);
-  if (on) { /* check mark on the selected language */
+  if (on) {
     thick_line(VRAM_BOT_A, LANG_RX + LANG_RW - 30, y + LANG_RH / 2,
                LANG_RX + LANG_RW - 24, y + LANG_RH / 2 + 6, 2, SH_BOT,
                COLOR_WHITE);
@@ -410,12 +448,12 @@ static void step_language(UserConfig *cfg) {
 
     if (sel != prev) {
       cfg->language = (u8)sel;
-      g_lang = sel; /* re-render the button etc. in the chosen language */
+      g_lang = sel;
       lang_update(prev, sel, accent);
     }
     if ((k & (BUTTON_A | BUTTON_START)) || go) {
       cfg->language = (u8)sel;
-      return; /* Get started -> next step (no Back on the first screen) */
+      return;
     }
     ui_idle();
   }
@@ -445,7 +483,7 @@ static Nav step_network(UserConfig *cfg) {
     int tx, ty;
     if (touch_tap(&tx, &ty) &&
         touch_in(tx, ty, (BOT_SCREEN_WIDTH - 180) / 2, 110, 180, 40))
-      return NAV_NEXT; /* tapped Skip */
+      return NAV_NEXT;
     if (k & (BUTTON_A | BUTTON_START))
       return NAV_NEXT;
     if (k & BUTTON_B)
@@ -453,8 +491,6 @@ static Nav step_network(UserConfig *cfg) {
     ui_idle();
   }
 }
-
-/* Key rows of the user-name keyboard. */
 
 static const char *kb_rows[4] = {
     "1234567890",
@@ -464,9 +500,17 @@ static const char *kb_rows[4] = {
 };
 static const char *kb_special[4] = {"Caps", "Space", "Del", "OK"};
 
+/* KB_FILENAME adds the punctuation file names need to the last row. */
+static int kb_mode;
+static const char *kb_hint;
+
+static const char *kb_row(int row) {
+  return (row == 3 && kb_mode == KB_FILENAME) ? "zxcvbnm-_." : kb_rows[row];
+}
+
 static int kb_row_len(int row) {
   if (row < 4)
-    return (int)slen(kb_rows[row]);
+    return (int)slen(kb_row(row));
   return 4; /* action row */
 }
 
@@ -482,16 +526,25 @@ static char kb_apply_caps(char c, int caps) {
 #define KB_Y0    52
 #define KB_YSTEP (KB_KH + KB_GAP)
 
-/* Redrawn whole, so a deleted character's cell is cleared. */
+/* Redrawn whole, so a deleted character's cell is cleared. Text too long for
+ * the field shows its end, where typing happens. */
 static void kb_field(const char *name) {
+  const int avail = BOT_SCREEN_WIDTH - 40;
   draw_filled_round_rect(VRAM_BOT_A, 12, 10, BOT_SCREEN_WIDTH - 24, 30, 8,
                          SH_BOT, COLOR_HM_SLOT);
-  if (name[0])
+  if (name[0]) {
+    while (name[1] && ui_tw(&ui_font, name) > avail) {
+      name++;
+      while ((*name & 0xC0) == 0x80)
+        name++;
+    }
     ui_text(VRAM_BOT_A, 20, 10 + (30 - ui_th(&ui_font)) / 2, SH_BOT, name,
             COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
-  else
+  } else {
     ui_text(VRAM_BOT_A, 20, 10 + (30 - ui_th(&ui_font)) / 2, SH_BOT,
-            L(STR_KB_ENTER_NAME), COLOR_HM_TEXT2, COLOR_HM_SLOT, &ui_font);
+            kb_hint ? kb_hint : L(STR_KB_ENTER_NAME), COLOR_HM_TEXT2,
+            COLOR_HM_SLOT, &ui_font);
+  }
 }
 
 /* One key. Rows 0..3 are letters, row 4 is Caps / Space / Del / OK. Every key
@@ -503,7 +556,7 @@ static void kb_key(int r, int c, int row, int col, int caps, Color accent) {
     int roww = n * KB_KW + (n - 1) * KB_GAP;
     int x = (BOT_SCREEN_WIDTH - roww) / 2 + c * (KB_KW + KB_GAP);
     int y = KB_Y0 + r * KB_YSTEP;
-    char ch[2] = {kb_apply_caps(kb_rows[r][c], caps), 0};
+    char ch[2] = {kb_apply_caps(kb_row(r)[c], caps), 0};
     patch_corners(x, y, KB_KW, KB_KH, 5);
     draw_filled_round_rect(VRAM_BOT_A, x, y, KB_KW, KB_KH, 5, SH_BOT,
                            on ? accent : COLOR_HM_SLOT);
@@ -517,7 +570,7 @@ static void kb_key(int r, int c, int row, int col, int caps, Color accent) {
   int ay = KB_Y0 + 4 * KB_YSTEP, ax = 20;
   for (int i = 0; i < c; i++)
     ax += aw[i] + 8;
-  Color face = (c == 0 && caps) ? accent : COLOR_HM_SLOT; /* Caps lit when on */
+  Color face = (c == 0 && caps) ? accent : COLOR_HM_SLOT;
   patch_corners(ax - 2, ay - 2, aw[c] + 4, KB_KH + 4, 6);
   draw_filled_round_rect(VRAM_BOT_A, ax - 2, ay - 2, aw[c] + 4, KB_KH + 4, 6,
                          SH_BOT, on ? accent : COLOR_HM_BG);
@@ -559,10 +612,20 @@ static void kb_update(const char *name, int orow, int ocol, int row, int col,
   screen_present_bottom();
 }
 
-/* `name` is a USER_NAME_MAX buffer, including the NUL. */
-static void keyboard_edit(char *name, Color accent) {
+/* Drops the last character, all of its bytes if it is multi-byte UTF-8. */
+static void kb_backspace(char *name, int *len) {
+  while (*len > 0 && ((u8)name[*len - 1] & 0xC0u) == 0x80u)
+    name[--*len] = '\0';
+  if (*len > 0)
+    name[--*len] = '\0';
+}
+
+int keyboard_edit(char *name, int size, int mode, const char *hint,
+                  Color accent) {
   int row = 1, col = 0, caps = 0;
   int len = (int)slen(name);
+  kb_mode = mode;
+  kb_hint = hint;
   kb_draw(name, row, col, caps, accent);
   while (1) {
     u32 k = get_keys_down();
@@ -595,7 +658,7 @@ static void keyboard_edit(char *name, Color accent) {
     char typed = 0;
     int press = (k & BUTTON_A) ? 1 : 0;
 
-    /* Touch: hit-test the on-screen keys (layout mirrors kb_draw). */
+    /* Hit-test the keys; the layout mirrors kb_draw. */
     {
       int tx, ty;
       if (touch_tap(&tx, &ty)) {
@@ -632,7 +695,7 @@ static void keyboard_edit(char *name, Color accent) {
 
     if (press) {
       if (row < 4) {
-        typed = kb_apply_caps(kb_rows[row][col], caps);
+        typed = kb_apply_caps(kb_row(row)[col], caps);
       } else {
         switch (col) {
           case 0:
@@ -642,28 +705,28 @@ static void keyboard_edit(char *name, Color accent) {
             typed = ' ';
             break;
           case 2: /* Del */
-            if (len > 0)
-              name[--len] = '\0';
+            kb_backspace(name, &len);
             break;
           case 3: /* OK */
-            return;
+            return 1;
         }
       }
       commit = 1;
     }
-    if (k & BUTTON_B) { /* quick backspace */
-      if (len > 0)
-        name[--len] = '\0';
+    if (k & BUTTON_B) {
+      kb_backspace(name, &len);
       commit = 1;
     }
-    if (k & BUTTON_START) /* quick done */
-      return;
-    if (k & BUTTON_L) { /* quick caps toggle */
+    if (k & BUTTON_START)
+      return 1;
+    if (k & BUTTON_SELECT)
+      return 0;
+    if (k & BUTTON_L) {
       caps = !caps;
       commit = 1;
     }
 
-    if (typed && len < USER_NAME_MAX - 1) {
+    if (typed && len < size - 1) {
       name[len++] = typed;
       name[len] = '\0';
     }
@@ -712,8 +775,8 @@ static void date_box(int x, int y, const char *label, u32 val, int digits,
           &ui_title);
 }
 
-/* One focusable item: 0 name, 1..3 the date fields, 4 Back, 5 Next. Each
- * paints an opaque frame of a fixed size, so it can be repainted alone. */
+/* Item i of the focus order above. Each paints an opaque frame of a fixed
+ * size, so it can be repainted alone. */
 static void user_item(const UserConfig *cfg, int i, int focus, Color accent) {
   switch (i) {
     case 0:
@@ -757,7 +820,6 @@ static void user_bottom(const UserConfig *cfg, int focus, Color accent) {
   screen_present_bottom();
 }
 
-/* Moving focus touches two items; changing a date value touches one. */
 static void user_update(const UserConfig *cfg, int old_focus, int focus,
                         Color accent) {
   user_item(cfg, old_focus, focus, accent);
@@ -799,7 +861,7 @@ static Nav step_user(UserConfig *cfg) {
     }
     if (k & BUTTON_A) {
       if (focus == 0) {
-        keyboard_edit(cfg->name, accent);
+        keyboard_edit(cfg->name, USER_NAME_MAX, KB_NAME, NULL, accent);
         setup_top(2, L(STR_USER_L1), L(STR_USER_L2), accent);
         screen_present_top();
         redraw = full = 1;
@@ -815,7 +877,7 @@ static Nav step_user(UserConfig *cfg) {
     int tx, ty;
     if (touch_tap(&tx, &ty)) {
       if (touch_in(tx, ty, 12, 30, BOT_SCREEN_WIDTH - 24, 34)) {
-        keyboard_edit(cfg->name, accent);
+        keyboard_edit(cfg->name, USER_NAME_MAX, KB_NAME, NULL, accent);
         setup_top(2, L(STR_USER_L1), L(STR_USER_L2), accent);
         screen_present_top();
         redraw = full = 1;
@@ -938,7 +1000,6 @@ static Nav step_personalise(UserConfig *cfg) {
 
     if (sel != prev) {
       cfg->accent = (u8)sel;
-      /* Live preview: recolour the progress bar's active step. */
       setup_top(3, L(STR_PERS_L1), 0, aurora_accent_presets[sel]);
       screen_present_top();
       accent_update(prev, sel);
@@ -982,7 +1043,7 @@ static Nav step_welcome(UserConfig *cfg) {
   while (1) {
     u32 k = get_keys_down();
     int tx, ty;
-    if (touch_tap(&tx, &ty)) /* tap anywhere to start */
+    if (touch_tap(&tx, &ty))
       return NAV_NEXT;
     if (k & (BUTTON_A | BUTTON_START))
       return NAV_NEXT;
@@ -999,7 +1060,7 @@ void setup_run(UserConfig *cfg) {
     Nav n = NAV_NEXT;
     switch (step) {
       case 0:
-        step_language(cfg); /* first screen: Get started only */
+        step_language(cfg);
         n = NAV_NEXT;
         break;
       case 1:
@@ -1040,6 +1101,15 @@ void user_config_defaults(UserConfig *cfg) {
   cfg->birth_year = 2000;
   for (int i = 0; i < USER_NAME_MAX; i++)
     cfg->name[i] = 0;
+  cfg->touch_set = 0;
+  touch_cal_default(&cfg->touch);
+}
+
+static s16 get16(const u8 *p) { return (s16)(p[0] | (p[1] << 8)); }
+
+static void put16(u8 *p, s16 v) {
+  p[0] = (u8)((u16)v & 0xFF);
+  p[1] = (u8)((u16)v >> 8);
 }
 
 int user_config_load(UserConfig *cfg) {
@@ -1059,7 +1129,6 @@ int user_config_load(UserConfig *cfg) {
   if (fr != FR_OK || br < 12)
     return 0;
 
-  /* Only trust the file if it carries the "ADAT" magic. */
   if (s_buf[0] != 'A' || s_buf[1] != 'D' || s_buf[2] != 'A' || s_buf[3] != 'T')
     return 0;
 
@@ -1073,6 +1142,15 @@ int user_config_load(UserConfig *cfg) {
   for (; i < USER_NAME_MAX - 1 && (12 + i) < (int)br; i++)
     cfg->name[i] = (char)s_buf[12 + i];
   cfg->name[i] = '\0';
+
+  if (br >= USER_DAT_TOUCH + 9u && s_buf[USER_DAT_TOUCH]) {
+    const u8 *t = s_buf + USER_DAT_TOUCH + 1;
+    cfg->touch.x_min = get16(t);
+    cfg->touch.x_max = get16(t + 2);
+    cfg->touch.y_min = get16(t + 4);
+    cfg->touch.y_max = get16(t + 6);
+    cfg->touch_set = 1;
+  }
 
   if (cfg->language >= LANG_COUNT)
     cfg->language = LANG_ENGLISH;
@@ -1104,6 +1182,14 @@ int user_config_save(const UserConfig *cfg) {
   s_buf[11] = (u8)(cfg->birth_year >> 8);
   for (int i = 0; i < USER_NAME_MAX; i++)
     s_buf[12 + i] = (u8)cfg->name[i];
+  if (cfg->touch_set) {
+    u8 *t = s_buf + USER_DAT_TOUCH;
+    t[0] = 1;
+    put16(t + 1, cfg->touch.x_min);
+    put16(t + 3, cfg->touch.x_max);
+    put16(t + 5, cfg->touch.y_min);
+    put16(t + 7, cfg->touch.y_max);
+  }
 
   FRESULT fr = f_open(&s_fil, USER_DAT_PATH, FA_WRITE | FA_CREATE_ALWAYS);
   if (fr != FR_OK) {

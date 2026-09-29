@@ -25,8 +25,7 @@ KNOWN_SIZES = {
     "Main.type5": 0x7A2E,
 }
 
-# 8.3 names, since AuroraOS's FatFs has no long file names; copy them to
-# SD:/Aurora/wifi/. The boot uses stub_data, stub_code, main_type4 and database.
+# The names the Wi-Fi test loads from SD:/Aurora/wifi/; Main.type5 is unused.
 SD_NAMES = {
     "stub_data": "STUBDATA.BIN",
     "stub_code": "STUBCODE.BIN",

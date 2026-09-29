@@ -131,7 +131,7 @@ static const unsigned char icon_arrow_left_bits[ICON_ARROW_SIZE * ICON_ARROW_ROW
     0x00, 0x00,
 };
 
-/* "Boot" play/run triangle (used by the Boot Aurora home tile). */
+/* Play triangle. */
 static const unsigned char icon_boot_bits[ICON_SIZE * ICON_ROW_BYTES] = {
     0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00,

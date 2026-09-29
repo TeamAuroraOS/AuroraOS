@@ -83,6 +83,32 @@ projects use, but it has not been checked on a real New 3DS here. If the letter
 is wrong, `aurora_socinfo()` returns the raw register so the actual value can be
 read out.
 
+## The About page
+
+**Settings > About** shows the version, the model, the battery, the free space
+on the card and the licence. Its **More Info** button opens a page laid out like
+the stock System Settings, with the version, a software-update line that says
+there is none, the eMMC CID and the device; the bottom screen credits the team,
+with their faces from the asset pack (`PEOPLE` in `tools/mkassets.py`).
+
+Two of those rows are limited by what a bare-metal ARM9 can see:
+
+* **The printed serial number cannot be read.** It lives in `SecureInfo_A` in
+  CTRNAND, which is encrypted with per-console keys Aurora does not have, so the
+  row shows the **eMMC CID** instead: the internal storage's own identification,
+  which is readable and unique to the console.
+* **Device** is New or Old only. The XL and 2DS variants are recorded in the
+  same encrypted NAND, while `CFG11_SOCINFO` only separates the families.
+
+`sdmmc_nand_cid()` in `src/sdmmc.c` reads the CID. The eMMC is device 1 on the
+controller the SD card uses, and nothing else in Aurora touches it, so the read
+takes it through identification only (CMD0, CMD1 until it reports ready, then
+CMD2 for the CID) and leaves it there. The controller is pointed back at the SD
+card afterwards, and every SD transfer retargets it anyway, so a card read is
+unaffected. The CID is kept after the first read, which costs a few
+milliseconds. The bytes are shown in the order GodMode9 prints them, so the two
+can be compared directly.
+
 ## Known caveat: RTC offset
 
 Aurora reads the hardware RTC directly. The stock 3DS system software stores a

@@ -31,7 +31,6 @@ void touch11_init(void) {
   cdc_mask(CDC(0x67, 0x25), 0x10, 0x3C);
 }
 
-/* Read one raw sample block from the codec and publish touch state. */
 static uint32_t g_touch_seq = 0;
 void touch11_poll(void) {
   uint8_t buf[52] __attribute__((aligned(4)));
@@ -51,6 +50,6 @@ void touch11_poll(void) {
     ts->pressed = 0;
   }
   ts->seq = ++g_touch_seq;
-  dcache_clean(); /* publish to the ARM9 */
+  dcache_clean();
 }
 

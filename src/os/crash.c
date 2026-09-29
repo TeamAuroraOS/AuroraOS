@@ -1,5 +1,3 @@
-/* Crash screen: blue on both screens, a sad face on top, the reason and
- * register dump below. */
 #include "audio.h"
 #include "crash.h"
 #include "crash_shared.h"
@@ -69,11 +67,11 @@ static void draw_sad_face(void) {
   disc(cx - 55, 95, 17, w); /* eyes */
   disc(cx + 55, 95, 17, w);
 
-  /* Down-slanted brows (inner ends low) -> upset look. */
+  /* brows, inner ends low */
   thick_line(cx - 82, 55, cx - 30, 72, 6, w);
   thick_line(cx + 82, 55, cx + 30, 72, 6, w);
 
-  /* Frown: an upward arch (corners droop down). Parabola about (cx, my). */
+  /* frown: a parabola about (cx, my) */
   int my = 185, wdt = 78, hgt = 40, th = 8;
   for (int dx = -wdt; dx <= wdt; dx++) {
     int y = my - (hgt - (hgt * dx * dx) / (wdt * wdt));
@@ -163,7 +161,7 @@ static void crash_wait_1s(void) {
     delay(40000);
     I2C_readRegBuf(I2C_DEV_MCU, 0x30, &now, 1);
     if (now != start)
-      return; /* a real second elapsed */
+      return;
   }
 }
 
@@ -191,7 +189,6 @@ void crash_handle(CrashDump *d) {
 
   I2C_init(); /* bring up I2C so the RTC-based countdown can read the clock */
 
-  /* Count down and auto power off after 10 seconds. */
   for (int s = 10; s >= 1; s--) {
     char line[40], *p;
     draw_filled_rect(VRAM_BOT_A, 0, SH_B - 18, BOT_SCREEN_WIDTH, 18, SH_B,

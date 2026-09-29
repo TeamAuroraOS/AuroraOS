@@ -58,15 +58,17 @@ static char *fv_size(char *p, u32 bytes) {
 }
 
 static void fv_bar(const char *name, const char *right) {
+  int rw = (right && right[0]) ? ui_tw(&ui_small, right) : 0;
+
   draw_filled_rect(VRAM_TOP_LA, 0, 0, TOP_SCREEN_WIDTH, TOP_BAR, TSH,
                    COLOR_HM_BAR);
-  ui_text(VRAM_TOP_LA, 10, 4, TSH, name, COLOR_WHITE, COLOR_HM_BAR, &ui_bold);
-  if (right && right[0])
-    ui_text(VRAM_TOP_LA, TOP_SCREEN_WIDTH - 10 - ui_tw(&ui_small, right), 6,
-            TSH, right, COLOR_HM_TEXT2, COLOR_HM_BAR, &ui_small);
+  ui_text_fit(VRAM_TOP_LA, 10, 4, TSH, name, TOP_SCREEN_WIDTH - 36 - rw,
+              COLOR_WHITE, COLOR_HM_BAR, &ui_bold);
+  if (rw)
+    ui_text(VRAM_TOP_LA, TOP_SCREEN_WIDTH - 10 - rw, 6, TSH, right,
+            COLOR_HM_TEXT2, COLOR_HM_BAR, &ui_small);
 }
 
-/* Dismissed with A, B or a tap. */
 static void fv_message(const char *title, const char *detail) {
   ui_dialog(VRAM_BOT_A, BOT_SCREEN_WIDTH, BSH, BSH, title, detail, g_accent, 1);
   screen_present_bottom();
@@ -79,8 +81,7 @@ static void fv_message(const char *title, const char *detail) {
   }
 }
 
-/* A rounded button with a key badge on its left and the label centred in the
- * rest. The primary one is filled with the accent, so its text goes dark. */
+/* A key badge on the left, the label centred in the rest. */
 static void fv_button(int x, int y, int w, int h, const char *label,
                       const char *key, int primary) {
   volatile u8 *fb = VRAM_BOT_A;
@@ -122,11 +123,11 @@ int fv_confirm(const char *title, const char *subtitle, const char *yes,
   draw_filled_rect_alpha(fb, 0, 0, BOT_SCREEN_WIDTH, BSH, BSH, scrim, 150);
   draw_gradient_round_rect(fb, CF_X, CF_Y, CF_W, CF_H, 14, BSH,
                            COLOR_PANEL_TOP, COLOR_PANEL_BOT);
-  ui_text_mid(fb, BOT_SCREEN_WIDTH / 2, CF_Y + 16, BSH, title, COLOR_WHITE,
-              COLOR_PANEL_TOP, &ui_bold);
+  ui_text_mid_fit(fb, BOT_SCREEN_WIDTH / 2, CF_Y + 16, BSH, title, CF_W - 24,
+                  COLOR_WHITE, COLOR_PANEL_TOP, &ui_bold);
   if (subtitle && subtitle[0])
-    ui_text_mid(fb, BOT_SCREEN_WIDTH / 2, CF_Y + 42, BSH, subtitle,
-                COLOR_HM_TEXT2, COLOR_PANEL_TOP, &ui_font);
+    ui_text_mid_fit(fb, BOT_SCREEN_WIDTH / 2, CF_Y + 42, BSH, subtitle,
+                    CF_W - 24, COLOR_HM_TEXT2, COLOR_PANEL_TOP, &ui_font);
   fv_button(CF_YES_X, CF_BTN_Y, CF_BTN_W, CF_BTN_H, yes, "A", 1);
   fv_button(CF_NO_X, CF_BTN_Y, CF_BTN_W, CF_BTN_H, no, "B", 0);
   screen_present_bottom();
@@ -162,7 +163,7 @@ int fv_confirm(const char *title, const char *subtitle, const char *yes,
 #define TV_Y     (TOP_BAR + 4)
 #define TV_PITCH 17
 #define TV_ROWS  12
-#define TV_TAB   4 /* spaces to a tab stop */
+#define TV_TAB   4
 
 #define TV_BTN_Y 124
 #define TV_BTN_H 44
@@ -404,7 +405,8 @@ static void tv_draw_bottom(const char *name, u32 size, int is_log,
   draw_gradient_round_rect(fb, 12, 12, BOT_SCREEN_WIDTH - 24, 96, 12, BSH,
                            COLOR_PANEL_TOP, COLOR_PANEL_BOT);
   ui_icon(fb, 22, 28, 64, BSH, ASSET_ICON_FILE_TEXT_64, 0, COLOR_WHITE);
-  ui_text(fb, 96, 24, BSH, name, COLOR_WHITE, COLOR_PANEL_TOP, &ui_title);
+  ui_text_fit(fb, 96, 24, BSH, name, BOT_SCREEN_WIDTH - 24 - 96, COLOR_WHITE,
+              COLOR_PANEL_TOP, &ui_title);
 
   p = fv_str(p, is_log ? "Log file - " : "Text file - ");
   p = fv_size(p, size);
@@ -734,8 +736,6 @@ static void hx_draw_bottom(void) {
   screen_present_bottom();
 }
 
-/* Repaints what a cursor, digit or change-count update touches: at most two
- * rows, the info card and the buttons. */
 static void hx_refresh(const char *name, u32 old_cur, int count_changed) {
   if (count_changed)
     hx_draw_head(name);
@@ -772,7 +772,6 @@ static void hx_move(const char *name, u32 to, int nib) {
   }
 }
 
-/* A page at a time: the view and the cursor both move by a screenful. */
 static void hx_page_by(const char *name, int dir) {
   u32 last_row = (hx_size - 1u) / HX_COLS * HX_COLS;
   u32 max_top =
@@ -819,7 +818,7 @@ static void hx_set_digit(const char *name, u32 digit, int advance) {
     u32 old = hx_cur;
     if (before != hx_edits)
       hx_draw_head(name);
-    hx_draw_row((int)((old - hx_top) / HX_COLS)); /* the finished byte */
+    hx_draw_row((int)((old - hx_top) / HX_COLS));
     hx_move(name, hx_cur + 1u, 0);
     if (before != hx_edits) {
       hx_draw_actions();

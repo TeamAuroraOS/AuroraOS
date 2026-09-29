@@ -86,6 +86,69 @@ void ui_text_mid(volatile u8 *fb, int cx, int y, int sh, const char *s,
   ui_text(fb, cx - ui_tw(f, s) / 2, y, sh, s, fg, bg, f);
 }
 
+#define UI_FIT_MAX 512 /* longest text ui_fit measures, in bytes */
+
+void ui_fit(char *out, int outsz, const Font *f, const char *s, int maxw) {
+  int cut[UI_FIT_MAX + 1];
+  int n = 0, chars = 0, lo, hi;
+
+  if (outsz <= 0)
+    return;
+  while (s[n] && n < UI_FIT_MAX)
+    n++;
+  if (n < outsz && !s[n]) {
+    memcpy(out, s, (u32)n);
+    out[n] = 0;
+    if (ui_tw(f, out) <= maxw)
+      return;
+  }
+  if (outsz < 4) {
+    out[0] = 0;
+    return;
+  }
+
+  /* cut[k] is where the k-th character starts; keeping k characters keeps
+   * cut[k] bytes, and the ellipsis must still fit the buffer. */
+  cut[0] = 0;
+  for (int i = 0; i < n; i++)
+    if (((unsigned char)s[i] & 0xC0u) != 0x80u) {
+      if (i > outsz - 4)
+        break;
+      cut[chars++] = i;
+    }
+  cut[chars] = n <= outsz - 4 ? n : cut[chars > 0 ? chars - 1 : 0];
+
+  /* Wider with every character kept, so the longest prefix that fits is a
+   * binary search. */
+  lo = 0;
+  hi = chars;
+  while (lo < hi) {
+    int mid = (lo + hi + 1) / 2;
+    memcpy(out, s, (u32)cut[mid]);
+    memcpy(out + cut[mid], "...", 4);
+    if (ui_tw(f, out) <= maxw)
+      lo = mid;
+    else
+      hi = mid - 1;
+  }
+  memcpy(out, s, (u32)cut[lo]);
+  memcpy(out + cut[lo], "...", 4);
+}
+
+void ui_text_fit(volatile u8 *fb, int x, int y, int sh, const char *s, int maxw,
+                 Color fg, Color bg, const Font *f) {
+  char buf[UI_FIT_MAX + 4];
+  ui_fit(buf, (int)sizeof(buf), f, s, maxw);
+  ui_text(fb, x, y, sh, buf, fg, bg, f);
+}
+
+void ui_text_mid_fit(volatile u8 *fb, int cx, int y, int sh, const char *s,
+                     int maxw, Color fg, Color bg, const Font *f) {
+  char buf[UI_FIT_MAX + 4];
+  ui_fit(buf, (int)sizeof(buf), f, s, maxw);
+  ui_text_mid(fb, cx, y, sh, buf, fg, bg, f);
+}
+
 void ui_icon(volatile u8 *fb, int bx, int by, int box, int sh, u32 asset,
                     const unsigned char *bits, Color tint) {
   if (asset != UI_NO_ASSET && draw_asset_boxed(fb, bx, by, box, box, sh, asset,
@@ -254,8 +317,9 @@ void ui_dialog(volatile u8 *fb, int w, int h, int sh, const char *title,
   if (dim)
     draw_filled_rect_alpha(fb, 0, 0, w, h, sh, scrim, 150);
   draw_gradient_round_rect(fb, dx, dy, dw, dh, 14, sh, card_top, card_bot);
-  ui_text_mid(fb, w / 2, dy + 24, sh, title, title_color, card_top, &ui_title);
+  ui_text_mid_fit(fb, w / 2, dy + 24, sh, title, dw - 24, title_color, card_top,
+                  &ui_title);
   if (subtitle && subtitle[0])
-    ui_text_mid(fb, w / 2, dy + 54, sh, subtitle, COLOR_HM_TEXT2, card_bot,
-                &ui_font);
+    ui_text_mid_fit(fb, w / 2, dy + 54, sh, subtitle, dw - 24, COLOR_HM_TEXT2,
+                    card_bot, &ui_font);
 }

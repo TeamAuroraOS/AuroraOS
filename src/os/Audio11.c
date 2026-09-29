@@ -151,6 +151,11 @@ static void csnd_stop_ch(uint32_t ch) {
 }
 static void csnd_stop(void) { csnd_stop_ch(0); }
 
+void audio11_stop_all(void) {
+  for (uint32_t ch = 0; ch <= AUDIO_VOICES; ch++)
+    csnd_stop_ch(ch);
+}
+
 /* Play `bytes` of PCM at `phys` on channel `ch`. fmt = CH_FORMAT_PCM16 (16-bit)
  * or 0 (8-bit); loop != 0 loops forever, else one-shot; vol 0x8000 is full. */
 static void csnd_play_ch(uint32_t ch, uint32_t phys, uint32_t bytes,
@@ -243,19 +248,17 @@ void audio11_error_play(void) {
 void audio11_init(AudioCtrl *ct) {
   audio11_error_prepare();
   codec_init();
-  /* Diagnostics: read back codec ID/rev registers and one written register.
-   * All-0x00 or all-0xFF here means the codec SPI link is not working. */
   ct->diag0 = cdc_read_word(CDC_0_2);
   cdc_write(CDC_101_11, 0x2A);
   ct->diag6 = cdc_read_word(CDC_101_11);
   ct->diag1 = codec11_spi_timeouts();
-  ct->diag4 = MMIO16(CFG11_SPI_CNT); /* did new-SPI-interface enable stick? */
-  ct->diag5 = MMIO32(NSPI_CNT);      /* NSPI bus control state after xfers  */
+  ct->diag4 = MMIO16(CFG11_SPI_CNT);
+  ct->diag5 = MMIO32(NSPI_CNT);
   ct->status = AUDIO_ST_CODEC;
   dcache_clean();
 
   csnd_init();
-  ct->diag2 = MMIO32(CSND_MAIN); /* readback: did the master write stick? */
+  ct->diag2 = MMIO32(CSND_MAIN);
   ct->status = AUDIO_ST_READY;
   dcache_clean();
 }
@@ -264,7 +267,7 @@ int audio11_command(AudioCtrl *ct, uint32_t cmd, uint32_t arg0) {
   if (cmd == AUDIO_CMD_TONE) {
     uint32_t n = gen_tone(arg0 ? arg0 : 440, TONE_RATE);
     csnd_play(AUDIO_PCM_ADDR, n * 2u, TONE_RATE, CH_FORMAT_PCM16, 1);
-    ct->diag3 = MMIO32(CSND_CH_CNT(0)); /* did the channel start? */
+    ct->diag3 = MMIO32(CSND_CH_CNT(0));
     ct->status = AUDIO_ST_PLAY;
   } else if (cmd == AUDIO_CMD_PCM) {
     /* PCM already loaded at AUDIO_PCM_ADDR by the ARM9. */

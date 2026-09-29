@@ -117,3 +117,35 @@ crash_hang11:
     wfi
     b     crash_hang11
 .pool
+
+/* AUDIO_CMD_PARK: copied to AUDIO_PARK_ADDR and run there. It reports
+ * AUDIO_ST_PARKED, then waits on the firm's mailbox as src/arm11_start.s does
+ * at boot. Only PC-relative literals, so it runs from any address. */
+.global core11_park_stub
+.global core11_park_stub_end
+.type core11_park_stub, %function
+core11_park_stub:
+    ldr   r0, .Lpark_ctrl
+    mov   r1, #6                  @ AUDIO_ST_PARKED
+    str   r1, [r0, #4]            @ AudioCtrl.status
+    mov   r1, #0
+    mcr   p15, 0, r1, c7, c10, 0  @ clean D-cache
+    mcr   p15, 0, r1, c7, c10, 4  @ DSB
+    ldr   r2, .Lpark_mailbox
+.Lpark_wait:
+    mcr   p15, 0, r2, c7, c6, 1   @ drop any cached copy of the mailbox
+    ldr   r1, [r2]
+    cmp   r1, #0
+    beq   .Lpark_wait
+    mov   r12, r1
+    mov   r0, #0
+    mcr   p15, 0, r0, c7, c14, 0  @ clean + invalidate D-cache
+    mcr   p15, 0, r0, c7, c10, 4  @ DSB
+    mcr   p15, 0, r0, c7, c5, 0   @ invalidate I-cache: the new core is new code
+    mcr   p15, 0, r0, c7, c5, 6   @ flush branch predictor
+    bx    r12
+.Lpark_ctrl:
+    .word 0x23300000              @ AUDIO_CTRL_ADDR
+.Lpark_mailbox:
+    .word 0x27000000              @ AUDIO_ARM11_MAILBOX
+core11_park_stub_end:

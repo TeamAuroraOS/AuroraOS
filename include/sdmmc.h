@@ -99,6 +99,12 @@ int sdmmc_sdcard_writesectors(u32 sector_no, u32 numsectors, const u8 *in);
 /* Total capacity of the SD card in 512-byte sectors (valid after init). */
 u32 sdmmc_sdcard_size(void);
 
+/* The internal eMMC's 16-byte CID, in the order GodMode9 prints it. Returns 1
+ * when it was read, 0 when the eMMC did not answer. The first call brings the
+ * eMMC as far as identification and takes a few milliseconds; later calls
+ * return the same bytes. */
+int sdmmc_nand_cid(u8 *out);
+
 static inline u16 sdmmc_read16(u16 reg) {
     return *(volatile u16 *)(SDMMC_BASE + reg);
 }

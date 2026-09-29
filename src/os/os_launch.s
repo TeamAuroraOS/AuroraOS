@@ -54,7 +54,7 @@ os_launch_stub:
     mrs   r0, cpsr
     orr   r0, r0, #0xC0                  @ mask IRQ + FIQ
     msr   cpsr_c, r0
-    bx    r3                             @ into the app
+    bx    r3
 os_launch_stub_end:
 .size os_launch_stub, .-os_launch_stub
 
@@ -91,7 +91,7 @@ os_return_stub:
     mrs   r0, cpsr
     orr   r0, r0, #0xC0               @ mask IRQ + FIQ
     msr   cpsr_c, r0
-    bx    r3                          @ back into the OS
+    bx    r3
 .ltorg                                @ keep the literal pool inside the stub
 os_return_stub_end:
 .size os_return_stub, .-os_return_stub

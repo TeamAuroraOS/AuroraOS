@@ -129,9 +129,42 @@ loading WAVs into the PCM buffer at `0x23400000`, which nothing else uses while
 an app runs (`src/wavload.c` is the reader, shared with the File Explorer). The
 Home Menu calls `audio_voices_stop()` at start-up, which is also where it lands
 when an app returns, so an app's music cannot play on over memory the OS has
-taken back. Voices arrived with core version 82; an older core, still running
-after a warm reboot, acknowledges both commands without acting on them, and apps
-stay silent.
+taken back. Voices arrived with core version 82; an older core acknowledges both
+commands without acting on them, and apps stay silent. The next section is how
+an older core gets replaced.
+
+## Replacing a running core
+
+The ARM11 can still be running a core from before a reboot, and FCRAM keeps the
+command block's magic even when it is not. `audio_boot()` therefore does not
+trust the magic alone:
+
+1. With the magic present it posts `AUDIO_CMD_NONE` and waits for the ack. No
+   ack means no core is running (the ARM11 was reset and is waiting in the firm's
+   stub), so the core is loaded as on a cold boot.
+2. A core that answers with this build's `AUDIO_CORE_VERSION` is left alone.
+   That is the normal case after a HOME return.
+3. A core with a different version, from `AUDIO_PARK_VERSION` (83) on, is sent
+   `AUDIO_CMD_PARK`. It stops every channel, copies a small position-independent
+   loop to `AUDIO_PARK_ADDR` (`0x233E0000`), clears the magic, acks and jumps
+   there. The loop sets `AUDIO_ST_PARKED` and waits on the firm's mailbox exactly
+   as `src/arm11_start.s` does at boot. Once the ARM9 sees that status the old
+   image is free, and the new core is copied over it and woken the usual way.
+4. A core older than 83 does not know the park command, so it cannot be moved
+   out of the way while it runs. `audio_boot()` returns `AUDIO_BOOT_STALE`, and
+   the Home Menu offers to power off, which is the only way to load the new one.
+
+The park loop is copied out before the ack, so after the ARM9 sees the ack the
+old core has only a few instructions left to run in its own image, and the ARM9
+still waits for the loop to report from its new address before writing there.
+The version check and the power-off offer run at every boot. The park hand-off
+itself only happens when the core version changes; it has worked on hardware
+since core 84 replaced 83 without a power-off.
+
+| Command | Arguments |
+|---------|-----------|
+| `AUDIO_CMD_NONE` | none; acked, which shows a core is running |
+| `AUDIO_CMD_PARK` | none; the core stops and waits for a new one |
 
 ## Audio files
 

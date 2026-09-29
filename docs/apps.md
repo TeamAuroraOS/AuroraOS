@@ -11,9 +11,10 @@ SD:\Aurora\Apps\*.bin
 
 * **One container per app**, `AUR1` (an [Auric](../auric-lang/README.md) app) or
   `AOS1`, the two share an identical header layout and both are accepted.
-* **Display name** = the file name with its `.BIN` extension removed. For
-  example `SD:\Aurora\Apps\SNAKE.BIN` shows as **SNAKE**. (FatFs is built without
-  long file names, so names are 8.3 and upper-case.)
+* **Display name** = the file name with its `.bin` extension removed. For
+  example `SD:\Aurora\Apps\Snake.bin` shows as **Snake**. Long names work, and
+  the extension matches in any letter case; a name too long for the Home Menu's
+  card is cut with "...".
 * Apps are **sorted alphabetically** before being placed in the home grid.
 * Each app carries **its own icon**, embedded in the binary; the Home Menu reads
   and displays it (see *Per-app icons* below). Apps without one get a generic

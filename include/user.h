@@ -2,13 +2,19 @@
 #define AURORA_USER_H
 
 #include "aurora.h"
+#include "touch.h"
 
 #define USER_DAT_PATH     "Aurora/USER.dat"
 #define USER_DAT_DIR      "Aurora"
 #define USER_DAT_MAGIC    "ADAT"    /* 4 bytes, not NUL-terminated on disk */
-#define USER_DAT_VERSION  1
+#define USER_DAT_VERSION  2         /* 2 added the touch calibration        */
 #define USER_DAT_SIZE     64        /* fixed on-disk record size            */
 #define USER_NAME_MAX     24        /* incl. NUL terminator                 */
+
+/* Offset of the touch calibration: a flag byte, then x_min, x_max, y_min and
+ * y_max as little-endian int16. Version 1 files have zeros here, which read as
+ * no calibration. */
+#define USER_DAT_TOUCH    40
 
 enum {
   LANG_ENGLISH = 0,
@@ -28,6 +34,8 @@ typedef struct {
   u8   birth_month;   /* 1..12 */
   u16  birth_year;    /* e.g. 2000 */
   char name[USER_NAME_MAX];
+  u8   touch_set;     /* touch holds a measured calibration */
+  TouchCal touch;
 } UserConfig;
 
 void user_config_defaults(UserConfig *cfg);

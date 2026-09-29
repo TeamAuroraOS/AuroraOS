@@ -69,6 +69,16 @@ COLOR = [
     ('ICON_GAMECARD', 'game card.png', 32, False),
 ]
 
+# Faces for the About page's More Info credits, cut to a circle rather than to
+# ROUND_FRAC. (asset id, source, size).
+PEOPLE = [
+    ('PERSON_DISLOPIK', 'people/dislopik.png', 40),
+    ('PERSON_STAR',     'people/star.png',     40),
+    ('PERSON_ATEXBG',   'people/atexbg.png',   40),
+    ('PERSON_KYAERO',   'people/kyaero.png',   40),
+    ('PERSON_SECRET',   'people/secret.png',   40),
+]
+
 # (asset id, ttf, pixel size). Each atlas covers U+0020..U+00FF (Latin-1). The
 # C1 controls and anything the font lacks become empty entries rather than the
 # missing-glyph box.
@@ -295,6 +305,13 @@ def main():
         entries.append(('%s_%d' % (name, sz), T_RGBA, sz, sz, rgba))
         if a.verbose:
             print('  color %-24s %dx%d' % (fn, w, h))
+
+    for name, fn, sz in PEOPLE:
+        w, h, px = png_read.read(os.path.join(a.icons, fn))
+        rgba = round_corners(area_rgba(w, h, px, sz, sz), sz, 0.5)
+        entries.append(('%s_%d' % (name, sz), T_RGBA, sz, sz, rgba))
+        if a.verbose:
+            print('  face  %-24s %dx%d' % (fn, w, h))
 
     name, fn, ww, wh = WALLPAPER
     w, h, px = png_read.read(os.path.join(a.icons, fn))

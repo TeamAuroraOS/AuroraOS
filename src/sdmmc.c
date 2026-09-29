@@ -309,6 +309,67 @@ u32 sdmmc_sdcard_size(void) {
     return handleSD.total_size;
 }
 
+/* The eMMC's CID, read once on demand. The eMMC is device 1 on the same
+ * controller and nothing else touches it, so it is taken only through
+ * identification (CMD0, CMD1, CMD2); the controller is then pointed back at
+ * the SD card. Sequence from GodMode9's Nand_Init(). */
+#define NAND_CID_TRIES 1000
+
+static mmcdevice handleNAND;
+static u32 nand_cid[4];
+static int nand_cid_state; /* 0 not tried, 1 read, -1 no answer */
+
+static void nand_read_cid(void) {
+    int t;
+
+    nand_cid_state = -1;
+    handleNAND.isSDHC = 0;
+    handleNAND.SDOPT = 0;
+    handleNAND.initarg = 1;
+    handleNAND.clk = 0x80; /* identification speed */
+    handleNAND.devicenumber = 1;
+    handleNAND.rData = NULL;
+    handleNAND.tData = NULL;
+    handleNAND.size = 0;
+
+    set_target(&handleNAND);
+    sdmmc_send_command(&handleNAND, 0, 0);              /* CMD0 GO_IDLE_STATE */
+    sdmmc_send_command(&handleNAND, 0x10701, 0x100000); /* CMD1 SEND_OP_COND  */
+    if (handleNAND.error & 0x4)
+        goto done;
+
+    for (t = 0; t < NAND_CID_TRIES; t++) { /* until it has powered up */
+        sdmmc_send_command(&handleNAND, 0x10701, 0x40100000);
+        if (handleNAND.error & 0x4)
+            goto done;
+        if (handleNAND.ret[0] & 0x80000000)
+            break;
+        sdmmc_wait_ms(1);
+    }
+    if (t == NAND_CID_TRIES)
+        goto done;
+
+    sdmmc_send_command(&handleNAND, 0x10602, 0); /* CMD2 ALL_SEND_CID */
+    if (handleNAND.error & 0x4)
+        goto done;
+    for (int i = 0; i < 4; i++)
+        nand_cid[i] = handleNAND.ret[i];
+    nand_cid_state = 1;
+
+done:
+    set_target(&handleSD);
+}
+
+int sdmmc_nand_cid(u8 *out) {
+    if (!nand_cid_state)
+        nand_read_cid();
+    if (nand_cid_state != 1)
+        return 0;
+    for (int i = 0; i < 16; i++)
+        out[i] = (u8)(nand_cid[i >> 2] >> (8 * (i & 3)));
+    return 1;
+}
+
 int sdmmc_sdcard_init(void) {
     /* "SD mount fix": CFG register that routes the SD card to the ARM9
        controller. From GodMode9 sdmmc_sdcard_init() */

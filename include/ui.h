@@ -30,6 +30,16 @@ void ui_text(volatile u8 *fb, int x, int y, int sh, const char *s, Color fg,
 void ui_text_mid(volatile u8 *fb, int cx, int y, int sh, const char *s, Color fg,
                  Color bg, const Font *f);
 
+/* `s` copied into `out`, and if it is wider than `maxw`, or longer than `out`,
+ * cut at a character and ended with "...". */
+void ui_fit(char *out, int outsz, const Font *f, const char *s, int maxw);
+
+/* ui_text and ui_text_mid for text that may not fit in `maxw`. */
+void ui_text_fit(volatile u8 *fb, int x, int y, int sh, const char *s, int maxw,
+                 Color fg, Color bg, const Font *f);
+void ui_text_mid_fit(volatile u8 *fb, int cx, int y, int sh, const char *s,
+                     int maxw, Color fg, Color bg, const Font *f);
+
 /* An icon centred in a box-by-box square: pack art at its stored size, else the
  * built-in bitmap scaled to fit. Pass UI_NO_ASSET to force the bitmap. */
 void ui_icon(volatile u8 *fb, int bx, int by, int box, int sh, u32 asset,

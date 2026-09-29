@@ -49,6 +49,11 @@ to get wrong, because its alpha channel is a solid card silhouette; reduced to
 coverage it flattens to a plain white block, and only its 30 grey tones carry
 the artwork. If a new icon comes out as a featureless shape, that is why.
 
+The five faces in `icons/people/` are the credits on the About page's More Info
+screen. They are full-colour too, listed in `PEOPLE` rather than `COLOR` because
+the builder cuts them to a circle (`round_corners` at half the size) instead of
+to `ROUND_FRAC`.
+
 `diolog-box.png` is *not* in the pack. It is a plain rounded rectangle, black at
 alpha 191 with a radius of about 40 at 1200x232, so it is drawn with
 `draw_gradient_round_rect` instead: identical output, no storage, and correct at
@@ -122,7 +127,7 @@ Because the pack lives on the card, the payload only grew by about 5KB.
 
 1. Put the PNG in `icons/`. A UI icon should be white with an alpha channel;
    anything else is stored as RGBA.
-2. Add it to `MASKS` or `COLOR` in `tools/mkassets.py` with an id.
+2. Add it to `MASKS`, `COLOR` or `PEOPLE` in `tools/mkassets.py` with an id.
 3. `make assets`. This rewrites `Aurora/assets.pak` and regenerates
    `include/asset_ids.h`.
 4. Rebuild the OS, and copy the new pack to the card. The pack and the binary

@@ -2,9 +2,13 @@
 #include "assets.h"
 #include "ui.h"
 #include "files.h"
+#include "fileview.h"
 #include "model.h"
 #include "rendertest.h"
+#include "screenshot.h"
+#include "sdmmc.h"
 #include "statusbar.h"
+#include "touchcal.h"
 #include "timer.h"
 #include "audio.h"
 #include "container.h"
@@ -27,16 +31,17 @@ void delay(volatile u32 cycles) {
 /* HID pad bits 0..9 are A/B/Select/Start/D-pad/R/L; 10 and 11 are X and Y. */
 u32 get_keys(void) { return ~REG_HID_PAD & 0xFFF; }
 
-/* Directions repeat while held, like the stock menus: a step, a pause, then a
- * steady stream. Everything else stays edge-triggered, so holding A cannot
- * launch an app over and over. */
+/* Only directions repeat while held; everything else is edge-triggered, so
+ * holding A cannot relaunch an app. */
 #define KEY_REPEAT_MASK (BUTTON_DUP | BUTTON_DDOWN | BUTTON_DLEFT | BUTTON_DRIGHT)
-#define KEY_REPEAT_DELAY_US 350000u /* held this long before repeating   */
-#define KEY_REPEAT_RATE_US   70000u /* then one step every this long     */
+#define KEY_REPEAT_DELAY_US 350000u
+#define KEY_REPEAT_RATE_US   70000u
 
 static u32 prev_keys = 0;
-static u32 repeat_mark;  /* timer_ticks() at the last repeat or press */
-static u32 repeat_wait;  /* microseconds to wait before the next one   */
+static u32 repeat_mark;
+static u32 repeat_wait;
+
+#define SCREENSHOT_KEYS (BUTTON_L | BUTTON_R)
 
 u32 get_keys_down(void) {
   crash_poll_arm11();
@@ -44,8 +49,15 @@ u32 get_keys_down(void) {
   u32 down = cur & ~prev_keys;
   u32 held = cur & prev_keys & KEY_REPEAT_MASK;
 
+  /* Every screen polls here, so screenshots are handled once. The shoulder
+   * buttons are then swallowed so the screen does not act on them. */
+  if ((cur & SCREENSHOT_KEYS) == SCREENSHOT_KEYS && (down & SCREENSHOT_KEYS)) {
+    screenshot_take();
+    down &= ~(u32)SCREENSHOT_KEYS;
+  }
+
   if (down & KEY_REPEAT_MASK) {
-    repeat_mark = timer_ticks(); /* a fresh press restarts the pause */
+    repeat_mark = timer_ticks();
     repeat_wait = KEY_REPEAT_DELAY_US;
   } else if (held && timer_calibrated() &&
              timer_us_since(repeat_mark) >= repeat_wait) {
@@ -76,6 +88,9 @@ static void os_power_off(void) {
 
 static int g_accent_idx = 0;
 
+/* USER.dat as loaded at boot. */
+static UserConfig g_cfg;
+
 
 typedef enum {
   ACT_NONE = 0,
@@ -90,7 +105,7 @@ typedef struct {
   const char *dev;
   const unsigned char *icon; /* built-in 32x32 bits, or NULL */
   u32 asset_lg, asset_sm;    /* pack icon at 64 / 32, or UI_NO_ASSET */
-  Color tint;                /* big-icon background tint */
+  Color tint;
   HomeAction action;
   const char *path;          /* ACT_LAUNCH: container path on the SD card */
 } HomeApp;
@@ -99,14 +114,15 @@ typedef struct {
 #define HOME_ROWS  3
 #define HOME_COUNT (HOME_COLS * HOME_ROWS)
 
-/* Filled at startup by scan_apps() and build_home(). */
 static HomeApp home_apps[HOME_COUNT];
 
-/* Names are 8.3 (FF_USE_LFN=0), so these buffers are plenty. */
-#define APPS_DIR "Aurora/Apps"
-#define MAX_APPS HOME_COUNT
-static char app_name[MAX_APPS][16]; /* display name (filename minus ".BIN") */
-static char app_path[MAX_APPS][40]; /* "Aurora/Apps/NAME.BIN"                */
+/* A long name is cut for display, but the path always holds all of it. */
+#define APPS_DIR     "Aurora/Apps"
+#define MAX_APPS     HOME_COUNT
+#define APP_NAME_MAX 64
+#define APP_PATH_MAX (sizeof(APPS_DIR) + FF_LFN_BUF + 1)
+static char app_name[MAX_APPS][APP_NAME_MAX]; /* file name minus ".bin"  */
+static char app_path[MAX_APPS][APP_PATH_MAX]; /* "Aurora/Apps/Name.bin"  */
 static unsigned char app_icon[MAX_APPS][ICON_SIZE * ICON_ROW_BYTES];
 static int  app_has_icon[MAX_APPS];
 static int  app_count;
@@ -134,8 +150,6 @@ static void hm_top_item(int selected) {
   const HomeApp *app = &home_apps[selected];
 
   int box = 96, bx = (TOP_SCREEN_WIDTH - box) / 2, by = 34;
-  /* Shaded from the tint down to a darker mix of itself, so the tile reads as
-   * lit from above. */
   Color tint = app->name ? app->tint : COLOR_HM_EMPTY_TOP;
   Color tint_dark;
   tint_dark.r = (u8)((tint.r * 5) / 9);
@@ -152,8 +166,8 @@ static void hm_top_item(int selected) {
                            COLOR_PANEL_TOP, COLOR_PANEL_BOT);
   const char *name = app->name ? app->name : L(STR_EMPTY_SLOT);
   const char *dev = app->dev ? app->dev : "";
-  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, cy + 7, TOP_SCREEN_HEIGHT,
-              name, COLOR_WHITE, COLOR_PANEL_TOP, &ui_title);
+  ui_text_mid_fit(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, cy + 7, TOP_SCREEN_HEIGHT,
+                  name, cw - 24, COLOR_WHITE, COLOR_PANEL_TOP, &ui_title);
   ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, cy + 31, TOP_SCREEN_HEIGHT,
               dev, COLOR_HM_TEXT2, COLOR_PANEL_BOT, &ui_font);
   screen_present_top();
@@ -232,8 +246,7 @@ static void hm_update(int old_sel, int new_sel) {
   hm_top_item(new_sel);
 }
 
-/* The accent palette lives in os_setup.c, shared with setup so a saved index
- * means the same everywhere. */
+/* Shared with os_setup.c, so a saved index means the same everywhere. */
 #define accent_presets aurora_accent_presets
 #define accent_names   aurora_accent_names
 #define ACCENT_COUNT   AURORA_ACCENT_COUNT
@@ -252,6 +265,7 @@ typedef enum {
   SET_WIFI = 0,
   SET_ACCENT,
   SET_BRIGHTNESS,
+  SET_TOUCHCAL,
   SET_WIFITEST,
   SET_GPUTEST,
   SET_ABOUT,
@@ -264,10 +278,9 @@ typedef enum {
 #define ROW_H    34
 #define ROW_STEP 42
 #define ROW_Y0   8
-#define SET_VISIBLE 5 /* rows shown at once; the list scrolls past this */
+#define SET_VISIBLE 5
 
-/* Icon / name / value for a settings item. icon == NULL means "draw the accent
- * swatch" (the accent row). */
+/* icon == NULL draws the accent swatch instead. */
 static void settings_content(int id, u32 *asset, const unsigned char **icon,
                              const char **name, const char **value) {
   *asset = UI_NO_ASSET;
@@ -282,6 +295,10 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
       *asset = ASSET_ICON_DISPLAY_32;
       *icon = icon_brightness_bits; *name = L(STR_BRIGHTNESS);
       *value = "3 / 5"; break;
+    case SET_TOUCHCAL:
+      *asset = ASSET_ICON_CONSOLE_32;
+      *icon = icon_boot_bits; *name = L(STR_TOUCH_CAL);
+      *value = touch_cal_is_default() ? L(STR_DEFAULT) : L(STR_CUSTOM); break;
     case SET_WIFITEST:
       *asset = ASSET_ICON_GLOBE_32;
       *icon = icon_wifi_bits; *name = L(STR_WIFI_TEST); *value = ""; break;
@@ -305,8 +322,8 @@ static void settings_row(int drow, int id, int sel) {
   settings_content(id, &asset, &icon, &name, &value);
 
   int y = ROW_Y0 + drow * ROW_STEP;
-  /* Unselected rows paint the ring area with the background shade at this
-   * height, so no halo is left. */
+  /* Unselected rows repaint the ring area in the background shade, so no halo
+   * is left. */
   if (id == sel) {
     draw_filled_round_rect(VRAM_BOT_A, ROW_X - 3, y - 3, ROW_W + 6, ROW_H + 6,
                            10, BOT_SCREEN_HEIGHT, g_accent);
@@ -338,7 +355,6 @@ static void settings_row(int drow, int id, int sel) {
           BOT_SCREEN_HEIGHT, ">", COLOR_HM_TEXT2, COLOR_HM_SLOT, &ui_font);
 }
 
-/* First item shown, chosen to keep the selection roughly centred. */
 static int settings_top(int sel) {
   int top = sel - SET_VISIBLE / 2;
   if (top > SET_COUNT - SET_VISIBLE)
@@ -358,7 +374,6 @@ static void settings_draw(int sel) {
   screen_present_bottom();
 }
 
-/* Only the two changed rows are repainted, unless the list scrolls. */
 static void settings_update(int old_sel, int new_sel) {
   int top = settings_top(new_sel);
 
@@ -453,7 +468,7 @@ static void accent_draw(int sel) {
                              12, BOT_SCREEN_HEIGHT, COLOR_WHITE);
     draw_filled_round_rect(VRAM_BOT_A, x, y, SW_SIZE, SW_SIZE, 10,
                            BOT_SCREEN_HEIGHT, accent_presets[i]);
-    if (i == g_accent_idx) /* mark the currently active accent */
+    if (i == g_accent_idx)
       draw_filled_round_rect(VRAM_BOT_A, x + SW_SIZE / 2 - 5, y + SW_SIZE / 2 - 5,
                              10, 10, 3, BOT_SCREEN_HEIGHT, COLOR_WHITE);
   }
@@ -540,9 +555,8 @@ static void snd_hex(char *out, u32 v) {
 }
 
 
-/* Wi-Fi Test: triggers the ARM11 SDIO probe and shows the results. GPL-2.0:
- * part of the Wi-Fi driver (ath6kl-derived; credit Octoblimp). See docs/wifi.md
- * "License and credits". */
+/* Wi-Fi Test. GPL-2.0: part of the Wi-Fi driver (ath6kl-derived; credit
+ * Octoblimp). See docs/wifi.md "License and credits". */
 static void wifi_hex4(char *out, u32 v) {
   static const char d[] = "0123456789ABCDEF";
   for (int i = 0; i < 4; i++)
@@ -556,7 +570,7 @@ static void wifi_run_probe(WifiShared *w) {
   wifi_get(w);
   u32 last = w->seq;
   wifi_probe();
-  for (int t = 0; t < 150; t++) { /* wait for the ARM11 to finish (~3s max) */
+  for (int t = 0; t < 150; t++) { /* up to ~3 s */
     delay(200000);
     wifi_get(w);
     if (w->seq != last)
@@ -564,8 +578,6 @@ static void wifi_run_probe(WifiShared *w) {
   }
 }
 
-/* Stage one copyright firmware blob from SD into a shared-FCRAM slot. The blob
- * is loaded at runtime and never embedded (Nintendo copyright). */
 static int wifi_load_blob(const char *path, u32 dst, u32 maxlen,
                           volatile u32 *len_out) {
   static FIL f;
@@ -583,8 +595,6 @@ static int wifi_load_blob(const char *path, u32 dst, u32 maxlen,
   return (fr == FR_OK && br == sz) ? 1 : 0;
 }
 
-/* Loads the four NWM blobs from SD:/Aurora/wifi (8.3 names) into the WIFI_FW
- * slots and sets the WifiFw header. Returns 1 if all four loaded. */
 static int wifi_load_firmware(u32 main_type) {
   static FATFS fwfs;
   if (f_mount(&fwfs, "", 1) != FR_OK)
@@ -607,31 +617,33 @@ static int wifi_load_firmware(u32 main_type) {
   f_mount(NULL, "", 0);
   if (ok) {
     fw->main_type = main_type;
-    fw->magic = WIFI_FW_MAGIC; /* signal the ARM11 that all blobs are staged */
+    fw->magic = WIFI_FW_MAGIC;
   }
   return ok;
 }
 
-/* Load the firmware from SD, then have the ARM11 upload and boot it. Returns 0
- * if the SD load failed. The upload takes several seconds. */
-static int wifi_run_boot(WifiShared *w, u32 main_type) {
+static int wifi_run_boot(WifiShared *w, u32 main_type, u32 opts) {
   if (!wifi_load_firmware(main_type))
     return 0;
   wifi_get(w);
   u32 last = w->seq;
-  wifi_boot();
-  for (int t = 0; t < 3000; t++) { /* upload of the ~42 KB image is slow */
+  wifi_boot(opts);
+  for (int t = 0; t < 8000; t++) { /* the upload is slow, and may be redone */
     delay(200000);
     wifi_get(w);
     if (w->seq != last)
       break;
     if ((t % 6) == 0)
-      wifitest_draw(w); /* live progress: boot step + send count climbing */
+      wifitest_draw(w);
     if (get_keys_down() & BUTTON_B)
-      break; /* escape hatch: never leave the user stuck on a long wait */
+      break;
   }
   return 1;
 }
+
+/* The recipe L and R boot with; X cycles it. */
+static u32 wifi_opts = WIFI_OPT_RESTORE_SOC | WIFI_OPT_NO_POST_LZ;
+static int wifi_preset = 0;
 
 static void wifitest_draw(const WifiShared *w) {
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
@@ -659,11 +671,10 @@ static void wifitest_draw(const WifiShared *w) {
   draw_string(VRAM_BOT_A, 8, 38, BOT_SCREEN_HEIGHT,
               "idx  arg      resp      s0/s1", COLOR_HM_TEXT2, COLOR_HM_BG);
 
-  /* One row per logged SDIO command, green when the response is non-zero;
-   * capped so it cannot run into the status lines. */
   u32 n = w->nlog;
-  if (n > 8)
-    n = 8;
+  u32 nmax = (w->boot_step != WIFI_BOOT_NONE) ? 4u : 8u; /* room for the boot lines */
+  if (n > nmax)
+    n = nmax;
   for (u32 i = 0; i < n; i++) {
     const WifiCmd *e = &w->log[i];
     p = snd_cpy(line, "C");
@@ -693,6 +704,63 @@ static void wifitest_draw(const WifiShared *w) {
                 COLOR_HM_BG);
   }
 
+  if (w->boot_step != WIFI_BOOT_NONE) {
+    p = snd_cpy(line, "a ");
+    snd_hex(num, w->htc_regs2);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " fw ");
+    snd_hex(num, w->fw_sum);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " ck ");
+    snd_hex(num, w->clkcnt);
+    snd_cpy(p, num);
+    draw_string(VRAM_BOT_A, 8, 122, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
+               COLOR_HM_BG);
+
+    p = snd_cpy(line, "drop ");
+    snd_u32(num, w->htc_drained & 0xFFFFu);
+    p = snd_cpy(p, num);
+    *p++ = '/';
+    wifi_hex4(num, w->htc_drained >> 16);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " got ");
+    snd_hex(num, w->htc_msg0);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " t ");
+    snd_u32(num, w->htc_try);
+    p = snd_cpy(p, num);
+    *p++ = '/';
+    snd_u32(num, w->htc_err);
+    snd_cpy(p, num);
+    draw_string(VRAM_BOT_A, 8, 136, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
+               COLOR_HM_BG);
+
+    p = snd_cpy(line, "tr ");
+    snd_hex(num, w->trace);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " f ");
+    wifi_hex4(num, w->fail_cmd);
+    p = snd_cpy(p, num);
+    *p++ = ' ';
+    snd_hex(num, w->fail_stat);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " @");
+    snd_hex(num, w->fail_at);
+    snd_cpy(p, num + 4); /* the low 24 bits: the send count */
+    draw_string(VRAM_BOT_A, 8, 108, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
+               COLOR_HM_BG);
+
+    p = snd_cpy(line, "s ");
+    for (int i = 0; i < 3; i++) {
+      snd_hex(num, w->htc_snap[i]);
+      p = snd_cpy(p, num + 2); /* without the "0x", to fit three */
+      *p++ = ' ';
+    }
+    *p = 0;
+    draw_string(VRAM_BOT_A, 8, 150, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
+               COLOR_HM_BG);
+  }
+
   /* Parse the CIS for the CISTPL_MANFID (0x20) tuple: manufacturer + card ID.
    * Atheros vendor = 0x0271. */
   {
@@ -707,7 +775,7 @@ static void wifitest_draw(const WifiShared *w) {
         continue;
       } /* null tuple */
       u8 link = w->cis[pos + 1];
-      if (code == 0x20 && pos + 5 < 48) { /* CISTPL_MANFID */
+      if (code == 0x20 && pos + 5 < 48) {
         manf = w->cis[pos + 2] | ((u32)w->cis[pos + 3] << 8);
         card = w->cis[pos + 4] | ((u32)w->cis[pos + 5] << 8);
         found = 1;
@@ -726,13 +794,18 @@ static void wifitest_draw(const WifiShared *w) {
     p = snd_cpy(p, num);
     p = snd_cpy(p, "  fn1 ");
     p = snd_cpy(p, (w->ior & 0x02) ? "RDY" : "no");
+    p = snd_cpy(p, "  wc ");
+    wifi_hex4(num, w->wificnt & 0xFFu);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " o ");
+    snd_u32(num, wifi_opts);
+    p = snd_cpy(p, num);
     Color mc = (found && manf == 0x0271) ? COLOR_AURORA : COLOR_WHITE;
     draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 72, BOT_SCREEN_HEIGHT, line,
                 mc, COLOR_HM_BG);
   }
 
-  /* When a firmware boot has run, show its progress here; otherwise show the
-   * diagnostic-window reads of target SOC memory (probe mode). */
+  /* Boot progress, or the probe's diag-window reads. */
   if (w->boot_step != WIFI_BOOT_NONE) {
     static const char *const bl[] = {"NONE", "NOFW", "BADVER", "HI",
                                      "STUB", "MAIN", "DONE"};
@@ -751,19 +824,23 @@ static void wifitest_draw(const WifiShared *w) {
     p = snd_cpy(p, " nc ");
     snd_u32(num, w->bmi_nocred);
     p = snd_cpy(p, num);
-    p = snd_cpy(p, " p ");   /* no-credit per phase: byte0 HI, byte1 STUB, byte2 MAIN */
-    snd_hex(num, w->fw_chk);
-    snd_cpy(p, num);
+    if (w->boot_tries > 1) {
+      p = snd_cpy(p, " b ");
+      snd_u32(num, w->boot_tries);
+      p = snd_cpy(p, num);
+    }
+    if (w->fw_chk) {
+      p = snd_cpy(p, " p ");
+      snd_hex(num, w->fw_chk);
+      p = snd_cpy(p, num);
+    }
+    *p = 0;
     Color bc = w->boot_ready == 1  ? COLOR_AURORA
                : (bs == WIFI_BOOT_NOFW || bs == WIFI_BOOT_BADVER) ? COLOR_ORANGE
                                                                   : COLOR_HM_TEXT2;
     draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 58, BOT_SCREEN_HEIGHT, line,
                 bc, COLOR_HM_BG);
 
-    /* HTC handoff: message ID (1 = HTC_READY) + credit count/size. On no
-     * message, show the raw HIF interrupt regs
-     * (his/counter/frame/lookahead-valid) + the lookahead header, so the
-     * mailbox state is visible for debugging. */
     if (w->htc_ready) {
       p = snd_cpy(line, "HTC id ");
       wifi_hex4(num, w->htc_msgid);
@@ -773,12 +850,16 @@ static void wifitest_draw(const WifiShared *w) {
       p = snd_cpy(p, num);
       p = snd_cpy(p, " sz ");
       snd_u32(num, w->htc_credsz);
-      snd_cpy(p, num);
+      p = snd_cpy(p, num);
+      if (w->htc_stage >= WIFI_HTC_CONNECTED) {
+        p = snd_cpy(p, " ep ");
+        snd_u32(num, w->htc_ep);
+        p = snd_cpy(p, num);
+      }
+      *p = 0;
     } else {
-      /* No HTC message: r = HOST_INT(0x400)|CPU(0x401)<<8|ERR(0x402)<<16|
-       * LAV(0x405)<<24; mb = a direct 4-byte peek of mailbox 0 (0x800), if the
-       * firmware posted but the lookahead didn't flag it, an HTC frame shows
-       * here. */
+      /* mb is fw_dbrd: the stub readback, or a mailbox 0 peek if nothing was
+       * flagged while waiting for HTC_READY. */
       p = snd_cpy(line, "r ");
       snd_hex(num, w->htc_regs);
       p = snd_cpy(p, num);
@@ -800,21 +881,50 @@ static void wifitest_draw(const WifiShared *w) {
     draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 44, BOT_SCREEN_HEIGHT, line,
                 ok ? COLOR_AURORA : COLOR_ORANGE, COLOR_HM_BG);
   }
-  /* RX_LOOKAHEAD_VALID(0x405) + consumed credit + BMI target version. */
-  p = snd_cpy(line, "BMI ver ");
-  snd_hex(num, w->bmi_ver);
-  p = snd_cpy(p, num);
-  p = snd_cpy(p, " ty ");
-  snd_hex(num, w->bmi_type);
-  snd_cpy(p, num);
-  {
+  if (w->boot_step != WIFI_BOOT_NONE) {
+    if (w->wmi_event) {
+      p = snd_cpy(line, "WMI ");
+      wifi_hex4(num, w->wmi_event);
+      p = snd_cpy(p, num);
+      p = snd_cpy(p, " MAC ");
+      for (int i = 0; i < 6; i++) {
+        u32 b = (i < 4) ? ((w->wmi_mac0 >> (i * 8)) & 0xFFu)
+                        : ((w->wmi_mac1 >> ((i - 4) * 8)) & 0xFFu);
+        wifi_hex4(num, b);
+        p = snd_cpy(p, num + 2); /* the low two digits */
+      }
+      *p = 0;
+    } else {
+      p = snd_cpy(line, "HTC ep ");
+      snd_u32(num, w->htc_ep);
+      p = snd_cpy(p, num);
+      p = snd_cpy(p, " st ");
+      snd_u32(num, w->htc_status);
+      p = snd_cpy(p, num);
+      p = snd_cpy(p, " sg ");
+      snd_u32(num, w->htc_stage);
+      p = snd_cpy(p, num);
+      p = snd_cpy(p, " r ");
+      snd_hex(num, w->htc_regs);
+      snd_cpy(p, num);
+    }
+    draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 30, BOT_SCREEN_HEIGHT, line,
+                (w->wmi_event == 0x1001) ? COLOR_AURORA : COLOR_ORANGE,
+                COLOR_HM_BG);
+  } else {
+    p = snd_cpy(line, "BMI ver ");
+    snd_hex(num, w->bmi_ver);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " ty ");
+    snd_hex(num, w->bmi_type);
+    snd_cpy(p, num);
     int bmi_ok = w->bmi_ver != 0 && w->bmi_ver != 0xFFFFFFFF;
     draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 30, BOT_SCREEN_HEIGHT, line,
                 bmi_ok ? COLOR_AURORA : COLOR_HM_TEXT2, COLOR_HM_BG);
   }
 
   draw_string(VRAM_BOT_A, 8, BOT_SCREEN_HEIGHT - 15, BOT_SCREEN_HEIGHT,
-              "A: Probe  R:T4  L:T1  B:Back", COLOR_HM_TEXT2, COLOR_HM_BG);
+              "A:Probe R:T4 L:T1 X:opt B:Back", COLOR_HM_TEXT2, COLOR_HM_BG);
   screen_present_bottom();
 }
 
@@ -832,11 +942,21 @@ static void wifi_test_screen(void) {
       wifitest_draw(&w);
     }
     if (k & BUTTON_R) {
-      wifi_run_boot(&w, WIFI_FW_TYPE4);
+      wifi_run_boot(&w, WIFI_FW_TYPE4, wifi_opts);
       wifitest_draw(&w);
     }
     if (k & BUTTON_L) {
-      wifi_run_boot(&w, WIFI_FW_TYPE1);
+      wifi_run_boot(&w, WIFI_FW_TYPE1, wifi_opts);
+      wifitest_draw(&w);
+    }
+    if (k & BUTTON_X) {
+      /* 3 (default): the Linux sequence plus ath6kl's interrupt disable. */
+      static const u32 presets[] = {WIFI_OPT_RESTORE_SOC | WIFI_OPT_NO_POST_LZ,
+                                    WIFI_OPT_LINUX,
+                                    WIFI_OPT_RESTORE_SOC,
+                                    0};
+      wifi_preset = (wifi_preset + 1) % 4;
+      wifi_opts = presets[wifi_preset];
       wifitest_draw(&w);
     }
     if (k & BUTTON_B)
@@ -845,11 +965,11 @@ static void wifi_test_screen(void) {
   }
 }
 
-/* GPU Test: drives the PICA200 PSC fill and PPF blit and reports the results.
- * GPL-2.0: part of the PICA200 driver (docs/gpu.md "License and credits").
+/* GPU Test. GPL-2.0: part of the PICA200 driver (docs/gpu.md "License and
+ * credits").
  *
- * VRAM runs 0x18000000..0x18600000 and the framebuffers start at 0x18300000, so
- * the first bank is scratch for the blit test. */
+ * The framebuffers start at 0x18300000, so the first VRAM bank is free for
+ * the blit test. */
 
 #define GPU_SCRATCH 0x18000000u
 
@@ -858,8 +978,7 @@ static const char *const gpu_step_names[] = {
 static const char *const gpu_err_names[] = {"ok", "NOINIT", "BADARG", "TIMEOUT",
                                             "BUSY"};
 
-/* A gradient in the scratch bank, so the blit moves something recognisable. The
- * framebuffer is column-major. */
+/* A recognisable gradient to blit. The framebuffer is column-major. */
 static void gpu_paint_scratch(void) {
   volatile u8 *s = (volatile u8 *)GPU_SCRATCH;
   for (int col = 0; col < TOP_SCREEN_WIDTH; col++) {
@@ -874,8 +993,6 @@ static void gpu_paint_scratch(void) {
 }
 
 
-/* Render benchmark: times the work the UI does, in real microseconds from the
- * RTC-calibrated timer. */
 static u32 bench_op_us = 0;   /* one GPU round trip, however small the work */
 static u32 bench_cpu_us = 0;  /* CPU filling the bottom screen with a shade */
 static u32 bench_psc_us = 0;  /* GPU doing a whole-screen solid fill        */
@@ -886,12 +1003,11 @@ static u32 bench_card_us = 0; /* one list-row card, the gradient round rect  */
 
 extern void os_mpu_enable(void);
 
-/* Set once os_mpu_enable() has run, so the GPU test can report it. */
 static int mpu_on;
 
-/* CP15 as the firm left it. c1: bit 0 MPU, bit 2 D-cache, bit 12 I-cache. c2
- * cacheable and c3 bufferable carry one bit per region. c6,n holds region n's
- * base, size and enable bit. */
+/* CP15 c1: bit 0 MPU, bit 2 D-cache, bit 12 I-cache. c2 (cacheable) and c3
+ * (bufferable) hold a bit per region; c6,n is region n's base, size and
+ * enable. */
 static u32 cp15_c1(void) {
   u32 v;
   __asm__ volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(v));
@@ -929,8 +1045,7 @@ static void gpu_run_bench(void) {
   if (!timer_calibrated())
     return; /* calibrated at boot; re-running it here would reset the ticks */
 
-  /* Round-trip cost: 64 blits of one 16-byte run. The work is negligible, so
-   * what is left is the cost of asking the GPU to do anything at all. */
+  /* 64 tiny blits: what remains is the cost of any GPU request. */
   t0 = timer_ticks();
   for (int i = 0; i < 64; i++)
     gpu_texcopy(back, back + 0x1000u, 16u);
@@ -949,13 +1064,11 @@ static void gpu_run_bench(void) {
   gpu_texcopy(back, (u32)VRAM_BOT_PHYS, BOT_FB_SIZE);
   bench_blit_us = timer_us_since(t0);
 
-  /* A background paint from the cache, against the per-pixel compose above. */
   t0 = timer_ticks();
   ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
                BOT_SCREEN_HEIGHT);
   bench_bg_us = timer_us_since(t0);
 
-  /* A cursor move repaints a row's uncovered edges, then its card. */
   t0 = timer_ticks();
   ui_patch_round_rect(VRAM_BOT_A, 10, 40, 300, 30, 8, 2, BOT_SCREEN_HEIGHT);
   bench_patch_us = timer_us_since(t0);
@@ -983,8 +1096,6 @@ static void gputest_draw(const GpuShared *g, const char *last, int lastok) {
               g->ready ? COLOR_AURORA : COLOR_ORANGE, COLOR_HM_BG);
   y += 18;
 
-  /* The hardware ID proves the GPU block is reachable at all: a plausible
-   * non-zero, non-0xFFFFFFFF value means the register read landed. */
   p = snd_cpy(line, "HW ID ");
   snd_hex(num, g->hw_id);
   p = snd_cpy(p, num);
@@ -1119,14 +1230,12 @@ static void gpu_test_screen(void) {
       lastok = gpu_init();
       last = lastok ? "init" : "init failed";
     } else if (k & BUTTON_X) {
-      /* PSC fill of the whole top framebuffer: the fastest possible clear.
-       * Targets the panel directly so the result is visible without a present. */
+      /* Straight to the panel, so it shows without a present. */
       lastok = gpu_clear_fb((u32)VRAM_TOP_PHYS, TOP_FB_SIZE,
                             fill_colors[fill_idx]);
       fill_idx = (fill_idx + 1) % 3;
       last = lastok ? "PSC fill" : "PSC fill failed";
     } else if (k & BUTTON_Y) {
-      /* PPF raw blit: CPU paints the scratch bank, the GPU moves it on screen. */
       gpu_paint_scratch();
       lastok = gpu_texcopy(GPU_SCRATCH, (u32)VRAM_TOP_PHYS, TOP_FB_SIZE);
       last = lastok ? "PPF blit" : "PPF blit failed";
@@ -1152,8 +1261,6 @@ static void gpu_test_screen(void) {
   }
 }
 
-/* About: identity and credits on top, console state below. The SD figures need
- * a mount and maybe a FAT scan, so the page is shown first. */
 static char *about_u32(char *p, u32 v) {
   char tmp[12];
   int n = 0;
@@ -1174,8 +1281,7 @@ static char *about_str(char *p, const char *s) {
   return p;
 }
 
-/* 512-byte sectors as gigabytes to one decimal. A GB is 2^21 sectors, so this
- * is a shift rather than a 64-bit divide. */
+/* 2^21 sectors to a GB, so this is a shift rather than a 64-bit divide. */
 static char *about_gb(char *p, unsigned long long sectors) {
   u32 tenths = (u32)((sectors * 10ull + (1ull << 20)) >> 21);
   p = about_u32(p, tenths / 10u);
@@ -1212,6 +1318,29 @@ static void about_top(void) {
     ui_text_mid(fb, TOP_SCREEN_WIDTH / 2, 157 + i * 18, sh, credits[i],
                 COLOR_WHITE, COLOR_PANEL_TOP, &ui_small);
   screen_present_top();
+}
+
+#define ABOUT_BTN_W  136
+#define ABOUT_BTN_H  36
+#define ABOUT_BTN_Y  (BOT_SCREEN_HEIGHT - ABOUT_BTN_H - 12)
+#define ABOUT_MORE_X 12
+#define ABOUT_BACK_X (BOT_SCREEN_WIDTH - 12 - ABOUT_BTN_W)
+
+static void about_button(int x, const char *label, int primary) {
+  static const Color ink_dark = {0x12, 0x12, 0x16};
+  volatile u8 *fb = VRAM_BOT_A;
+  const int sh = BOT_SCREEN_HEIGHT;
+
+  if (primary)
+    draw_filled_round_rect(fb, x, ABOUT_BTN_Y, ABOUT_BTN_W, ABOUT_BTN_H, 10, sh,
+                           g_accent);
+  else
+    draw_gradient_round_rect(fb, x, ABOUT_BTN_Y, ABOUT_BTN_W, ABOUT_BTN_H, 10,
+                             sh, COLOR_HM_SLOT_TOP, COLOR_HM_SLOT_BOT);
+  ui_text_mid(fb, x + ABOUT_BTN_W / 2,
+              ABOUT_BTN_Y + (ABOUT_BTN_H - ui_th(&ui_bold)) / 2, sh, label,
+              primary ? ink_dark : COLOR_WHITE,
+              primary ? g_accent : COLOR_HM_SLOT, &ui_bold);
 }
 
 static void about_bottom(const char *sd) {
@@ -1257,9 +1386,128 @@ static void about_bottom(const char *sd) {
     ui_text(fb, px + pw - 14 - ui_tw(&ui_font, value[i]), y, sh, value[i],
             COLOR_WHITE, COLOR_PANEL_TOP, &ui_font);
   }
-  ui_text_mid(fb, BOT_SCREEN_WIDTH / 2, sh - 26, sh, L(STR_B_BACK),
-              COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_small);
+  about_button(ABOUT_MORE_X, L(STR_MORE_INFO), 1);
+  about_button(ABOUT_BACK_X, L(STR_BACK), 0);
   screen_present_bottom();
+}
+
+/* The printed serial lives in encrypted NAND, so More Info shows the eMMC CID
+ * instead. */
+#define INFO_ROWS 4
+#define INFO_X    50
+#define INFO_Y    100
+#define INFO_STEP 30
+#define INFO_W    (TOP_SCREEN_WIDTH - 2 * INFO_X)
+
+typedef struct {
+  u32 asset;
+  const char *name;
+  const char *role;
+} Person;
+
+static const Person team[] = {
+    {ASSET_PERSON_DISLOPIK_40, "DisLoPik", "CEO"},
+    {ASSET_PERSON_STAR_40,     "Star",     "Founder"},
+    {ASSET_PERSON_ATEXBG_40,   "AtexBg",   "Low-level Developer"},
+    {ASSET_PERSON_KYAERO_40,   "Kyaero",   "Interface Designer"},
+    {ASSET_PERSON_SECRET_40,   "Secret",   "Drivers and GPIO"},
+};
+
+#define TEAM_COUNT ((int)(sizeof(team) / sizeof(team[0])))
+#define TEAM_X     16
+#define TEAM_Y0    8
+#define TEAM_STEP  45
+#define TEAM_AV    40
+
+/* The eMMC CID as GodMode9 prints it: the 16 bytes in order. `out` takes 33
+ * bytes. */
+static const char *info_cid(char *out) {
+  static const char digits[] = "0123456789ABCDEF";
+  u8 cid[16];
+
+  if (!sdmmc_nand_cid(cid))
+    return L(STR_NOT_AVAILABLE);
+  for (int i = 0; i < 16; i++) {
+    out[i * 2] = digits[cid[i] >> 4];
+    out[i * 2 + 1] = digits[cid[i] & 0xF];
+  }
+  out[32] = 0;
+  return out;
+}
+
+static void info_top(void) {
+  static const Color rule = {0x30, 0x30, 0x34};
+  volatile u8 *fb = VRAM_TOP_LA;
+  const int sh = TOP_SCREEN_HEIGHT;
+  const char *label[INFO_ROWS] = {L(STR_VERSION), L(STR_SOFTWARE_UPDATE),
+                                  L(STR_EMMC_CID), L(STR_DEVICE)};
+  const char *value[INFO_ROWS];
+  char cid[33];
+
+  value[0] = AURORA_VERSION;
+  value[1] = L(STR_UPDATE_NONE);
+  value[2] = info_cid(cid);
+  value[3] = aurora_is_new3ds() ? "New Nintendo 3DS" : "Nintendo 3DS";
+
+  ui_wallpaper(fb, TOP_SCREEN_WIDTH, sh, sh);
+  hm_status_bar();
+  draw_filled_round_rect(fb, INFO_X, 46, INFO_W, 38, 10, sh, COLOR_HM_BAR);
+  ui_text_mid(fb, TOP_SCREEN_WIDTH / 2, 46 + (38 - ui_th(&ui_bold)) / 2, sh,
+              "Aurora for Nintendo 3DS", COLOR_WHITE, COLOR_HM_BAR, &ui_bold);
+
+  for (int i = 0; i < INFO_ROWS; i++) {
+    char shown[64];
+    int y = INFO_Y + i * INFO_STEP;
+    int lw = ui_tw(&ui_font, label[i]);
+    int avail = INFO_W - lw - 16;
+    /* The CID is 32 characters, which only fits at the smaller size. */
+    const Font *vf = ui_tw(&ui_font, value[i]) > avail ? &ui_small : &ui_font;
+
+    if (i)
+      draw_filled_rect(fb, INFO_X, y - 8, INFO_W, 1, sh, rule);
+    ui_text(fb, INFO_X, y, sh, label[i], COLOR_WHITE, COLOR_HM_BG_BOT,
+            &ui_font);
+    ui_fit(shown, (int)sizeof(shown), vf, value[i], avail);
+    ui_text(fb, INFO_X + INFO_W - ui_tw(vf, shown),
+            y + (ui_th(&ui_font) - ui_th(vf)) / 2, sh, shown, COLOR_HM_TEXT2,
+            COLOR_HM_BG_BOT, vf);
+  }
+  ui_text_mid(fb, TOP_SCREEN_WIDTH / 2, sh - 24, sh, L(STR_B_BACK),
+              COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_small);
+  screen_present_top();
+}
+
+static void info_bottom(void) {
+  volatile u8 *fb = VRAM_BOT_A;
+  const int sh = BOT_SCREEN_HEIGHT;
+
+  ui_wallpaper(fb, BOT_SCREEN_WIDTH, sh, sh);
+  draw_gradient_round_rect(fb, 8, 2, BOT_SCREEN_WIDTH - 16, sh - 6, 14, sh,
+                           COLOR_PANEL_TOP, COLOR_PANEL_BOT);
+  for (int i = 0; i < TEAM_COUNT; i++) {
+    int y = TEAM_Y0 + i * TEAM_STEP;
+    /* A disc under the face, so the row still reads without the asset pack. */
+    draw_filled_round_rect(fb, TEAM_X, y, TEAM_AV, TEAM_AV, TEAM_AV / 2, sh,
+                           COLOR_HM_SLOT);
+    ui_icon(fb, TEAM_X, y, TEAM_AV, sh, team[i].asset, 0, COLOR_WHITE);
+    ui_text(fb, TEAM_X + TEAM_AV + 14, y + 2, sh, team[i].name, COLOR_WHITE,
+            COLOR_PANEL_TOP, &ui_bold);
+    ui_text(fb, TEAM_X + TEAM_AV + 14, y + 22, sh, team[i].role,
+            COLOR_HM_TEXT2, COLOR_PANEL_TOP, &ui_small);
+  }
+  screen_present_bottom();
+}
+
+static void info_screen(void) {
+  info_top();
+  info_bottom();
+  for (;;) {
+    u32 k = get_keys_down();
+    int tx, ty;
+    if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty))
+      return;
+    ui_idle();
+  }
 }
 
 static void about_screen(void) {
@@ -1291,6 +1539,44 @@ static void about_screen(void) {
 
   while (1) {
     u32 k = get_keys_down();
+    int tx, ty, more = (k & BUTTON_A) != 0;
+
+    if (touch_tap(&tx, &ty)) {
+      if (touch_in(tx, ty, ABOUT_MORE_X, ABOUT_BTN_Y, ABOUT_BTN_W, ABOUT_BTN_H))
+        more = 1;
+      else if (touch_in(tx, ty, ABOUT_BACK_X, ABOUT_BTN_Y, ABOUT_BTN_W,
+                        ABOUT_BTN_H))
+        return;
+    }
+    if (k & BUTTON_B)
+      return;
+    if (more) {
+      info_screen();
+      about_top();
+      about_bottom(sd);
+    }
+    ui_idle();
+  }
+}
+
+/* A new calibration is in use as soon as it is accepted; saving only decides
+ * whether it survives a restart. */
+static void touch_cal_screen(void) {
+  TouchCal cal;
+  int ok;
+
+  if (!touch_calibrate(&cal))
+    return;
+  g_cfg.touch = cal;
+  g_cfg.touch_set = 1;
+  ok = user_config_save(&g_cfg);
+  ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+               BOT_SCREEN_HEIGHT);
+  ui_dialog(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT, BOT_SCREEN_HEIGHT,
+            L(ok ? STR_CAL_SAVED : STR_CAL_SAVE_FAILED), "", g_accent, 0);
+  screen_present_bottom();
+  for (;;) {
+    u32 k = get_keys_down();
     int tx, ty;
     if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty))
       return;
@@ -1313,7 +1599,6 @@ static void settings_open(void) {
     if ((k & BUTTON_DDOWN) && sel < SET_COUNT - 1)
       sel++;
 
-    /* Touch: tapping a visible row selects and opens it. */
     int tx, ty;
     if (touch_tap(&tx, &ty)) {
       int top = sel - SET_VISIBLE / 2;
@@ -1338,6 +1623,8 @@ static void settings_open(void) {
         wifi_screen();
       else if (sel == SET_ACCENT)
         accent_screen();
+      else if (sel == SET_TOUCHCAL)
+        touch_cal_screen();
       else if (sel == SET_WIFITEST)
         wifi_test_screen();
       else if (sel == SET_GPUTEST)
@@ -1364,12 +1651,29 @@ static char *hm_str_copy(char *dst, const char *src) {
   return dst;
 }
 
-static int hm_has_bin_ext(const char *name) {
-  int n = (int)str_len(name);
-  if (n < 5)
+/* `ext` in capitals. Long names keep the case they were copied with, so the
+ * match ignores it. */
+static int hm_has_ext(const char *name, const char *ext) {
+  int n = (int)str_len(name), e = (int)str_len(ext);
+  if (n <= e)
     return 0;
-  return name[n - 4] == '.' && name[n - 3] == 'B' && name[n - 2] == 'I' &&
-         name[n - 1] == 'N';
+  for (int i = 0; i < e; i++) {
+    char c = name[n - e + i];
+    if (c >= 'a' && c <= 'z')
+      c = (char)(c - 32);
+    if (c != ext[i])
+      return 0;
+  }
+  return 1;
+}
+
+/* The first `n` bytes of `src`, backed off to a whole UTF-8 character. */
+static void hm_copy_cut(char *dst, const char *src, int n) {
+  while (n > 0 && ((u8)src[n] & 0xC0u) == 0x80u)
+    n--;
+  for (int i = 0; i < n; i++)
+    dst[i] = src[i];
+  dst[n] = '\0';
 }
 
 static int hm_name_cmp(const char *a, const char *b) {
@@ -1380,7 +1684,6 @@ static int hm_name_cmp(const char *a, const char *b) {
   return (int)(unsigned char)*a - (int)(unsigned char)*b;
 }
 
-/* Returns 1 if an "AURICON1" icon block was found. */
 static int read_app_icon(const char *path, unsigned char *dest) {
   static FIL f;
   UINT br;
@@ -1405,7 +1708,6 @@ static int read_app_icon(const char *path, unsigned char *dest) {
     if (magic[i] != m[i])
       ok = 0;
   if (ok) {
-    /* The icon data follows the magic contiguously (payload offset 12). */
     if (f_read(&f, dest, AURORA_ICON_BYTES, &br) != FR_OK ||
         br != AURORA_ICON_BYTES)
       ok = 0;
@@ -1414,8 +1716,6 @@ static int read_app_icon(const char *path, unsigned char *dest) {
   return ok;
 }
 
-/* Returns the number of *.BIN apps under SD:\Aurora\Apps, sorted, with their
- * icons read; 0 on any error. */
 static int scan_apps(void) {
   static FATFS scan_fs;
   static DIR dir;
@@ -1432,15 +1732,11 @@ static int scan_apps(void) {
          fno.fname[0]) {
     if (fno.fattrib & AM_DIR)
       continue;
-    if (!hm_has_bin_ext(fno.fname))
+    if (!hm_has_ext(fno.fname, ".BIN"))
       continue;
-    int n = (int)str_len(fno.fname) - 4; /* strip ".BIN" for the display name */
-    if (n > (int)sizeof(app_name[0]) - 1)
-      n = (int)sizeof(app_name[0]) - 1;
-    int i = 0;
-    for (; i < n; i++)
-      app_name[app_count][i] = fno.fname[i];
-    app_name[app_count][i] = '\0';
+    int n = (int)str_len(fno.fname) - 4; /* strip ".bin" for the display name */
+    hm_copy_cut(app_name[app_count], fno.fname,
+                n < APP_NAME_MAX - 1 ? n : APP_NAME_MAX - 1);
     char *p = hm_str_copy(app_path[app_count], APPS_DIR "/");
     hm_str_copy(p, fno.fname);
     app_count++;
@@ -1448,7 +1744,7 @@ static int scan_apps(void) {
   f_closedir(&dir);
 
   for (int i = 1; i < app_count; i++) {
-    char tn[16], tp[40];
+    static char tn[APP_NAME_MAX], tp[APP_PATH_MAX];
     hm_str_copy(tn, app_name[i]);
     hm_str_copy(tp, app_path[i]);
     int j = i - 1;
@@ -1461,7 +1757,6 @@ static int scan_apps(void) {
     hm_str_copy(app_path[j + 1], tp);
   }
 
-  /* Read each app's icon (in sorted order so it lines up with app_name[i]). */
   for (int i = 0; i < app_count; i++)
     app_has_icon[i] = read_app_icon(app_path[i], app_icon[i]);
 
@@ -1469,7 +1764,6 @@ static int scan_apps(void) {
   return app_count;
 }
 
-/* Sorted apps first, then Music, Files and Power Off, then empty slots. */
 static void build_home(void) {
   static const Color app_tint = {0x2C, 0x50, 0x74};
   for (int i = 0; i < HOME_COUNT; i++) {
@@ -1482,8 +1776,6 @@ static void build_home(void) {
   for (int i = 0; i < app_count && slot < HOME_COUNT; i++, slot++) {
     home_apps[slot].name = app_name[i];
     home_apps[slot].dev = "SD App";
-    /* An app's own embedded icon wins; without one it gets the generic
-     * game-card art from the pack. */
     home_apps[slot].icon = app_has_icon[i] ? app_icon[i] : icon_boot_bits;
     if (!app_has_icon[i]) {
       home_apps[slot].asset_lg = ASSET_ICON_GAMECARD_64;
@@ -1542,8 +1834,8 @@ static void launch_wait_back(void) {
   }
 }
 
-/* Snapshots the running OS, records its size and the ready magic, and relocates
- * the return stub, so HOME can restart the Home Menu. */
+/* Lets HOME restart the Home Menu after an app: OS snapshot, descriptor and
+ * return stub. */
 static void os_install_return(void) {
   u32 os_size = (u32)((const unsigned char *)_os_image_end -
                       (const unsigned char *)AOS_ARM9_LOAD_ADDR);
@@ -1563,11 +1855,11 @@ static void os_install_return(void) {
   for (u32 i = 0; i < rn; i++)
     rs[i] = rc[i];
 
-  os_cache_sync(); /* flush snapshot + descriptor + stub to memory */
+  os_cache_sync();
 }
 
-/* Relocate the hand-off stub to scratch (clear of both the staged payload and
- * the load region) and jump into it. Never returns. */
+/* Runs the hand-off stub from scratch memory, clear of both the staged
+ * payload and the load region. Never returns. */
 static void os_run_stub(u32 src, u32 dst, u32 size, u32 entry) {
   volatile u8 *s = (volatile u8 *)os_launch_stub;
   volatile u8 *d = (volatile u8 *)AURORA_APP_TRAMPOLINE_ADDR;
@@ -1621,30 +1913,22 @@ static void os_launch_app(const char *path) {
   f_close(&app_file);
   f_mount(NULL, "", 0);
 
-  /* Before the app overwrites the OS, so HOME can restore it. */
   os_install_return();
 
   os_run_stub(AURORA_APP_STAGE_ADDR, hdr.arm9_load_addr, hdr.arm9_size,
               hdr.arm9_entry);
 }
 
-/* Plays .aaf files (mono PCM, see audio/aaf_tool.py) from SD:\Aurora\Music. */
+/* Music: .aaf files, mono PCM (see audio/aaf_tool.py). */
 
-#define MUSIC_DIR  "Aurora/Music"
-#define MAX_TRACKS 32
-static char mus_name[MAX_TRACKS][16]; /* 8.3 file name (FF_USE_LFN = 0) */
-static char mus_path[MAX_TRACKS][40]; /* "Aurora/Music/NAME.AAF"        */
+#define MUSIC_DIR    "Aurora/Music"
+#define MAX_TRACKS   32
+#define MUS_NAME_MAX 64
+#define MUS_PATH_MAX (sizeof(MUSIC_DIR) + FF_LFN_BUF + 1)
+static char mus_name[MAX_TRACKS][MUS_NAME_MAX]; /* file name, cut for display */
+static char mus_path[MAX_TRACKS][MUS_PATH_MAX]; /* "Aurora/Music/Name.aaf"    */
 static int  mus_count;
 
-static int hm_has_aaf_ext(const char *name) {
-  int n = (int)str_len(name);
-  if (n < 5)
-    return 0;
-  return name[n - 4] == '.' && name[n - 3] == 'A' && name[n - 2] == 'A' &&
-         name[n - 1] == 'F';
-}
-
-/* Creates SD:\Aurora\Music if missing and lists its *.AAF files, sorted. */
 static int scan_music(void) {
   static FATFS mfs;
   static DIR dir;
@@ -1662,12 +1946,11 @@ static int scan_music(void) {
          fno.fname[0]) {
     if (fno.fattrib & AM_DIR)
       continue;
-    if (!hm_has_aaf_ext(fno.fname))
+    if (!hm_has_ext(fno.fname, ".AAF"))
       continue;
-    int i = 0;
-    for (; fno.fname[i] && i < (int)sizeof(mus_name[0]) - 1; i++)
-      mus_name[mus_count][i] = fno.fname[i];
-    mus_name[mus_count][i] = '\0';
+    int n = (int)str_len(fno.fname);
+    hm_copy_cut(mus_name[mus_count], fno.fname,
+                n < MUS_NAME_MAX - 1 ? n : MUS_NAME_MAX - 1);
     char *p = hm_str_copy(mus_path[mus_count], MUSIC_DIR "/");
     hm_str_copy(p, fno.fname);
     mus_count++;
@@ -1675,7 +1958,7 @@ static int scan_music(void) {
   f_closedir(&dir);
 
   for (int i = 1; i < mus_count; i++) {
-    char tn[16], tp[40];
+    static char tn[MUS_NAME_MAX], tp[MUS_PATH_MAX];
     hm_str_copy(tn, mus_name[i]);
     hm_str_copy(tp, mus_path[i]);
     int j = i - 1;
@@ -1725,7 +2008,7 @@ static int load_track(int idx, u32 *rate_out, u32 *depth_out) {
   u32 bpp = (depth == 8) ? 1u : 2u;
   u32 total = nsamp * bpp;
   if (total > AUDIO_PCM_MAX)
-    total = AUDIO_PCM_MAX; /* truncate very long tracks */
+    total = AUDIO_PCM_MAX;
 
   UINT rd = 0;
   f_read(&mf, (void *)AUDIO_PCM_ADDR, total, &rd);
@@ -1750,8 +2033,8 @@ static void music_draw_top(int sel, int playing, Color accent) {
 
   const char *np = (mus_count > 0) ? mus_name[sel] : "---";
   const char *st = playing ? L(STR_PLAYING) : L(STR_STOPPED);
-  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 148, TOP_SCREEN_HEIGHT, np,
-              COLOR_WHITE, COLOR_HM_BG, &ui_title);
+  ui_text_mid_fit(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 148, TOP_SCREEN_HEIGHT, np,
+                  TOP_SCREEN_WIDTH - 40, COLOR_WHITE, COLOR_HM_BG, &ui_title);
   ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 176, TOP_SCREEN_HEIGHT, st,
               playing ? accent : COLOR_HM_TEXT2, COLOR_HM_BG, &ui_font);
   screen_present_top();
@@ -1789,8 +2072,9 @@ static void music_draw_bottom(int sel) {
                              on ? g_accent : COLOR_HM_BG);
       draw_filled_round_rect(VRAM_BOT_A, 12, y, BOT_SCREEN_WIDTH - 24,
                              MUS_ROW_H, 6, BOT_SCREEN_HEIGHT, COLOR_HM_SLOT);
-      draw_string(VRAM_BOT_A, 22, y + (MUS_ROW_H - FONT_HEIGHT) / 2,
-                  BOT_SCREEN_HEIGHT, mus_name[i], COLOR_WHITE, COLOR_HM_SLOT);
+      ui_text_fit(VRAM_BOT_A, 22, y + (MUS_ROW_H - ui_th(&ui_font)) / 2,
+                  BOT_SCREEN_HEIGHT, mus_name[i], BOT_SCREEN_WIDTH - 44,
+                  COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
     }
   }
   draw_string(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 18, BOT_SCREEN_HEIGHT,
@@ -1813,7 +2097,6 @@ static void music_player_screen(void) {
     if ((k & BUTTON_DDOWN) && sel < mus_count - 1)
       sel++;
 
-    /* Touch: tapping a track selects and plays it. */
     int play_now = 0;
     int tx, ty;
     if (touch_tap(&tx, &ty) && mus_count > 0) {
@@ -1907,19 +2190,17 @@ void os_main(void) {
     os_cache_sync();
   }
 
-  /* Before anything draws: the ARM11 core owns the touchscreen. Idempotent
-   * across HOME returns. */
-  audio_boot();
+  /* Before anything draws, since the ARM11 core owns the touchscreen. */
+  AudioBoot core = audio_boot();
   audio_voices_stop(); /* an app's music must not outlive the app */
 
   /* With the GPU up, draw into cached FCRAM backbuffers and present each screen
-   * with one GPU blit; otherwise drawing stays direct to VRAM. */
+   * with one blit; otherwise draw straight to VRAM. */
   if (gpu_init()) {
-    /* Async: the result is not needed, so the copy overlaps the next input
-     * poll, and ui_idle() collects it before anything draws. Auric apps use the
-     * blocking gpu_texcopy. */
+    /* Async, so the copy overlaps the next input poll; ui_idle() collects it
+     * before anything draws. */
     g_screen_blit = gpu_texcopy_async;
-    g_screen_wait = gpu_wait_idle; /* how screen_touch() collects a posted blit */
+    g_screen_wait = gpu_wait_idle;
     screen_use_backbuffer(1);
   }
 
@@ -1929,18 +2210,17 @@ void os_main(void) {
 
   ui_init();
 
-  /* If USER.dat is missing, invalid, or setup never finished, run setup and
-   * save the result. */
-  static UserConfig cfg;
-  int loaded = user_config_load(&cfg);
-  if (!loaded || !cfg.setup_done) {
-    setup_run(&cfg);
-    user_config_save(&cfg);
+  int loaded = user_config_load(&g_cfg);
+  if (!loaded || !g_cfg.setup_done) {
+    setup_run(&g_cfg);
+    user_config_save(&g_cfg);
   }
 
-  g_accent_idx = cfg.accent;
-  g_accent = aurora_accent_presets[cfg.accent];
-  g_lang = cfg.language;
+  g_accent_idx = g_cfg.accent;
+  g_accent = aurora_accent_presets[g_cfg.accent];
+  g_lang = g_cfg.language;
+  if (g_cfg.touch_set && !touch_cal_set(&g_cfg.touch))
+    g_cfg.touch_set = 0; /* unusable values: keep the default */
 
   /* Now that the accent is known. */
   ui_bg_build();
@@ -1950,6 +2230,15 @@ void os_main(void) {
 
   int sel = 0;
   hm_draw_full(sel);
+
+  /* A core from before AUDIO_PARK_VERSION cannot be swapped while it runs, so
+   * this build's core needs a power-off to load. */
+  if (core == AUDIO_BOOT_STALE) {
+    if (fv_confirm(L(STR_CORE_OLD), L(STR_CORE_OLD_HINT), L(STR_POWER_OFF),
+                   L(STR_LATER)))
+      os_power_off();
+    hm_draw_full(sel);
+  }
 
   int clock_tick = 0, last_min = -1;
 
@@ -1979,7 +2268,7 @@ void os_main(void) {
       hm_draw_full(sel);
     }
 
-    /* Touch: the settings icon in the top bar, or an app tile. */
+    /* the settings icon in the top bar, or an app tile */
     int tx, ty;
     if (touch_tap(&tx, &ty)) {
       if (ty < 40 && tx > BOT_SCREEN_WIDTH - 46) {

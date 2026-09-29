@@ -151,14 +151,19 @@
 #define ASSET_APP_STORE_64               145u
 #define ASSET_ICON_GAMECARD_64           146u
 #define ASSET_ICON_GAMECARD_32           147u
-#define ASSET_WALLPAPER                  148u
-#define ASSET_FONT_SMALL                 149u
-#define ASSET_FONT_UI                    150u
-#define ASSET_FONT_BOLD                  151u
-#define ASSET_FONT_TITLE                 152u
+#define ASSET_PERSON_DISLOPIK_40         148u
+#define ASSET_PERSON_STAR_40             149u
+#define ASSET_PERSON_ATEXBG_40           150u
+#define ASSET_PERSON_KYAERO_40           151u
+#define ASSET_PERSON_SECRET_40           152u
+#define ASSET_WALLPAPER                  153u
+#define ASSET_FONT_SMALL                 154u
+#define ASSET_FONT_UI                    155u
+#define ASSET_FONT_BOLD                  156u
+#define ASSET_FONT_TITLE                 157u
 
-#define ASSET_COUNT 153u
-#define ASSET_ARENA_NEEDED 529248u
+#define ASSET_COUNT 158u
+#define ASSET_ARENA_NEEDED 561248u
 #define ASSET_MAX_CSIZE 27479u
 
 #endif

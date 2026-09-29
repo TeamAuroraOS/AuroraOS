@@ -5,7 +5,9 @@ what Aurora can open. It is reached from the Files tile on the Home Menu.
 
 | Piece | File |
 |-------|------|
-| Explorer screen | `src/os/Files.c`, `include/files.h` |
+| Explorer screen and its menu | `src/os/Files.c`, `include/files.h` |
+| Copy, move, delete, new folder | `src/os/FileOps.c`, `include/fileops.h` |
+| On-screen keyboard | `src/os/os_setup.c`, `include/keyboard.h` |
 | Text viewer, hex editor | `src/os/FileView.c`, `include/fileview.h` |
 | BMP and PNG decoding, scaling | `src/image.c`, `include/image.h` |
 | Baseline JPEG | `src/jpeg.c` |
@@ -14,16 +16,59 @@ what Aurora can open. It is reached from the Files tile on the Home Menu.
 
 ## Browsing
 
-FatFs is built without long file names (`FF_USE_LFN=0`), so every name is 8.3
-and the buffers are sized for that. A directory is read in one pass into a
-fixed array of 256 entries and sorted (folders first, then by name, ignoring
-case); the list is never re-read while scrolling, because `f_readdir` is slow
-enough that paging from the card would show.
+FatFs is built with long file names (`FF_USE_LFN=1`), and its API takes and
+returns them as UTF-8 (`FF_LFN_UNICODE=2`), the encoding the UI draws. A name
+is up to 255 bytes; one that would not fit in that as UTF-8 comes back as its
+8.3 alias instead, which still opens. A directory is read in one pass into a
+fixed array of 256 entries, each holding a whole name, and sorted (folders
+first, then by name, ignoring case); the list is never re-read while scrolling,
+because `f_readdir` is slow enough that paging from the card would show.
+
+A name too wide for where it is drawn is cut at a whole character and ended with
+"...", by `ui_fit()` in `src/ui.c`. Only the drawing is cut; opening, renaming
+and copying always use the full name. Paths are held in 1,024 bytes; a folder
+too deep for that says so rather than opening.
 
 D-pad moves, left and right jump a page, **A** opens, **B** goes up a level and
-leaves the explorer at the root, **START** exits. A tap selects a row, and a
-tap on the row that is already selected opens it, so nothing launches from a
-single stray touch.
+leaves the explorer at the root, **X** (or the Menu button) opens the file
+menu, **START** exits. A tap selects a row, and a tap on the row that is
+already selected opens it, so nothing launches from a single stray touch.
+
+## File operations
+
+The menu acts on the selected item, or on the folder when it is empty:
+
+| Button | Does |
+|--------|------|
+| Copy, Move | marks the item; the top screen shows "Copying" or "Moving" and its name |
+| Paste | copies or moves the marked item into the folder being shown |
+| Rename | edits the name on the on-screen keyboard |
+| Delete | asks first, then deletes the file, or the folder and everything in it |
+| New folder | makes a folder, named on the keyboard |
+
+* **Copy** walks a folder recursively and copies file data through the image
+  viewer's file buffer at `0x25100000`, 1 MB at a time. Pasting into the folder
+  the item came from names the copy "name (2).ext", then "(3)", and so on. A copy
+  that fails or is cancelled deletes what it had made, so no half-copied file is
+  left behind.
+* **Move** is a FatFs rename, so it is instant whatever the size. Moving an item
+  into a folder that already has that name is refused, and so is moving a folder
+  into itself.
+* **Delete** removes a folder's contents while reading it, as FatFs's own
+  delete example does. A cancelled delete stops where it is.
+* Copy and delete show a progress card, redrawn at most every 120 ms since each
+  redraw repaints the list beneath it. **B** cancels.
+* The keyboard adds `-`, `_` and `.` to the letters and digits it has in setup.
+  **B** deletes, **L** toggles capitals, **START** or OK accepts and **SELECT**
+  cancels. A name that is left empty changes nothing.
+* A walk goes at most 24 folders deep and keeps one directory handle per level,
+  so its memory is fixed however large the tree is.
+* Copies do not keep their dates. FatFs is built without a clock
+  (`FF_FS_NORTC=1`), so every file it writes is dated 1 June 2025.
+
+Errors come back as a `FoResult` and are shown in plain words by `fo_error()`:
+a taken name, a full card, a read-only item, or an item that is no longer
+there.
 
 ## Redrawing
 
@@ -74,6 +119,9 @@ listing is built, rather than opening every entry.
 | Text | `.txt` `.log` | a ruled page, built from `Unkonwn File.png` | the text viewer |
 | Binary | any other `.bin` | `Unknown-Bin-File.png` | "View HEX?", then the hex editor |
 | Other | anything else | `Unkonwn File.png` | "View HEX?", then the hex editor |
+
+Extensions match in any letter case, since long names keep the case they were
+copied with.
 
 List rows draw their icons at 24px, which leaves the 30px rows a 3px margin.
 They used to draw the 32px art, which ran past the row edges; the opaque folder

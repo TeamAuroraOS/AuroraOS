@@ -40,10 +40,46 @@ uint32_t audio_diag(int idx) {
   }
 }
 
-void audio_boot(void) {
+static void post(uint32_t cmd, uint32_t arg0);
+
+/* Polls of the command block before a core counts as gone, each a cache sync
+ * and a short delay: long enough for the touch poll the core does between
+ * commands. */
+#define AUDIO_ACK_POLLS 2000
+
+/* Posts a command and waits for the core to take it. 0 means nothing did. */
+static int post_wait(uint32_t cmd, uint32_t arg0) {
+  post(cmd, arg0);
+  for (int t = 0; t < AUDIO_ACK_POLLS; t++) {
+    os_cache_sync();
+    if (ctrl->ack_seq == ctrl->cmd_seq)
+      return 1;
+    delay(2000);
+  }
+  return 0;
+}
+
+AudioBoot audio_boot(void) {
+  AudioBoot result = AUDIO_BOOT_LOADED;
+
   os_cache_sync();
-  if (ctrl->magic == AUDIO_MAGIC)
-    return; /* core already running (e.g. after a HOME return) */
+  /* FCRAM keeps this block through a reboot that resets the ARM11, so the magic
+   * alone does not prove a core is running: it also has to answer. */
+  if (ctrl->magic == AUDIO_MAGIC && post_wait(AUDIO_CMD_NONE, 0)) {
+    if (ctrl->version == AUDIO_CORE_VERSION)
+      return AUDIO_BOOT_RUNNING;
+    if (ctrl->version < AUDIO_PARK_VERSION || !post_wait(AUDIO_CMD_PARK, 0))
+      return AUDIO_BOOT_STALE;
+    /* Once the park is acknowledged the core is leaving its image whatever
+     * happens next, so a missing report only costs the wait. */
+    for (int t = 0; t < AUDIO_ACK_POLLS; t++) {
+      os_cache_sync();
+      if (ctrl->status == AUDIO_ST_PARKED)
+        break;
+      delay(2000);
+    }
+    result = AUDIO_BOOT_REPLACED;
+  }
 
   ctrl->magic = 0;
   ctrl->status = AUDIO_ST_NONE;
@@ -55,7 +91,7 @@ void audio_boot(void) {
   for (unsigned i = 0; i < audio11_bin_len; i++)
     dst[i] = audio11_bin[i];
 
-  os_cache_sync(); /* flush core code + cleared block to physical RAM */
+  os_cache_sync();
 
   /* Wake the ARM11: the firm stub is spinning on this mailbox. */
   *(volatile uint32_t *)AUDIO_ARM11_MAILBOX = AUDIO_CORE_ADDR;
@@ -64,9 +100,10 @@ void audio_boot(void) {
   for (int t = 0; t < 200; t++) {
     os_cache_sync();
     if (ctrl->magic == AUDIO_MAGIC)
-      break;
+      return result;
     delay(200000);
   }
+  return AUDIO_BOOT_FAILED;
 }
 
 static void post(uint32_t cmd, uint32_t arg0) {
@@ -74,7 +111,7 @@ static void post(uint32_t cmd, uint32_t arg0) {
   ctrl->cmd = cmd;
   ctrl->arg0 = arg0;
   ctrl->cmd_seq = ctrl->cmd_seq + 1;
-  os_cache_sync(); /* publish the command to the ARM11 */
+  os_cache_sync();
 }
 
 void audio_play_tone(uint32_t freq_hz) { post(AUDIO_CMD_TONE, freq_hz); }
@@ -86,15 +123,9 @@ void audio_error_beep(void) { post(AUDIO_CMD_ERROR, 0); }
 void audio_voices_stop(void) {
   if (!audio_alive())
     return;
-  post(AUDIO_CMD_VOICE_STOP, AUDIO_VOICE_ALL);
   /* The GPU is about to use the one-request block, so wait until the core has
    * taken this request. An older core acks it without acting on it. */
-  for (int t = 0; t < 2000; t++) {
-    os_cache_sync();
-    if (ctrl->ack_seq == ctrl->cmd_seq)
-      return;
-    delay(2000);
-  }
+  post_wait(AUDIO_CMD_VOICE_STOP, AUDIO_VOICE_ALL);
 }
 
 void audio_play_pcm(uint32_t samples, uint32_t rate, uint32_t depth) {

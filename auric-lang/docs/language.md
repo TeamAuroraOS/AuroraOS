@@ -189,9 +189,9 @@ fn main() {
 }
 ```
 
-* The path is counted from the root of the card. FatFs is built without long
-  file names, so every folder and file name must be 8.3. Keep an app's files in a
-  folder beside it, named after it (see `docs/apps.md`).
+* The path is counted from the root of the card. Long file names work, and
+  letter case does not matter. Keep an app's files in a folder beside it, named
+  after it (see `docs/apps.md`).
 * Any uncompressed 8 or 16-bit PCM WAV works, mono or stereo. Stereo is mixed to
   mono, and a file above 32 kHz loads at half its rate, which halves the memory
   it takes. `tools/sound_prep.py` converts files ahead of time to mono 22,050 Hz,

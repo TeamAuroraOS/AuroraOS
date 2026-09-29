@@ -17,7 +17,6 @@ void I2C_init(void);
 
 bool I2C_writeReg(I2cDevice devId, uint8_t regAddr, uint8_t data);
 
-/* Returns true on success. */
 bool I2C_readRegBuf(I2cDevice devId, uint8_t regAddr, uint8_t *out, uint32_t size);
 
 #endif

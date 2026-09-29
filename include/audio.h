@@ -14,9 +14,18 @@
 
 #define AUDIO_MAGIC 0x4F494441u /* 'ADIO': set by the core once it is alive */
 
-/* FCRAM survives a warm reboot, so a stale core keeps running unless the
- * console is fully powered off. Bump this whenever the core changes. */
-#define AUDIO_CORE_VERSION 82
+/* The ARM11 can keep running a core from an earlier boot. audio_boot() compares
+ * this with the running core's version and replaces that core when they differ.
+ * Bump this whenever the core changes. */
+#define AUDIO_CORE_VERSION 95
+
+/* The first core that understands AUDIO_CMD_PARK. An older one can only be
+ * replaced by powering the console off. */
+#define AUDIO_PARK_VERSION 83
+
+/* AUDIO_CMD_PARK copies the mailbox wait here and runs it, clear of the core
+ * image so the ARM9 can load a new core over the old one. */
+#define AUDIO_PARK_ADDR 0x233E0000u
 
 #define AUDIO_PCM_MAX (10u * 1024u * 1024u) /* longer tracks are truncated */
 
@@ -44,6 +53,7 @@ enum {
   AUDIO_CMD_VOICE = 9,     /* arg0 = voice | flags, arg1 = address,           */
                            /* arg2 = bytes, arg3 = rate; see AUDIO_VOICE_*    */
   AUDIO_CMD_VOICE_STOP = 10, /* arg0 = bit mask of the voices to stop       */
+  AUDIO_CMD_PARK = 11,       /* silence, then wait on the mailbox for a core  */
 };
 
 enum {
@@ -53,6 +63,7 @@ enum {
   AUDIO_ST_READY = 3,
   AUDIO_ST_PLAY  = 4,
   AUDIO_ST_IDLE  = 5,
+  AUDIO_ST_PARKED = 6, /* set by the parked loop; the core image is free */
 };
 
 typedef struct {
@@ -115,9 +126,18 @@ typedef enum {
 #define AUDIO_VOICE_VOL(v)  (((v) & 0xFFFFu) << 16)
 #define AUDIO_VOICE_VERSION 82 /* the first core that understands voices */
 
-/* Copies the core into place and wakes the ARM11. Idempotent, and blocks
- * briefly for the handshake. */
-void audio_boot(void);
+typedef enum {
+  AUDIO_BOOT_LOADED = 0, /* this build's core was loaded and answered       */
+  AUDIO_BOOT_RUNNING,    /* it was already running, e.g. after a HOME return */
+  AUDIO_BOOT_REPLACED,   /* a core from another build was parked and swapped */
+  AUDIO_BOOT_STALE,      /* a core older than AUDIO_PARK_VERSION is running  */
+  AUDIO_BOOT_FAILED,     /* the core was loaded but never answered           */
+} AudioBoot;
+
+/* Makes sure this build's core is the one running: loads it, or parks and
+ * replaces a different one. Idempotent, and blocks briefly for the handshake.
+ * With AUDIO_BOOT_STALE the old core keeps running until a power-off. */
+AudioBoot audio_boot(void);
 
 int audio_alive(void);
 uint32_t audio_status(void);

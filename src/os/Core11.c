@@ -34,6 +34,28 @@ static void crash11_init(void) {
   __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0)); /* DSB            */
 }
 
+/* The mailbox wait in audio11_start.s, position-independent. */
+extern const uint8_t core11_park_stub[];
+extern const uint8_t core11_park_stub_end[];
+
+/* AUDIO_CMD_PARK. The stub is copied out before the ack, so once the ARM9 sees
+ * the ack only a few instructions of this image are left to run, and the ARM9
+ * still waits for the stub itself to report AUDIO_ST_PARKED. Does not return. */
+static void core11_park(AudioCtrl *ct) {
+  const uint8_t *s = core11_park_stub;
+  uint8_t *d = (uint8_t *)AUDIO_PARK_ADDR;
+  uint32_t n = (uint32_t)(core11_park_stub_end - core11_park_stub);
+
+  audio11_stop_all();
+  for (uint32_t i = 0; i < n; i++)
+    d[i] = s[i];
+  MMIO32(AUDIO_ARM11_MAILBOX) = 0;
+  ct->magic = 0;
+  ct->ack_seq = ct->cmd_seq;
+  dcache_clean();
+  __asm__ volatile("mcr p15, 0, %0, c7, c5, 0" ::"r"(0)); /* invalidate I */
+  ((void (*)(void))AUDIO_PARK_ADDR)();
+}
 
 void audio11_main(void) {
   AudioCtrl *ct = (AudioCtrl *)AUDIO_CTRL_ADDR;
@@ -68,17 +90,18 @@ void audio11_main(void) {
         if (cmd == AUDIO_CMD_WIFI)
           wifi11_probe();
         else if (cmd == AUDIO_CMD_WIFI_BOOT)
-          wifi11_boot();
+          wifi11_boot(arg0);
         else if (cmd == AUDIO_CMD_GPU)
           gpu11_run();
         else if (cmd == AUDIO_CMD_N3DS)
           clock11_set(ct, arg0);
+        else if (cmd == AUDIO_CMD_PARK)
+          core11_park(ct);
       }
       ct->ack_seq = ct->cmd_seq;
       dcache_clean();
     }
 
-    /* Touch is sampled every 16 passes; commands are checked on every pass. */
     if (++poll_tick >= 16) {
       poll_tick = 0;
       touch11_poll();

@@ -1,5 +1,3 @@
-/* ARM9 crash handler: exception vectors catch undefined instructions, prefetch
- * aborts and data aborts and show the crash screen. */
 #ifndef AURORA_CRASH_H
 #define AURORA_CRASH_H
 

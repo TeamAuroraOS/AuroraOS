@@ -17,6 +17,21 @@ typedef struct {
   volatile uint32_t d_b11; /* buf[11] (Y low)  */
 } TouchShared;
 
+/* The raw ADC readings at the screen's edges: x_min at pixel column 0, x_max at
+ * column 320, and y_min and y_max at rows 0 and 240. A reversed pair means the
+ * axis runs the other way. */
+typedef struct {
+  int16_t x_min, x_max, y_min, y_max;
+} TouchCal;
+
+void touch_cal_default(TouchCal *cal);
+void touch_cal_get(TouchCal *cal);
+
+/* Returns 0 and changes nothing when the values cannot be a calibration. */
+int touch_cal_set(const TouchCal *cal);
+
+int touch_cal_is_default(void);
+
 /* Returns 1 while touched, with the position in screen pixels. Raw ADC values
  * go through rawx/rawy when non-NULL. */
 int touch_read(int *sx, int *sy, int *rawx, int *rawy);

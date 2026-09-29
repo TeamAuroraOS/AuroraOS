@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Wi-Fi, ARM9 side: posts requests to WiFi11.c and reads WifiShared back.
- *
- * LICENSE: GPL-2.0, ath6kl-derived; credit Octoblimp. See docs/wifi.md
+/* LICENSE: GPL-2.0, ath6kl-derived; credit Octoblimp. See docs/wifi.md
  * "License and credits". */
 #include "aurora.h"
 #include "audio.h"
@@ -18,16 +16,19 @@ void wifi_probe(void) {
   os_cache_sync();
 }
 
-/* The caller must have staged the SD firmware into the WIFI_FW slots first. */
-void wifi_boot(void) {
+/* The firmware must already be staged. opts goes in the command block, not
+ * WifiShared, where a line the ARM11 has dirtied could be written back over
+ * it. */
+void wifi_boot(u32 opts) {
   os_cache_sync();
+  ctrl->arg0 = opts;
   ctrl->cmd = AUDIO_CMD_WIFI_BOOT;
   ctrl->cmd_seq = ctrl->cmd_seq + 1;
   os_cache_sync();
 }
 
 void wifi_get(WifiShared *out) {
-  os_cache_sync(); /* pull the shared block fresh from RAM */
+  os_cache_sync();
   volatile unsigned char *s = (volatile unsigned char *)WIFI_SHARED_ADDR;
   unsigned char *d = (unsigned char *)out;
   for (unsigned i = 0; i < sizeof(WifiShared); i++)

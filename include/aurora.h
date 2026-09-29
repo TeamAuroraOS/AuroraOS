@@ -22,7 +22,7 @@
 #define BUTTON_X            (1 << 10)
 #define BUTTON_Y            (1 << 11)
 
-#define AURORA_VERSION "Beta v0.1.0"
+#define AURORA_VERSION "Beta v0.1.1"
 
 #define REG_SDMMC_BASE      0x10006000
 
@@ -159,7 +159,6 @@ void draw_gradient_round_rect(volatile u8 *fb, int x, int y, int w, int h,
                               int radius, int screen_height, Color top,
                               Color bottom);
 
-/* Text drawn at `scale` times size with smoothed edges. */
 void draw_string_scaled(volatile u8 *fb, int x, int y, int screen_height,
                         const char *str, Color color, int scale);
 void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h, int radius, int screen_height, Color color);

@@ -152,7 +152,6 @@ static void gpu_op_fill(GpuShared *g) {
     g->step = GPU_STEP_DONE;
 }
 
-/* Starts a programmed PPF operation, waits (bounded) and acknowledges it. */
 static void gpu_ppf_start_wait(GpuShared *g) {
   GREG(R_PPF_CNT) = PPF_CNT_GO;
   dsb();
