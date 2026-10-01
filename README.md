@@ -12,7 +12,7 @@
 
   
 
-Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.1.**
+Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.2.**
 -  *Built using knowledge from GodMode9 and Luma source code.*
 
 ## What works
@@ -24,6 +24,7 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.1.**
 | File Explorer | working | browse the card, per-type icons, TXT/LOG viewer, hex editor; see [`docs/files.md`](docs/files.md) |
 | File operations | working | copy, move, rename, delete and new folder, with long file names |
 | Screenshots | working | L+R saves both screens as a BMP; see [`docs/input.md`](docs/input.md) |
+| Terminal | working | **X** on the Home Menu: a Linux-style shell with a touch keyboard, file commands, `systemctl`, `info` and app launching; see [`docs/terminal.md`](docs/terminal.md) |
 | Images | working | BMP, PNG and baseline JPEG, scaled to fit |
 | WAV playback | working | 8/16-bit PCM, mono or stereo (MP3 not yet) |
 | Display | working | GPU-composited; see [`docs/gpu.md`](docs/gpu.md) |
@@ -64,8 +65,8 @@ The ARM11 files link into one core binary, which the ARM9 embeds and wakes;
 `src/wavload.c`, `src/model.c`, the status bar in `src/os/StatusBar.c`, the File
 Explorer in `src/os/Files.c` with its viewers in `src/os/FileView.c` and its
 operations in `src/os/FileOps.c`, screenshots in `src/os/Screenshot.c`, touch
-calibration in `src/os/TouchCal.c`, and the render test in
-`src/os/RenderTest.c`.
+calibration in `src/os/TouchCal.c`, the terminal in `src/os/Terminal.c` with its
+commands in `src/os/TermCmds.c`, and the render test in `src/os/RenderTest.c`.
 
 Art and fonts are built into `Aurora/assets.pak` by `tools/mkassets.py` (with
 `tools/png_read.py` and `tools/ttf.py`) from `icons/` and `assets/fonts/`, and
@@ -77,9 +78,10 @@ loaded at boot by `src/assets.c`. Run `make assets` after changing either.
 * [`docs/assets.md`](docs/assets.md): the SD asset pack, icons and fonts
 * [`docs/files.md`](docs/files.md): the File Explorer, file operations, text viewer, hex editor, image and audio decoding
 * [`docs/input.md`](docs/input.md): touch calibration and screenshots
+* [`docs/terminal.md`](docs/terminal.md): the terminal, its keys and every command
 * [`docs/gpu.md`](docs/gpu.md): PICA200 driver and the rendering path
 * [`docs/audio.md`](docs/audio.md): CSND playback and the channel registers
-* [`docs/power.md`](docs/power.md): MCU real-time clock and battery
+* [`docs/power.md`](docs/power.md): MCU real-time clock, battery, power off and reboot
 * [`docs/wifi.md`](docs/wifi.md): Wi-Fi bring-up, state and findings
 * [`auric-lang/README.md`](auric-lang/README.md): the Auric language and compiler
 
@@ -120,6 +122,12 @@ distribution; it is kept as-is and recorded here and in `docs/assets.md`.
 - With system off, hold `START` while booting
 - Select `Aurora` from the list
 - Select `Boot Aurora`
+## Home Menu controls:
+- The D-pad picks an app and **A** opens it; a tap on a tile opens it at once
+- **START**, or the settings icon at the top right of the touch screen, opens
+  Settings
+- **X** opens the [terminal](docs/terminal.md)
+- **L** + **R** takes a screenshot on any screen
 
 ### AI Disclaimer:
 AI was used in the making of most documentation and some in-code comments. AI was used for the writing of arm assembly, Mainstream Corperate AI was not used. A local model was used on the PC of @DisLoPik.
