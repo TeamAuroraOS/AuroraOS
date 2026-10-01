@@ -2,51 +2,68 @@
 
 ## Status
 
-As of core v95 (2026-09-27).
+As of core v97 (2026-09-30). **Work is paused here.** v97 is built but has not
+been run on hardware; *Path forward* says where to pick it up.
 
 Working on hardware (New 3DS): the chip is powered and reset, enumerated over
 SDIO, identified as an Atheros AR6014, register-accessible through CMD52 and
-CMD53, and the diagnostic window reads and writes its memory. BMI works, and the
-NWM firmware uploads and starts: a good boot ends with the firmware setting
-`hi_board_data_initialized` (HI + 0x58) to 1, which the host never writes.
+CMD53, and the diagnostic window reads and writes its memory. BMI works, the
+NWM firmware uploads (378 of 378 sends on the first attempt, no missed credit)
+and starts: the firmware sets `hi_board_data_initialized` (HI + 0x58) to 1,
+which the host never writes, and posts `HTC_MSG_READY` on mailbox 0 (message
+id 1, 10 credits of 1544 bytes, the standard ath6kl credit size).
 
-**The firmware has talked back.** On core v84 (2026-09-26) the running firmware
-posted `HTC_MSG_READY` on mailbox 0 for the first time: message id 1, 10 credits
-of 1544 bytes each (1536 + 8, the standard ath6kl credit size). Three changes
-from the Linux 3DS port went in together (see *A working reference*): powering
-the subsystem through `CFG11_WIFICNT`, the nocash finish sequence, and
-`Main.type1`. Type4 reached HTC_READY too on the next build, so the image was not
-the fix.
+**Where it stops: the HTC connect.** After boot, every CMD53 write of the
+connect-service frame is refused by the controller (`t 5/15`, four timeouts),
+and the CMD52 fallback is accepted but never answered. The refused transfer is
+byte for byte the kind that had just succeeded 378 times during the upload, so
+the card's SDIO side changes once the firmware runs. v97 records the
+controller's status for each refused style, reads the card's CCCR after boot
+(`cc`), and tries the one bus difference left against the Linux port: it runs
+the firmware on a 4-bit bus.
 
-**The rest of the handshake is written but unanswered.** From v85 to v88 the
-connect-service message went out and the target never replied (see *The HTC
-handshake*). The fixes that followed, ath6kl's timing and a sweep of five ways of
-writing the frame, have not yet run against a booted firmware, because the
-upload regressed in the same builds.
+### How it got here
 
-**Current blocker: the firmware upload regressed.** v88 was the last build to
-reach `rdy 1`. Every build since has failed the upload, lately in the STUB phase
-with the stub never landing. Two causes have been found and fixed:
+- **v84 (2026-09-26): first HTC_READY.** Three changes from the Linux 3DS port
+  went in together (see *A working reference*): powering the subsystem through
+  `CFG11_WIFICNT`, the nocash finish sequence, and `Main.type1`. Type4 reached
+  HTC_READY too on the next build, so the image was not the fix.
+- **v85 to v88:** the connect-service message went out and the target never
+  replied (see *The HTC handshake*).
+- **v89 to v95: the upload regressed**, lately stalling in the STUB phase.
+  Three causes were found:
+  1. v89 wrote the DATA32 block registers (`0x104`/`0x108`) for every CMD53.
+     Byte mode, which every BMI send uses, must not touch them; since v93 they
+     are written in block mode only.
+  2. `COUNT_DEC` (`0x450`) takes a credit on every access. v91 polled it more
+     often and v94 read it as four separate bytes (ath6kl's 4-byte read is a
+     single access), and both took credits the target had just granted.
+  3. nocash's finish clears `SYSTEM_SLEEP` (`0x40C4`) bit 0 to "restore" it,
+     but the ROM already runs with sleep disabled (`0x1D`), so it switched
+     sleep on. On v95 the chip stopped answering the command right after that
+     write (send 375 of 378, CMDTIMEOUT). The earlier "stuck at s N" runs
+     were the ARM11 hung inside a single controller access.
+- **v96: the upload fixed.** It follows the Linux 3DS port and ath6kl more
+  closely:
+  - The credit counter is read as one byte per poll, a millisecond apart, for
+    up to 3 s (the Linux port's BMI timeout for this chip).
+  - No send without a credit, ever (ath6kl's rule). A missing credit, a
+    refused transfer or a reply that never comes ends the attempt, and the
+    attempt is redone from a cold start: subsystem power off under reset, then
+    on.
+  - The chip is kept awake at the finish (`0x40C4` bit 0 stays set). Preset
+    11 restores nocash's value, which the v84-v88 boots used.
+  - A reply is only read once the lookahead says it is there; whatever a reply
+    leaves in the mailbox is drained and counted (`x`), and the target-info
+    reply is read by its own byte count, so no stale word can shift a later
+    reply.
+  - A data transfer that fails resets the controller before the next command.
+  - 100 ms before the first BMI command (the Linux port's `msleep(100)`).
+  - `hb` is the controller access in progress, published before every one, so
+    a hang shows where it stopped.
 
-1. v89 wrote the DATA32 block registers (`0x104`/`0x108`) for every CMD53. Byte
-   mode, which every BMI send uses, must not touch them. Fixed in v93: they are
-   written in block mode only.
-2. v91 polled the credit counter more often. `COUNT_DEC` (`0x450`) decrements on
-   every read, so polling faster takes the credits the target grants. Reverted
-   in v92; v94 then matched ath6kl exactly (a 4-byte read, where only the first
-   byte decrements).
-
-The stall persisted in v94 (`FW T4 STUB rdy 0 s 8`, stub readback 0), with two
-suspects cleared: the staged blobs checksum exactly (`fw`), and the ARM11 runs
-at its normal clock (`ck 0`), so the spin delays are not skewed. The chip goes
-quiet partway through the stub upload.
-
-A failed boot also froze the console: slow UI and dead touch until a reboot.
-The ARM11 never got back to its main loop, where touch is polled, because an
-unanswered command spins about 9 ms in `wifi_cmd` and the credit wait retried
-thousands of times. v95 ends the wait as soon as commands start timing out,
-records the first command that failed (`f`) and publishes the boot step and
-send count on every send (`tr`). It is awaiting a hardware run.
+  On hardware it completed the upload on the first attempt and HTC_READY came
+  back; the connect write was then refused, as described above.
 
 ## Architecture
 
@@ -159,15 +176,15 @@ bytes of the image the chip is about to run.
 
 These are switchable at runtime, because each test costs a hardware run. The
 `WIFI_OPT_*` bits in `include/wifi.h` ride in the command block: bit 0 restores
-the SOC registers, bit 1 skips the writes after the LZ stream, and bit 2 leaves
-the interrupt enables alone. **X** on the Wi-Fi Test screen cycles the preset,
-shown as `o`:
+the SOC registers, bit 1 skips the writes after the LZ stream, bit 2 leaves
+the interrupt enables alone, and bit 3 lets the chip sleep again at the finish.
+**X** on the Wi-Fi Test screen cycles the preset, shown as `o`:
 
 | `o` | Means |
 |-----|-------|
-| 3 | the default: the Linux finish, with the interrupt enables zeroed as ath6kl does |
-| 7 | the Linux finish, interrupt enables left alone |
-| 1 | restore the SOC registers only |
+| 3 | the default: the Linux finish with the chip kept awake, interrupt enables zeroed as ath6kl does |
+| 7 | the same, interrupt enables left alone |
+| 11 | preset 3 with nocash's sleep value written back (bit 0 clear): the v84-v88 finish |
 | 0 | the old ath6kl-port sequence |
 
 ## The HTC handshake
@@ -198,22 +215,23 @@ endpoint it just assigned. AR6014 uses the short WMI header, a bare 2-byte
 event id with no interface field, and a 12-byte ready event: MAC address, PHY
 capability, a reserved byte, and the firmware version.
 
-Step 2 has not been answered yet. On hardware (v85 to v88) the byte-mode write
-went unanswered and a block-mode write timed out. The connect message bytes,
-header, mailbox address and sequence match ath6kl's source line for line, and
-the mailbox reads do pop frames. Now in the code, but not yet run against a
-booted firmware: ath6kl's poll cadence (one poll every 10 ms, 2 s for an
-answer), zeroing the interrupt enables, a 100 ms pause between reading
-HTC_READY and answering, and five ways of writing the frame, tried in turn until
-one is answered:
+Step 2 has not been answered yet. The connect message bytes, header, mailbox
+address and sequence match ath6kl's source line for line, and the mailbox reads
+do pop frames. On v85 to v88 the byte-mode write went unanswered and a
+block-mode write timed out. The code now follows ath6kl's poll cadence (one
+poll every 10 ms, 2 s for an answer), zeroes the interrupt enables, pauses
+100 ms between reading HTC_READY and answering, and tries five ways of writing
+the frame in turn until one is answered. On v96, against a booted firmware,
+the controller refused every CMD53 style and the CMD52 write went unanswered;
+v97 (not yet run) replaced two "secure"-bit variants with the 4-bit styles:
 
 | Style | Transfer |
 |-------|----------|
 | 0 | CMD53 byte mode, one padded block: what ath6kl ends up doing, since the mmc core only uses block mode for more than one block |
-| 1 | the same with the SDIO-command bit |
-| 2 | CMD53 block mode, one block |
-| 3 | the same with the SDIO-command bit |
-| 4 | CMD52, a byte at a time |
+| 1 | CMD53 block mode, one block |
+| 2 | CMD52, a byte at a time |
+| 3 | the bus switched to 4-bit (CCCR 0x07, then the controller), then byte mode |
+| 4 | 4-bit, block mode |
 
 ## The Wi-Fi Test screen
 
@@ -225,12 +243,12 @@ several seconds; B also cuts the wait short.
 |------|--------|
 | `core vN ph P clk C t/o T` | ARM11 core version, probe phase (4 = done), controller clock register, commands that timed out |
 | `Cnn arg resp s0/s1` | the logged SDIO commands, green when answered; four rows once a boot has run |
-| `tr S f C T @N` | trace: boot step << 24 \| sends, updated on every send; the first failed command (`0434` a CMD52, `0053` a CMD53 data write), its STAT0 \| STAT1 << 16 (bit `0x0040` of the top half is CMDTIMEOUT: the chip did not answer), and the send count when it failed |
-| `a R fw S ck K` | mailbox interrupt state just after HTC_READY was read; the checksum of the staged blobs; `CFG11_MPCORE_CLKCNT` (0 = normal ARM11 clock) |
-| `drop n/id got M t n/e` | frames drained before the connect and the last one's id; the first word the connect read got; write styles tried and a bit per style the controller refused |
-| `s x y z` | per style: host int \| error << 8 \| lookahead valid << 16 \| MBOX_FRAME << 24 |
+| `tr S/N f C T @A:N x E/B` | boot step (3 HI, 4 STUB, 5 MAIN, 6 DONE) and sends completed, updated on every send; the first failed command (`0434` a CMD52, `0053` a CMD53 data write, `0405` a BMI reply that never came), its STAT0 \| STAT1 << 16 (bit `0x0040` of the top half is CMDTIMEOUT: the chip did not answer), the attempt and send count it failed at; reply words drained / the target-info byte count (12 expected) |
+| `hb H sl S sc C` | the controller access in progress: step << 28 (1 waiting to send a command, 2 waiting for its response, 3 done; 4-8 the same for a data command, 6 moving data through the FIFO, 7 waiting for the transfer to end) \| register << 16 \| command word; `SYSTEM_SLEEP` and `LOCAL_SCRATCH` as read from the ROM |
+| `drop n/id cc C t n/e` | frames drained before the connect and the last one's id; the card's CCCR after boot as bytes, FN1 block size low byte, bus width (0 = 1-bit, 2 = 4-bit), I/O ready, I/O enable (enumeration leaves `80000202`); write styles tried and a bit per style the controller refused |
+| `s a b c d` | the four CMD53 styles (byte, block, 4-bit byte, 4-bit block): host int \| error << 8 \| lookahead valid << 16 \| MBOX_FRAME << 24 after the write, or, with bit 31 set, the controller's STAT1 STAT0 when it refused the write (`0040` in STAT1 is CMDTIMEOUT, `0002` CRC, `0008` data timeout; none of them with no DATAEND means the card held the line busy) |
 | `ATHEROS 0271:0201 fn1 RDY wc W o O` | chip ID from the CIS, function 1 ready, `CFG11_WIFICNT` after the write, boot preset |
-| `FW Tn STEP rdy R s N nc C [b 2] [p P]` | image type, boot step reached, ready flag, mailbox sends, sends made without a credit, `b 2` when the boot was redone, per-phase no-credit counts (HI \| STUB << 8 \| MAIN << 16) |
+| `FW Tn STEP rdy R s N nc C [b 2] pl P` | image type, boot step reached, ready flag, mailbox sends, credit waits that ran out (each ends the attempt), `b 2` when the boot was redone from a cold start, credit polls made (climbing = the ARM11 is alive) |
 | `HTC id I cr C sz S [ep E]` | HTC_READY: message id, credits, credit size, and the endpoint once connected |
 | `r R mb M` | when no HTC_READY came: the interrupt state, and the stub readback (`0x21006136` when the stub landed) or a peek of mailbox 0 |
 | `WMI 1001 MAC ...` or `HTC ep E st S sg G r R` | the MAC from WMI_READY; otherwise the connect endpoint, status (255 = nothing came back), how far the handshake got (1 READY to 5 WMI) and the interrupt state |
@@ -248,8 +266,10 @@ Each of these was learned from a regression on hardware:
 - The BMI upload is proven with byte-mode CMD53 exactly as v88 sent it. New
   transfer behaviour goes behind the `blksz` parameter of `wifi_cmd53()`, never
   into the shared path.
-- Do not poll the credit counter faster or more often: every read of `0x450`
-  takes a credit.
+- The credit counter is read one byte at a time, one read per poll: every
+  access to `0x450` (or its neighbours) takes a credit.
+- Never send without a credit, and never read a reply the lookahead has not
+  announced; abort the attempt and redo it instead.
 - Every wait must end quickly when the chip goes silent. The ARM11 also polls
   touch and serves audio, so a long spin freezes the whole console.
 
@@ -308,14 +328,16 @@ before each boot. Main.type5 is not used.
 
 ## Path forward
 
-1. Run v95 and read `tr` and `f`: they say which send the upload stalls on and
-   whether the controller or the chip gave up.
-2. Get the upload back to `rdy 1` reliably.
-3. Finish the HTC handshake: CONNECT_SERVICE answered, SETUP_COMPLETE, then
+1. Resume by running v97 (Settings, Wi-Fi Test, **R**). `f`/`s` say why the
+   controller refused the connect write, `cc` whether the card's bus width or
+   function state changed at boot, and styles 3 and 4 whether 4-bit is what
+   the running firmware needs. If 4-bit is answered, move the whole bring-up
+   to 4-bit, as the Linux port runs.
+2. Finish the HTC handshake: CONNECT_SERVICE answered, SETUP_COMPLETE, then
    `WMI_READY` with the MAC address.
-4. WMI: channel parameters and a scan (AR6014 scans only the first channel set, so
+3. WMI: channel parameters and a scan (AR6014 scans only the first channel set, so
    iterate), then connect to a BSS from the scan cache.
-5. WPA2 4-way handshake (AES, SHA1, PRF), then DHCP, then ARP/IP/ICMP for a ping.
+4. WPA2 4-way handshake (AES, SHA1, PRF), then DHCP, then ARP/IP/ICMP for a ping.
    A full TCP/IP stack for anything more.
 
 ## Reverse-engineering setup

@@ -14,7 +14,7 @@ Verified on real hardware (New 3DS). Starting from nothing, AuroraOS:
 - Reads and writes its registers (CMD52, CMD53) and its memory, through the
   diagnostic window.
 - Talks to its bootloader (BMI), uploads the NWM firmware from the SD card and
-  starts it.
+  starts it (all 378 sends on the first attempt since core v96).
 - Receives the running firmware's first message, `HTC_READY` (core v84): 10
   credits of 1544 bytes.
 
@@ -23,14 +23,13 @@ existing homebrew routes Wi-Fi through Nintendo's sysmodule. The work combines
 reverse engineering of the retail NWM module with GBATEK, 3dbrew, the ath6kl
 driver, and the Linux 3DS port's AR6014 support.
 
-## In progress
+## Paused (2026-09-30)
 
-- The firmware upload stopped completing after core v88. Two regressions have
-  been found and fixed; core v95 records exactly where the upload stalls and
-  whether the chip or the controller gave up.
 - The rest of the HTC handshake (connect the WMI control service, setup
-  complete, `WMI_READY` with the MAC address) is written. The target has not
-  answered the connect request yet.
+  complete, `WMI_READY` with the MAC address) is written. After boot the SD
+  controller refuses the CMD53 write of the connect request, and a CMD52 write
+  goes unanswered. Core v97, built but not yet run on hardware, records why
+  the controller refuses it and tries a 4-bit bus, as the Linux port uses.
 
 ## Not done
 
