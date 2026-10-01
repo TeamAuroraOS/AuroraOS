@@ -1,8 +1,8 @@
-# Clock and battery (MCU)
+# Clock, battery and power (MCU)
 
-The console's management MCU carries the real-time clock and the battery gauge.
-Aurora reads both over I2C, device 3 (bus 1, address `0x4A`), through
-`src/power.c` / `include/power.h`.
+The console's management MCU carries the real-time clock, the battery gauge and
+the power switch. Aurora talks to it over I2C, device 3 (bus 1, address
+`0x4A`), through `src/power.c` / `include/power.h`.
 
 Call `I2C_init()` once before using anything here. `os_main()` does this during
 startup, before the first status bar is drawn.
@@ -14,6 +14,8 @@ startup, before the first status bar is drawn.
 | `0x0B` | Battery charge percentage, 0-100 | well established (`MCUHWC_GetBatteryLevel` reads this) |
 | `0x0F` | Power / charger flags | register is right; **the charging bit is not**, see below |
 | `0x30`..`0x36` | RTC: sec, min, hour, weekday, day, month, year, all BCD | confirmed on hardware |
+| `0x20` | Power control: bit 0 powers off, bit 2 reboots | bits from GodMode9; power-off confirmed on hardware |
+| `0x22` | LCD power: bit 0 turns both screens off | used before every power-off, as GodMode9 does |
 
 The RTC layout is not a guess: the crash handler's power-off countdown already
 depends on `0x30` counting seconds, and that works on a real console.
@@ -43,6 +45,19 @@ differs is the right one.
 
 Everything else about the battery is unaffected if this bit is wrong: the
 percentage, the fill width and the low warning do not depend on it.
+
+## Power off and reboot
+
+`power_shutdown()` and `power_reboot()` turn the screens off through `0x22`,
+drain the ARM9 write buffer, then write bit 0 or bit 2 of `0x20` and wait for
+the power to go. The screens go off first because the MCU can hang otherwise.
+Neither function returns.
+
+The Home Menu's Power Off tile and its old-core prompt use `power_shutdown()`,
+and the terminal's `shutdown`, `poweroff`, `reboot` and `systemctl
+poweroff|reboot` use both. The crash handler keeps its own copy of the
+power-off sequence in `src/os/crash.c`, so a fault never depends on more code
+than it has to.
 
 ## What the UI shows
 

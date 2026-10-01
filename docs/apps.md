@@ -1,7 +1,9 @@
 # AuroraOS app loader
 
 The AuroraOS Home Menu (`src/os/os_main.c`) discovers and launches app
-containers from the SD card, in addition to the built-in Power Off tile.
+containers from the SD card, in addition to the built-in Power Off tile. The
+File Explorer and the [terminal](terminal.md) (`./Tetris.bin`, or `Tetris` for
+an app in `Aurora\Apps`) start apps the same way.
 
 ## Where apps live
 
@@ -97,7 +99,8 @@ python auric-lang/tools/sound_prep.py -o $O "$S/tetris-bg-music.wav=MUSIC.WAV"
 
 The running Home Menu lives at `0x22000000`, which is also where apps load, so
 it cannot copy an app over itself while it is executing there. The launch path
-(all in `os_main.c` + `src/os/os_launch.s`):
+is `os_launch_app()` in `os_main.c`, with `src/os/os_launch.s`; the File
+Explorer and the terminal are handed the same function:
 
 1. Mounts the SD card and opens the selected container.
 2. Uses the **shared parser** `aurora_parse_header()` / `aurora_load_arm9()`

@@ -63,6 +63,8 @@ The menu acts on the selected item, or on the folder when it is empty:
   cancels. A name that is left empty changes nothing.
 * A walk goes at most 24 folders deep and keeps one directory handle per level,
   so its memory is fixed however large the tree is.
+* The terminal's `cp`, `mv` and `rm` use the same functions; see
+  [`terminal.md`](terminal.md).
 * Copies do not keep their dates. FatFs is built without a clock
   (`FF_FS_NORTC=1`), so every file it writes is dated 1 June 2025.
 
