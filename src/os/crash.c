@@ -141,7 +141,7 @@ static void draw_dump(CrashDump *d) {
   /* The auto-power-off countdown is drawn along the bottom by crash_handle(). */
 }
 
-/* Same sequence as os_power_off. */
+/* Same sequence as power_shutdown() in src/power.c. */
 static void crash_power_off(void) {
   I2C_init();
   I2C_writeReg(I2C_DEV_MCU, 0x22, 1 << 0); /* LCDs off */

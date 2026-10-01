@@ -8,6 +8,7 @@
 #include "screenshot.h"
 #include "sdmmc.h"
 #include "statusbar.h"
+#include "terminal.h"
 #include "touchcal.h"
 #include "timer.h"
 #include "audio.h"
@@ -75,15 +76,6 @@ static u32 str_len(const char *s) {
   while (*s++)
     n++;
   return n;
-}
-
-static void os_power_off(void) {
-  I2C_init();
-  I2C_writeReg(I2C_DEV_MCU, 0x22, 1 << 0);
-  __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
-  I2C_writeReg(I2C_DEV_MCU, 0x20, 1 << 0);
-  while (1)
-    __asm__ volatile("mcr p15, 0, r0, c7, c0, 4");
 }
 
 static int g_accent_idx = 0;
@@ -2167,7 +2159,7 @@ static void music_player_screen(void) {
 
 static void home_activate(int sel) {
   if (home_apps[sel].action == ACT_POWER) {
-    os_power_off();
+    power_shutdown();
   } else if (home_apps[sel].action == ACT_LAUNCH) {
     os_launch_app(home_apps[sel].path);
     hm_draw_full(sel); /* only reached if the launch failed and returned */
@@ -2250,7 +2242,7 @@ void os_main(void) {
   if (core == AUDIO_BOOT_STALE) {
     if (fv_confirm(L(STR_CORE_OLD), L(STR_CORE_OLD_HINT), L(STR_POWER_OFF),
                    L(STR_LATER)))
-      os_power_off();
+      power_shutdown();
     hm_draw_full(sel);
   }
 
@@ -2279,6 +2271,11 @@ void os_main(void) {
 
     if (kdown & BUTTON_START) {
       settings_open();
+      hm_draw_full(sel);
+    }
+
+    if (kdown & BUTTON_X) {
+      terminal_screen(g_cfg.name, os_launch_app);
       hm_draw_full(sel);
     }
 

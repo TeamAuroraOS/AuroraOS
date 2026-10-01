@@ -104,3 +104,17 @@ int battery_charging(void) {
     return -1;
   return (s & MCU_STATUS_CHARGING) ? 1 : 0;
 }
+
+/* The LCDs go off first, as GodMode9 does: the MCU can hang otherwise. */
+static void mcu_power(uint8_t bit) {
+  I2C_init();
+  I2C_writeReg(I2C_DEV_MCU, 0x22, 1 << 0);
+  __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
+  I2C_writeReg(I2C_DEV_MCU, 0x20, bit);
+  for (;;)
+    __asm__ volatile("mcr p15, 0, r0, c7, c0, 4");
+}
+
+void power_shutdown(void) { mcu_power(1u << 0); }
+
+void power_reboot(void) { mcu_power(1u << 2); }
