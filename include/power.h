@@ -34,4 +34,8 @@ int battery_charging(void);
 /* Raw MCU power-status register, for diagnosing the charging bit. */
 int power_status_raw(void);
 
+/* Ask the MCU to cut the power or restart the console. Neither returns. */
+void power_shutdown(void);
+void power_reboot(void);
+
 #endif
