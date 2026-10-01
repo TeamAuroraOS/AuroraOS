@@ -17,7 +17,7 @@
 /* The ARM11 can keep running a core from an earlier boot. audio_boot() compares
  * this with the running core's version and replaces that core when they differ.
  * Bump this whenever the core changes. */
-#define AUDIO_CORE_VERSION 95
+#define AUDIO_CORE_VERSION 97
 
 /* The first core that understands AUDIO_CMD_PARK. An older one can only be
  * replaced by powering the console off. */

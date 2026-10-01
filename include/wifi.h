@@ -108,7 +108,7 @@ typedef struct {
   volatile uint32_t htc_regs;   /* 0x400 | 0x401<<8 | 0x402<<16 | 0x405<<24 */
   volatile uint32_t bmi_sends;
   volatile uint32_t bmi_nocred; /* sends that ran out the credit wait with no credit */
-  volatile uint32_t fw_chk;     /* no-credit sends: HI | STUB<<8 | MAIN<<16 */
+  volatile uint32_t fw_chk;     /* unused */
   volatile uint32_t fw_dbrd;    /* stub_code word 0 read back via diag */
   volatile uint32_t fw_dbex;    /* stub_code word 0 as staged */
   volatile uint32_t fw_type;    /* selected NWM Main.type image */
@@ -122,28 +122,51 @@ typedef struct {
   volatile uint32_t wmi_mac0;   /* MAC bytes 0-3 */
   volatile uint32_t wmi_mac1;   /* MAC bytes 4-5 */
   volatile uint32_t wmi_swver;  /* firmware version from WMI_READY */
-  volatile uint32_t htc_regs2;  /* the same ints sampled after HTC_READY was read */
+  volatile uint32_t htc_regs2;  /* CCCR after boot: IOE | IOR<<8 | width<<16 | blksz<<24 */
   volatile uint32_t htc_look2;  /* lookahead (0x408) after HTC_READY was read */
   volatile uint32_t htc_drained;/* frames dropped before connect | last id << 16 */
   volatile uint32_t htc_msg0;   /* first 4 bytes of the frame the connect read got */
   volatile uint32_t htc_try;    /* how many write styles the connect tried */
   volatile uint32_t htc_err;    /* bit per style whose transfer the controller refused */
-  volatile uint32_t htc_snap[5];/* per style: host int | err << 8 | lookahead << 16 | frame << 24 */
+  /* Per write style: host int | err<<8 | lookahead<<16 | frame<<24, or, when
+   * the controller refused the write, bit 31 | STAT0 | STAT1<<16. */
+  volatile uint32_t htc_snap[5];
   volatile uint32_t boot_tries;  /* 1, or 2 when the upload had to be redone */
   volatile uint32_t fw_sum;      /* rolling sum of the staged blobs */
   volatile uint32_t clkcnt;      /* CFG11_MPCORE_CLKCNT, the ARM11 clock mode */
   volatile uint32_t trace;       /* boot step << 24 | sends, published every send */
-  volatile uint32_t fail_cmd;    /* first command that failed (0x53 = a data write) */
-  volatile uint32_t fail_arg;
+  /* The first command that failed: the controller command word, 0x0053 or
+   * 0x1053 for a CMD53 write or read, 0x0405 for a BMI reply that never came. */
+  volatile uint32_t fail_cmd;
+  volatile uint32_t fail_arg;    /* its argument; for a CMD53 the address | -err << 28 */
   volatile uint32_t fail_stat;   /* STAT0 | STAT1 << 16 at that moment */
-  volatile uint32_t fail_at;     /* boot step << 24 | sends done when it failed */
+  volatile uint32_t fail_at;     /* attempt << 28 | boot step << 24 | sends done */
+  volatile uint32_t bmi_polls;   /* credit polls this attempt, published live */
+  volatile uint32_t bmi_extra;   /* reply words left in the mailbox and drained */
+  volatile uint32_t bmi_bc;      /* target-info byte count (ath6kl expects 12) */
+  volatile uint32_t soc_sleep;   /* SYSTEM_SLEEP (0x40c4) as the ROM had it */
+  volatile uint32_t soc_scratch; /* LOCAL_SCRATCH (0x180c0) as the ROM had it */
+  volatile uint32_t hb;          /* WIFI_HB_* << 28 | register << 16 | command */
 } WifiShared;
+
+/* The controller access in progress (WifiShared.hb), published before each. */
+enum {
+  WIFI_HB_CMD_WAIT = 1, /* waiting for the command line before a command */
+  WIFI_HB_CMD_SENT,     /* a command out, waiting for its response       */
+  WIFI_HB_CMD_DONE,
+  WIFI_HB_DATA_WAIT,    /* the same three for a data command (CMD53)     */
+  WIFI_HB_DATA_SENT,
+  WIFI_HB_DATA_FIFO,    /* moving the data through the FIFO              */
+  WIFI_HB_DATA_END,     /* data moved, waiting for the transfer to end   */
+  WIFI_HB_DATA_DONE,
+};
 
 /* Boot options. With all three set the sequence matches the Linux 3DS port
  * (which follows nocash's wifiboot); with none, Octoblimp's ath6kl port. */
 #define WIFI_OPT_RESTORE_SOC 0x01u /* put 0x40c4 / 0x180c0 back before BMIDone */
 #define WIFI_OPT_NO_POST_LZ  0x02u /* no stub_data/database/HI+0x18 after the LZ */
 #define WIFI_OPT_NO_INT_EN   0x04u /* leave INT_STATUS_ENABLE alone (ath6kl zeroes it) */
+#define WIFI_OPT_SLEEP_ON    0x08u /* let the chip sleep again at the finish (nocash) */
 #define WIFI_OPT_LINUX       (WIFI_OPT_RESTORE_SOC | WIFI_OPT_NO_POST_LZ | \
                               WIFI_OPT_NO_INT_EN)
 
