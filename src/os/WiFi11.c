@@ -94,16 +94,37 @@ static void wifi_note_fail(WifiShared *w, uint16_t cmd, uint32_t arg,
   w->fail_cmd = cmd;
   w->fail_arg = arg;
   w->fail_stat = (uint32_t)s0 | ((uint32_t)s1 << 16);
-  w->fail_at = w->bmi_sends | (w->boot_step << 24);
+  w->fail_at = w->bmi_sends | (w->boot_step << 24) | (w->boot_tries << 28);
   dcache_clean();
+}
+
+/* Set when the upload has to stop; the remaining sends become no-ops. */
+static int g_bmi_abort = 0;
+
+static void wifi_ms(uint32_t ms) {
+  for (volatile uint32_t d = 0; d < ms * 10000u; d++)
+    ;
+}
+
+/* The controller access about to be made, in its own cache line, so an access
+ * that never returns leaves its position on screen. */
+static void wifi_hb(WifiShared *w, uint32_t step, uint16_t cmd, uint32_t arg) {
+  w->hb = (step << 28) | (((arg >> 9) & 0xFFFu) << 16) | cmd;
+  dcache_clean_line((const void *)&w->hb);
+}
+
+static void wifi_timeout(WifiShared *w) {
+  w->timeouts++;
+  dcache_clean_line((const void *)&w->timeouts);
 }
 
 static void wifi_cmd(WifiShared *w, WifiCmd *e, uint16_t cmd16, uint32_t arg) {
   uint32_t g = 0;
+  wifi_hb(w, WIFI_HB_CMD_WAIT, cmd16, arg);
   while ((WB16(WR_STAT1) & WSTAT1_CMDBUSY) && ++g < 100000u)
     ;
   if (g >= 100000u)
-    w->timeouts++;
+    wifi_timeout(w);
   WB16(WR_IRM0) = 0;
   WB16(WR_IRM1) = 0;
   WB16(WR_STAT0) = 0;
@@ -111,6 +132,7 @@ static void wifi_cmd(WifiShared *w, WifiCmd *e, uint16_t cmd16, uint32_t arg) {
   WB16(WR_DATACTL32) = (uint16_t)((WB16(WR_DATACTL32) & ~0x1800u) | 0x400u);
   WB16(WR_ARG0) = (uint16_t)(arg & 0xFFFF);
   WB16(WR_ARG1) = (uint16_t)(arg >> 16);
+  wifi_hb(w, WIFI_HB_CMD_SENT, cmd16, arg);
   WB16(WR_CMD) = cmd16;
 
   g = 0;
@@ -121,10 +143,11 @@ static void wifi_cmd(WifiShared *w, WifiCmd *e, uint16_t cmd16, uint32_t arg) {
     if (!(s1 & WSTAT1_CMDBUSY) && (WB16(WR_STAT0) & WSTAT0_CMDRESPEND))
       break;
     if (++g >= 300000u) {
-      w->timeouts++;
+      wifi_timeout(w);
       break;
     }
   }
+  wifi_hb(w, WIFI_HB_CMD_DONE, cmd16, arg);
   uint16_t s0 = WB16(WR_STAT0);
   uint16_t s1 = WB16(WR_STAT1);
   e->cmd = cmd16;
@@ -158,6 +181,9 @@ static WifiCmd *wifi_logcmd(WifiShared *w, uint16_t cmd16, uint32_t arg) {
 #define WSTAT1_RXRDY 0x0100u
 #define WSTAT1_TXRQ  0x0200u
 
+/* STAT0 | STAT1 << 16 when the last CMD53 ended, success or not. */
+static uint32_t g_cmd53_stat;
+
 /* CMD53 (IO_RW_EXTENDED) through the 16-bit FIFO. blksz 0 is byte mode, which
  * the BMI bootloader needs; otherwise len/blksz blocks. `buf` must be 4-byte
  * aligned. Returns 0, or negative on error or timeout. */
@@ -168,8 +194,11 @@ static int wifi_cmd53(WifiShared *w, uint32_t func, uint32_t addr,
   int nhalf = (int)(bytes / 2u);
   uint16_t *h = (uint16_t *)buf;
   uint32_t g = 0;
+  wifi_hb(w, WIFI_HB_DATA_WAIT, 0x0035u, addr << 9);
   while ((WB16(WR_STAT1) & WSTAT1_CMDBUSY) && ++g < 100000u)
     ;
+  if (g >= 100000u)
+    wifi_timeout(w);
   WB16(WR_IRM0) = 0;
   WB16(WR_IRM1) = 0;
   WB16(WR_STAT0) = 0;
@@ -202,36 +231,65 @@ static int wifi_cmd53(WifiShared *w, uint32_t func, uint32_t addr,
     cmd |= 0x1000u; /* read direction */
   if (blocks > 1u)
     cmd |= 0x2000u; /* multi-block */
+  wifi_hb(w, WIFI_HB_DATA_SENT, cmd, addr << 9);
   WB16(WR_CMD) = cmd;
 
-  int idx = 0, done_data = 0;
+  int idx = 0, done_data = 0, err = 0;
+  uint16_t s0 = 0, s1 = 0;
   g = 0;
   for (;;) {
-    uint16_t s1 = WB16(WR_STAT1);
+    s1 = WB16(WR_STAT1);
     if (!is_write && (s1 & WSTAT1_RXRDY) && idx < nhalf) {
       WB16(WR_STAT1) = (uint16_t)(s1 & ~WSTAT1_RXRDY);
+      wifi_hb(w, WIFI_HB_DATA_FIFO, cmd, addr << 9);
       for (int i = 0; i < nhalf; i++)
         h[idx++] = WB16(WR_FIFO);
       done_data = 1;
     }
     if (is_write && (s1 & WSTAT1_TXRQ) && idx < nhalf) {
       WB16(WR_STAT1) = (uint16_t)(s1 & ~WSTAT1_TXRQ);
+      wifi_hb(w, WIFI_HB_DATA_FIFO, cmd, addr << 9);
       for (int i = 0; i < nhalf; i++)
         WB16(WR_FIFO) = h[idx++];
       done_data = 1;
+      wifi_hb(w, WIFI_HB_DATA_END, cmd, addr << 9);
     }
-    uint16_t s0 = WB16(WR_STAT0);
+    s0 = WB16(WR_STAT0);
     if (s1 & WMASK_GW) {
-      w->timeouts++;
-      return -1;
+      err = -1;
+      break;
     }
-    if (!(s1 & WSTAT1_CMDBUSY) && done_data && (s0 & 0x0004u)) /* DATAEND */
+    if (!(s1 & WSTAT1_CMDBUSY) && done_data && (s0 & 0x0004u)) { /* DATAEND */
+      wifi_hb(w, WIFI_HB_DATA_DONE, cmd, addr << 9);
+      g_cmd53_stat = (uint32_t)s0 | ((uint32_t)s1 << 16);
       return 0;
+    }
     if (++g >= 800000u) {
-      w->timeouts++;
-      return -2;
+      err = -2;
+      break;
     }
   }
+  g_cmd53_stat = (uint32_t)s0 | ((uint32_t)s1 << 16);
+  wifi_note_fail(w, is_write ? 0x0053u : 0x1053u,
+                 addr | ((uint32_t)(-err) << 28), s0, s1);
+  /* A data phase that did not finish leaves the controller mid-transfer, and
+   * the next command would go out on top of it: start it clean. */
+  wifi_timeout(w);
+  wifi_ctrl_init();
+  return err;
+}
+
+/* The bus width, on the card (CCCR 0x07 bits 1:0) and then on the controller
+ * (WR_OPT bit 15 set = 1-bit). */
+static void wifi_bus_width(WifiShared *w, int wide) {
+  WifiCmd t;
+  wifi_cmd(w, &t, WCMD52, WCMD52_RD(0, 0x07));
+  uint8_t bic = (uint8_t)((t.resp & 0xFCu) | (wide ? 0x02u : 0x00u));
+  wifi_cmd(w, &t, WCMD52, WCMD52_WR(0, 0x07, bic));
+  if (wide)
+    WB16(WR_OPT) &= (uint16_t)~0x8000u;
+  else
+    WB16(WR_OPT) |= 0x8000u;
 }
 
 /* Mailbox 0 spans 0x800-0xFFF. A write ending at 0xFFF (EOM) completes a
@@ -260,158 +318,162 @@ static uint32_t wifi_diag_read(WifiShared *w, uint32_t addr) {
   return v;
 }
 
-static void wifi_diag_write(WifiShared *w, uint32_t addr, uint32_t data) {
-  WifiCmd t;
-  for (int i = 0; i < 4; i++)
-    wifi_cmd(w, &t, WCMD52, WCMD52_WR(1, 0x474u + i, (data >> (i * 8)) & 0xFFu));
-  wifi_diag_setwin(w, 0x478u, addr);
-}
+/* 1 ms apart: the Linux 3DS port raised ath6kl's BMI timeout to 3 s. */
+#define BMI_POLLS 3000
 
-/* Waits for RX_LOOKAHEAD_VALID (0x405 bit0), then reads mailbox 0. */
-static uint32_t wifi_bmi_recv(WifiShared *w) {
+/* Reads `len` bytes of a BMI reply from mailbox 0 once RX_LOOKAHEAD_VALID
+ * (0x405 bit 0) says a word is there. Returns 0, and ends the boot, when none
+ * comes: reading an empty mailbox would leave the late reply in it and shift
+ * every later reply by one. */
+static int wifi_bmi_recv_bytes(WifiShared *w, uint8_t *buf, int len) {
   WifiCmd t;
-  for (int i = 0; i < 1500; i++) {
+  int have = 0;
+  for (int i = 0; i < BMI_POLLS && !have; i++) {
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x405));
-    if (t.resp & 0x01u)
-      break;
-    for (volatile int d = 0; d < 300; d++)
-      ;
+    if (t.ok == 1u && (t.resp & 0x01u))
+      have = 1;
+    else
+      wifi_ms(1);
   }
-  uint32_t v = 0;
-  for (int i = 0; i < 4; i++) {
+  if (!have) {
+    for (int i = 0; i < len; i++)
+      buf[i] = 0;
+    wifi_note_fail(w, 0x0405u, 0, 0, 0);
+    g_bmi_abort = 1;
+    return 0;
+  }
+  for (int i = 0; i < len; i++) {
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, WIFI_MBOX0 + i));
-    v |= (t.resp & 0xFFu) << (i * 8);
+    buf[i] = (uint8_t)(t.resp & 0xFFu);
   }
-  return v;
+  return 1;
 }
 
-/* BMI_GET_TARGET_INFO. The BMI credit counter is COUNT_DEC[4] at 0x450
- * (0x440 + 4 * 4), and reading it takes a credit. */
-static void wifi_bmi_target_info(WifiShared *w) {
-  uint16_t dbg[4] = {0, 0, 0, 0};
+static uint32_t rd32le(const uint8_t *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+         ((uint32_t)p[3] << 24);
+}
+
+static uint32_t wifi_bmi_recv_word(WifiShared *w) {
+  uint8_t b[4];
+  wifi_bmi_recv_bytes(w, b, 4);
+  return rd32le(b);
+}
+
+/* Discards words left in the mailbox after a reply, so a reply longer than
+ * expected cannot shift the next one. */
+static void wifi_bmi_drain(WifiShared *w) {
   WifiCmd t;
-
-  for (int i = 0; i < 8; i++) {
-    wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x420 + i * 4));
-    w->cnt[i] = (uint8_t)(t.resp & 0xFFu);
+  for (int n = 0; n < 16; n++) {
+    wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x405));
+    if (t.ok != 1u || !(t.resp & 0x01u))
+      return;
+    for (int i = 0; i < 4; i++)
+      wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, WIFI_MBOX0 + i));
+    w->bmi_extra++;
   }
-
-  uint32_t credit = 0;
-  for (int i = 0; i < 400; i++) {
-    wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x450));
-    credit = t.resp & 0xFFu;
-    if (credit)
-      break;
-    for (volatile int d = 0; d < 300; d++)
-      ;
-  }
-  w->bmi_credit = credit;
-
-  static uint32_t cmdw;
-  cmdw = 8; /* BMI_GET_TARGET_INFO */
-  wifi_cmd53(w, 1, 0x1000u - 4u, &cmdw, 4, 1, 1, 0, 0);
-  w->bmi_wr = 0;
-  (void)dbg;
-  (void)t;
-
-  /* AR6014 answers 0xFFFFFFFF first, then a byte count, version and type. */
-  uint32_t v0 = wifi_bmi_recv(w);
-  w->bmi_look = v0;
-  if (v0 == 0xFFFFFFFFu) {
-    (void)wifi_bmi_recv(w);         /* byte count */
-    w->bmi_ver = wifi_bmi_recv(w);
-    w->bmi_type = wifi_bmi_recv(w);
-  } else {
-    w->bmi_ver = v0;
-    w->bmi_type = wifi_bmi_recv(w);
-  }
-  w->bmi_rd = 0;
 }
 
-/* Set when the upload has to stop; the remaining sends become no-ops. */
-static int g_bmi_abort = 0;
-static int g_bmi_consec_nc = 0;
-static uint32_t g_nc_hi = 0, g_nc_stub = 0, g_nc_main = 0;
-
-/* As ath6kl does: a 4-byte read of the credit counter, where only the first
- * byte takes a credit, with a gap between polls. Polling faster starves the
- * target. Returns 1 with a credit, 0 if none came, -1 if the chip stopped
- * answering. */
+/* The BMI credit counter is COUNT_DEC[4] at 0x450 (0x440 + 4 * 4), and reading
+ * it takes the credit. ath6kl's 4-byte read is one access; four byte reads of
+ * 0x450..0x453 are four, and a credit granted between them is lost, so this
+ * reads one byte per poll. Returns 1 with a credit, 0 if none came, -1 if the
+ * chip stopped answering. */
 static int wifi_bmi_credit(WifiShared *w) {
   WifiCmd t;
   uint32_t t0 = w->timeouts;
+  int bad = 0;
 
-  for (int i = 0; i < 2000; i++) {
-    uint8_t c;
+  for (int i = 0; i < BMI_POLLS; i++) {
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x450));
-    c = (uint8_t)(t.resp & 0xFFu);
-    wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x451));
-    wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x452));
-    wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x453));
-    if (c)
-      return 1;
-    /* An unanswered command spins ~9 ms in wifi_cmd; give up rather than hang
-     * the core. */
+    w->bmi_polls++;
+    dcache_clean_line((const void *)&w->bmi_polls);
+    if (t.ok == 1u) {
+      bad = 0;
+      if (t.resp & 0xFFu)
+        return 1;
+    } else if (++bad > 8) {
+      return -1;
+    }
     if (w->timeouts - t0 > 4u)
       return -1;
-    for (volatile int d = 0; d < 15000; d++) /* about 50 us between polls */
-      ;
+    wifi_ms(1);
   }
   return 0;
 }
 
 static void wifi_bmi_send(WifiShared *w, const uint8_t *buf, int len) {
-  WifiCmd t;
+  static uint32_t sbuf[80];
   if (g_bmi_abort)
     return;
-  int got = 0;
-  {
-    int cr = wifi_bmi_credit(w);
-    if (cr < 0) {
-      g_bmi_abort = 1;
-      w->bmi_sends++;
-      dcache_clean();
-      return;
-    }
-    got = cr;
+  int cr = wifi_bmi_credit(w);
+  if (cr <= 0) {
+    /* ath6kl never writes without a credit: the target holds one command,
+     * and a second one lands on top of it. The boot is redone instead. */
+    if (cr == 0)
+      w->bmi_nocred++;
+    g_bmi_abort = 1;
+    dcache_clean();
+    return;
   }
-  if (got) {
-    g_bmi_consec_nc = 0;
-  } else {
-    w->bmi_nocred++;
-    if (w->boot_step == WIFI_BOOT_HI)
-      g_nc_hi++;
-    else if (w->boot_step == WIFI_BOOT_STUB)
-      g_nc_stub++;
-    else
-      g_nc_main++;
-    w->fw_chk = (g_nc_hi & 0xFFu) | ((g_nc_stub & 0xFFu) << 8) |
-                ((g_nc_main & 0xFFu) << 16); /* per-phase no-credit breakdown */
-    g_bmi_consec_nc++;
-    /* A good boot sees about 8 of these; past 25 the credits have stalled. */
-    if (w->bmi_nocred > 25) {
-      g_bmi_abort = 1;
-      w->bmi_sends++;
-      dcache_clean();
-      return;
-    }
-  }
-  static uint32_t sbuf[80];
   for (int i = 0; i < len; i++)
     ((uint8_t *)sbuf)[i] = buf[i];
   uint32_t wbase = 0x1000u - (uint32_t)len;
   if (wifi_cmd53(w, 1, wbase, sbuf, (uint32_t)len, 1, 1, 0, 0) != 0) {
     wifi_note_fail(w, 0x0053u, wbase, (uint16_t)WB16(WR_STAT0),
                    (uint16_t)WB16(WR_STAT1));
-    /* The credit is already taken, so try once more. */
-    if (wifi_cmd53(w, 1, wbase, sbuf, (uint32_t)len, 1, 1, 0, 0) != 0)
-      g_bmi_abort = 1;
+    g_bmi_abort = 1;
+    dcache_clean();
+    return;
   }
-  (void)t;
   w->bmi_sends++;
-  /* Published every send, so a hang leaves the step that stalled on screen. */
   w->trace = (w->boot_step << 24) | (w->bmi_sends & 0xFFFFu);
   dcache_clean();
+}
+
+/* BMI_GET_TARGET_INFO: 0xFFFFFFFF, then a byte count, version and type. The
+ * count is honoured, so a longer reply cannot leave words in the mailbox. */
+static void wifi_bmi_target_info(WifiShared *w) {
+  WifiCmd t;
+  static uint32_t cmdw;
+  uint8_t info[64];
+
+  wifi_ms(100); /* the Linux port: not ready for BMI the instant it enumerates */
+  for (int i = 0; i < 8; i++) {
+    wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x420 + i * 4));
+    w->cnt[i] = (uint8_t)(t.resp & 0xFFu);
+  }
+  w->bmi_ver = 0;
+  w->bmi_type = 0;
+  w->bmi_bc = 0;
+  w->bmi_look = 0;
+  w->bmi_credit = (uint32_t)wifi_bmi_credit(w);
+  if (w->bmi_credit != 1u) {
+    w->bmi_wr = -1;
+    return;
+  }
+  cmdw = 8; /* BMI_GET_TARGET_INFO */
+  w->bmi_wr = wifi_cmd53(w, 1, 0x1000u - 4u, &cmdw, 4, 1, 1, 0, 0);
+  if (w->bmi_wr != 0)
+    return;
+
+  uint32_t v0 = wifi_bmi_recv_word(w);
+  if (v0 == 0xFFFFFFFFu) {
+    uint32_t bc = wifi_bmi_recv_word(w);
+    w->bmi_bc = bc;
+    if (bc < 12u || bc > 4u + sizeof(info))
+      bc = 12u; /* the layout ath6kl expects */
+    wifi_bmi_recv_bytes(w, info, (int)(bc - 4u));
+    w->bmi_ver = rd32le(info);
+    w->bmi_type = rd32le(info + 4);
+    if (bc >= 16u)
+      w->bmi_look = rd32le(info + 8);
+  } else {
+    w->bmi_ver = v0;
+    w->bmi_type = wifi_bmi_recv_word(w);
+  }
+  wifi_bmi_drain(w);
+  w->bmi_rd = g_bmi_abort ? -1 : 0;
 }
 
 /* BMI_WRITE_MEMORY of one 32-bit word: [cid=3][address][length=4][data]. */
@@ -442,28 +504,6 @@ static void wr32le(uint8_t *p, uint32_t v) {
   p[3] = (uint8_t)(v >> 24);
 }
 
-static void wifi_bmi_recv_bytes(WifiShared *w, uint8_t *buf, int len) {
-  WifiCmd t;
-  for (int i = 0; i < 1500; i++) {
-    wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x405));
-    if (t.resp & 0x01u)
-      break;
-    for (volatile int d = 0; d < 300; d++)
-      ;
-  }
-  for (int i = 0; i < len; i++) {
-    wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, WIFI_MBOX0 + i));
-    buf[i] = (uint8_t)(t.resp & 0xFFu);
-  }
-}
-
-static uint32_t wifi_bmi_recv_word(WifiShared *w) {
-  uint8_t b[4];
-  wifi_bmi_recv_bytes(w, b, 4);
-  return (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) |
-         ((uint32_t)b[3] << 24);
-}
-
 static void wifi_bmi_write_mem(WifiShared *w, uint32_t addr, const uint8_t *data,
                                uint32_t len) {
   const uint32_t maxdata = (BMI_MBOX_FIFO - 12u) & ~3u; /* 116 bytes */
@@ -490,7 +530,9 @@ static uint32_t wifi_bmi_execute(WifiShared *w, uint32_t addr, uint32_t param) {
   wr32le(cmd + 4, addr);
   wr32le(cmd + 8, param);
   wifi_bmi_send(w, cmd, 12);
-  return wifi_bmi_recv_word(w);
+  uint32_t v = wifi_bmi_recv_word(w);
+  wifi_bmi_drain(w);
+  return v;
 }
 
 /* Leaves BMI and starts the loaded firmware. */
@@ -505,7 +547,9 @@ static uint32_t wifi_bmi_read_soc(WifiShared *w, uint32_t addr) {
   wr32le(cmd + 0, BMI_READ_SOC_REGISTER);
   wr32le(cmd + 4, addr);
   wifi_bmi_send(w, cmd, 8);
-  return wifi_bmi_recv_word(w);
+  uint32_t v = wifi_bmi_recv_word(w);
+  wifi_bmi_drain(w);
+  return v;
 }
 
 static void wifi_bmi_write_soc(WifiShared *w, uint32_t addr, uint32_t val) {
@@ -557,19 +601,24 @@ static void wifi_bmi_fast_download(WifiShared *w, uint32_t addr,
 
 /* Powers, resets and enumerates the chip. On return BMI and the diagnostic
  * window work. */
-static void wifi_bringup(WifiShared *w) {
+static void wifi_bringup(WifiShared *w, int cold) {
   w->phase = WIFI_PH_NONE;
   w->timeouts = 0;
   w->nlog = 0;
 
   /* Subsystem power. The chip enumerates and answers BMI without it, so it is
-   * easy to miss; the Linux 3DS port sets it before enumerating. */
+   * easy to miss; the Linux 3DS port sets it before enumerating. A cold start
+   * takes it away first, under reset, for a chip that stopped mid-upload. */
   {
     uint8_t before = MMIO8(CFG11_WIFICNT);
+    if (cold) {
+      MMIO16(WIFI_GPIO_WIFI) = (uint16_t)(MMIO16(WIFI_GPIO_WIFI) & ~1u);
+      MMIO8(CFG11_WIFICNT) = (uint8_t)(before & ~0x01u);
+      wifi_ms(50);
+    }
     MMIO8(CFG11_WIFICNT) = (uint8_t)(before | 0x01u);
     w->wificnt = ((uint32_t)before << 8) | MMIO8(CFG11_WIFICNT);
-    for (volatile int d = 0; d < 400000; d++) /* let the rail come up (~4 ms) */
-      ;
+    wifi_ms(cold ? 50u : 4u); /* let the rail come up */
   }
   w->boot_step = WIFI_BOOT_NONE;
   w->boot_exec = 0;
@@ -688,7 +737,10 @@ static void wifi_finish(WifiShared *w) {
 
 static void wifi_probe_run(void) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
-  wifi_bringup(w);
+  g_bmi_abort = 0;
+  w->bmi_polls = 0;
+  w->bmi_extra = 0;
+  wifi_bringup(w, 0);
   wifi_bmi_target_info(w);
 
   /* diag_b reads back 0xCAFEBABE when BMI writes land. */
@@ -716,11 +768,6 @@ static void wifi_probe_run(void) {
  * faster starves the target. */
 #define HTC_TICK_MS    10u
 #define HTC_TICKS(ms)  ((int)((ms) / HTC_TICK_MS))
-
-static void wifi_ms(uint32_t ms) {
-  for (volatile uint32_t d = 0; d < ms * 10000u; d++)
-    ;
-}
 
 /* Reads 0x400-0x40B in one pass, as ath6kl does: host int, cpu int, error,
  * counter, frame, lookahead valid, two more, then the lookahead. Returns 1 with
@@ -767,13 +814,14 @@ static uint32_t htc_pad(uint32_t n) {
 #define WMI_READY_EVENTID          0x1001u
 
 /* Ways to write a frame. HTC_W_BYTE is ath6kl's (the mmc core uses byte mode
- * for a single block); the others are tried if it goes unanswered. */
+ * for a single block); the others are tried if it goes unanswered. The last
+ * two switch the bus to 4-bit first, which is how the Linux port runs. */
 enum {
   HTC_W_BYTE = 0,
-  HTC_W_BYTE_SEC,
   HTC_W_BLOCK,
-  HTC_W_BLOCK_SEC,
   HTC_W_CMD52,
+  HTC_W_BYTE4,
+  HTC_W_BLOCK4,
   HTC_W_COUNT
 };
 
@@ -782,8 +830,8 @@ static int wifi_htc_send(WifiShared *w, uint8_t ep, const uint8_t *payload,
   static uint32_t frame[HTC_FRAME_MAX / 4];
   uint8_t *b = (uint8_t *)frame;
   uint32_t padded = htc_pad(HTC_HDR_LENGTH + len);
-  int block = (style == HTC_W_BLOCK || style == HTC_W_BLOCK_SEC);
-  int secure = (style == HTC_W_BYTE_SEC || style == HTC_W_BLOCK_SEC);
+  int block = (style == HTC_W_BLOCK || style == HTC_W_BLOCK4);
+  int secure = 0;
 
   if (padded > HTC_FRAME_MAX)
     return -1;
@@ -963,8 +1011,27 @@ static void wifi_htc_connect(WifiShared *w) {
       wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x408 + i));
       look |= (t.resp & 0xFFu) << (i * 8);
     }
-    w->htc_regs2 = his | (err << 16) | (lav << 24);
     w->htc_look2 = look;
+    (void)his;
+    (void)err;
+    (void)lav;
+  }
+
+  /* CCCR after boot: I/O enable, I/O ready, bus width and the function-1 block
+   * size low byte. Enumeration leaves 0x02, 0x02, 0x00, 0x80. */
+  {
+    WifiCmd t;
+    uint32_t v = 0;
+    wifi_cmd(w, &t, WCMD52, WCMD52_RD(0, 0x02));
+    v |= t.resp & 0xFFu;
+    wifi_cmd(w, &t, WCMD52, WCMD52_RD(0, 0x03));
+    v |= (t.resp & 0xFFu) << 8;
+    wifi_cmd(w, &t, WCMD52, WCMD52_RD(0, 0x07));
+    v |= (t.resp & 0xFFu) << 16;
+    wifi_cmd(w, &t, WCMD52, WCMD52_RD(0, 0x110));
+    v |= (t.resp & 0xFFu) << 24;
+    w->htc_regs2 = v;
+    dcache_clean();
   }
 
   /* ath6kl does host-side work here; give the firmware the same time. */
@@ -1002,14 +1069,19 @@ static void wifi_htc_connect(WifiShared *w) {
   for (int style = 0; style < HTC_W_COUNT && mode < 0; style++) {
     WifiCmd t;
     uint32_t his, err, lav, frm;
+    int refused;
 
+    if (style == HTC_W_BYTE4)
+      wifi_bus_width(w, 1);
     for (uint32_t i = 0; i < sizeof(msg); i++)
       msg[i] = 0;
-    if (wifi_htc_send(w, HTC_EP0, req, 8, style) != 0)
+    refused = wifi_htc_send(w, HTC_EP0, req, 8, style) != 0;
+    if (refused)
       w->htc_err |= 1u << style;
     len = wifi_htc_recv(w, msg, sizeof(msg),
-                        style == HTC_W_BYTE ? HTC_TICKS(2000)
-                                            : HTC_TICKS(500));
+                        (style == HTC_W_BYTE || style == HTC_W_BYTE4)
+                            ? HTC_TICKS(2000)
+                            : HTC_TICKS(500));
     w->htc_msg0 = (uint32_t)msg[0] | ((uint32_t)msg[1] << 8) |
                   ((uint32_t)msg[2] << 16) | ((uint32_t)msg[3] << 24);
     w->htc_try = (uint32_t)(style + 1);
@@ -1022,7 +1094,8 @@ static void wifi_htc_connect(WifiShared *w) {
     lav = t.resp & 0xFFu;
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x404));
     frm = t.resp & 0xFFu;
-    w->htc_snap[style] = his | (err << 8) | (lav << 16) | (frm << 24);
+    w->htc_snap[style] = refused ? (0x80000000u | g_cmd53_stat)
+                                 : (his | (err << 8) | (lav << 16) | (frm << 24));
     dcache_clean();
 
     if (len >= 8u &&
@@ -1121,6 +1194,9 @@ static void wifi_boot_firmware(WifiShared *w, uint32_t opts) {
   wifi_bmi_write_soc(w, 0x000180C0u, old_scratch | 0x8u);
   old_sleep = wifi_bmi_read_soc(w, 0x000040C4u);
   wifi_bmi_write_soc(w, 0x000040C4u, old_sleep | 0x1u);
+  w->soc_scratch = old_scratch;
+  w->soc_sleep = old_sleep;
+  dcache_clean();
   wifi_bmi_write_soc(w, 0x00004028u, 0x5u);
   wifi_bmi_write_soc(w, 0x00004020u, 0x0u);
   for (volatile int d = 0; d < 2000000; d++) /* clock stabilise (~20 ms) */
@@ -1169,9 +1245,13 @@ static void wifi_boot_firmware(WifiShared *w, uint32_t opts) {
     wifi_bmi_write_word(w, AR6014_HI + 0x18u, AR6014_PARTB_DST);
   }
   if (opts & WIFI_OPT_RESTORE_SOC) {
-    /* nocash's sdio_bmi_finish puts the sleep and scratch registers back the
-     * way the target had them before handing over. */
-    wifi_bmi_write_soc(w, 0x000040C4u, old_sleep & ~0x1u);
+    /* nocash's sdio_bmi_finish restores the scratch register and lets the chip
+     * sleep (bit 0 clear). The ROM leaves sleep disabled, and a chip that
+     * dozes between our slow-bus commands stops answering, so it stays awake
+     * unless WIFI_OPT_SLEEP_ON asks for nocash's value. */
+    uint32_t sleep = (opts & WIFI_OPT_SLEEP_ON) ? (old_sleep & ~0x1u)
+                                                : (old_sleep | 0x1u);
+    wifi_bmi_write_soc(w, 0x000040C4u, sleep);
     wifi_bmi_write_soc(w, 0x000180C0u, old_scratch);
   }
   wifi_bmi_write_word(w, AR6014_HI + 0x6Cu, 0x80u);
@@ -1201,8 +1281,12 @@ static void wifi_boot_run(uint32_t opts) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
   w->boot_opts = opts;
   g_bmi_abort = 0;
-  g_bmi_consec_nc = 0;
-  g_nc_hi = g_nc_stub = g_nc_main = 0;
+  w->bmi_polls = 0;
+  w->bmi_extra = 0;
+  w->bmi_bc = 0;
+  w->soc_sleep = 0;
+  w->soc_scratch = 0;
+  w->hb = 0;
   w->boot_step = WIFI_BOOT_NONE;
   w->boot_exec = 0;
   w->boot_ready = 0;
@@ -1240,20 +1324,19 @@ static void wifi_boot_run(uint32_t opts) {
   w->fail_at = 0;
   for (int i = 0; i < 5; i++)
     w->htc_snap[i] = 0;
-  wifi_bringup(w);
+  wifi_bringup(w, 0);
   wifi_boot_firmware(w, opts);
 
-  /* A stalled upload is retried; the reset in wifi_bringup restarts BMI. */
+  /* A stalled upload is redone once, from a cold start. */
   if (w->boot_ready != 1) {
     w->boot_tries = 2;
     g_bmi_abort = 0;
-    g_bmi_consec_nc = 0;
-    g_nc_hi = g_nc_stub = g_nc_main = 0;
     w->bmi_sends = 0;
     w->bmi_nocred = 0;
-    w->fw_chk = 0;
+    w->bmi_polls = 0;
+    w->bmi_extra = 0;
     dcache_clean();
-    wifi_bringup(w);
+    wifi_bringup(w, 1);
     wifi_boot_firmware(w, opts);
   }
   wifi_finish(w);

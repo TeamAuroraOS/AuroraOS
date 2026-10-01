@@ -705,15 +705,15 @@ static void wifitest_draw(const WifiShared *w) {
   }
 
   if (w->boot_step != WIFI_BOOT_NONE) {
-    p = snd_cpy(line, "a ");
-    snd_hex(num, w->htc_regs2);
-    p = snd_cpy(p, num);
-    p = snd_cpy(p, " fw ");
-    snd_hex(num, w->fw_sum);
-    p = snd_cpy(p, num);
-    p = snd_cpy(p, " ck ");
-    snd_hex(num, w->clkcnt);
-    snd_cpy(p, num);
+    p = snd_cpy(line, "hb ");
+    snd_hex(num, w->hb);
+    p = snd_cpy(p, num + 2);
+    p = snd_cpy(p, " sl ");
+    snd_hex(num, w->soc_sleep);
+    p = snd_cpy(p, num + 2);
+    p = snd_cpy(p, " sc ");
+    snd_hex(num, w->soc_scratch);
+    snd_cpy(p, num + 2);
     draw_string(VRAM_BOT_A, 8, 122, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
                COLOR_HM_BG);
 
@@ -723,9 +723,9 @@ static void wifitest_draw(const WifiShared *w) {
     *p++ = '/';
     wifi_hex4(num, w->htc_drained >> 16);
     p = snd_cpy(p, num);
-    p = snd_cpy(p, " got ");
-    snd_hex(num, w->htc_msg0);
-    p = snd_cpy(p, num);
+    p = snd_cpy(p, " cc ");
+    snd_hex(num, w->htc_regs2);
+    p = snd_cpy(p, num + 2);
     p = snd_cpy(p, " t ");
     snd_u32(num, w->htc_try);
     p = snd_cpy(p, num);
@@ -736,24 +736,38 @@ static void wifitest_draw(const WifiShared *w) {
                COLOR_HM_BG);
 
     p = snd_cpy(line, "tr ");
-    snd_hex(num, w->trace);
+    snd_u32(num, w->trace >> 24);
+    p = snd_cpy(p, num);
+    *p++ = '/';
+    snd_u32(num, w->trace & 0xFFFFu);
     p = snd_cpy(p, num);
     p = snd_cpy(p, " f ");
     wifi_hex4(num, w->fail_cmd);
     p = snd_cpy(p, num);
     *p++ = ' ';
     snd_hex(num, w->fail_stat);
-    p = snd_cpy(p, num);
+    p = snd_cpy(p, num + 2);
     p = snd_cpy(p, " @");
-    snd_hex(num, w->fail_at);
-    snd_cpy(p, num + 4); /* the low 24 bits: the send count */
+    snd_u32(num, (w->fail_at >> 28) & 0xFu);
+    p = snd_cpy(p, num);
+    *p++ = ':';
+    snd_u32(num, w->fail_at & 0xFFFFFFu);
+    p = snd_cpy(p, num);
+    p = snd_cpy(p, " x ");
+    snd_u32(num, w->bmi_extra);
+    p = snd_cpy(p, num);
+    *p++ = '/';
+    snd_u32(num, w->bmi_bc);
+    snd_cpy(p, num);
     draw_string(VRAM_BOT_A, 8, 108, BOT_SCREEN_HEIGHT, line, COLOR_HM_TEXT2,
                COLOR_HM_BG);
 
+    /* The CMD53 write styles; style 2 is CMD52. */
+    static const int styles[4] = {0, 1, 3, 4};
     p = snd_cpy(line, "s ");
-    for (int i = 0; i < 3; i++) {
-      snd_hex(num, w->htc_snap[i]);
-      p = snd_cpy(p, num + 2); /* without the "0x", to fit three */
+    for (int i = 0; i < 4; i++) {
+      snd_hex(num, w->htc_snap[styles[i]]);
+      p = snd_cpy(p, num + 2);
       *p++ = ' ';
     }
     *p = 0;
@@ -829,11 +843,9 @@ static void wifitest_draw(const WifiShared *w) {
       snd_u32(num, w->boot_tries);
       p = snd_cpy(p, num);
     }
-    if (w->fw_chk) {
-      p = snd_cpy(p, " p ");
-      snd_hex(num, w->fw_chk);
-      p = snd_cpy(p, num);
-    }
+    p = snd_cpy(p, " pl ");
+    snd_u32(num, w->bmi_polls);
+    p = snd_cpy(p, num);
     *p = 0;
     Color bc = w->boot_ready == 1  ? COLOR_AURORA
                : (bs == WIFI_BOOT_NOFW || bs == WIFI_BOOT_BADVER) ? COLOR_ORANGE
@@ -950,10 +962,12 @@ static void wifi_test_screen(void) {
       wifitest_draw(&w);
     }
     if (k & BUTTON_X) {
-      /* 3 (default): the Linux sequence plus ath6kl's interrupt disable. */
+      /* 3 (default): the Linux sequence plus ath6kl's interrupt disable, with
+       * the chip kept awake; 11 is the same but lets it sleep, as nocash does. */
       static const u32 presets[] = {WIFI_OPT_RESTORE_SOC | WIFI_OPT_NO_POST_LZ,
                                     WIFI_OPT_LINUX,
-                                    WIFI_OPT_RESTORE_SOC,
+                                    WIFI_OPT_RESTORE_SOC | WIFI_OPT_NO_POST_LZ |
+                                        WIFI_OPT_SLEEP_ON,
                                     0};
       wifi_preset = (wifi_preset + 1) % 4;
       wifi_opts = presets[wifi_preset];
