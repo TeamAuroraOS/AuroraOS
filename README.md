@@ -35,7 +35,7 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.1.**
 | Console model | working | New/Old from CFG11_SOCINFO; "N" in the status bar |
 | Crash handler | working | register dump plus a three-beep error tone on a fault |
 | Apps ([Auric](auric-lang/README.md)) | working | sound from the SD card; see [`docs/apps.md`](docs/apps.md) |
-| Wi-Fi | in progress | chip enumerates, firmware boots and has sent HTC_READY; fixing an upload regression, then the HTC handshake: [`docs/wifi.md`](docs/wifi.md) |
+| Wi-Fi | paused | chip enumerates, firmware uploads, boots and sends HTC_READY; stops at the HTC connect: [`docs/wifi.md`](docs/wifi.md) |
 
 The UI renders into a cached FCRAM backbuffer and the GPU moves each finished
 screen to the panel in one blit, rather than rasterising straight into uncached
