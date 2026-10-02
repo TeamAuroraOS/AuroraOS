@@ -3,17 +3,14 @@
 #ifndef AURIC_RUNTIME_H
 #define AURIC_RUNTIME_H
 
-/* print(text, x, y, color): draw text on the top screen at (x, y). */
 void aur_print(const char *text, int x, int y, int color);
 /* clear(color): fill the top screen and remember `color` as the text bg. */
 void aur_clear(int color);
-/* fill_rect(x, y, w, h, color): fill a rectangle on the top screen. */
 void aur_fill_rect(int x, int y, int w, int h, int color);
 /* wait_key(button): block until `button` is newly pressed. */
 void aur_wait_key(int button);
 /* delay(cycles): busy-wait for roughly `cycles` iterations. */
 void aur_delay(int cycles);
-/* print_int(value, x, y, color): draw a signed decimal number at (x, y). */
 void aur_print_int(int value, int x, int y, int color);
 /* keys_down(): buttons newly pressed since the last call (edge). */
 int aur_keys_down(void);
@@ -37,7 +34,6 @@ int aur_load_sound(const char *path);
 void aur_play_sound(int handle);
 /* play_music(handle): loop on the music voice, replacing what was there. */
 void aur_play_music(int handle);
-/* stop_music(): silence the music voice. */
 void aur_stop_music(void);
 /* stop_sounds(): silence every effect voice; the music keeps playing. */
 void aur_stop_sounds(void);
