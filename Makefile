@@ -154,7 +154,8 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_rendertest.o \
            $(BUILD_DIR)/os_statusbar.o $(BUILD_DIR)/os_fileview.o \
            $(BUILD_DIR)/os_fileops.o $(BUILD_DIR)/os_screenshot.o \
-           $(BUILD_DIR)/os_touchcal.o            $(BUILD_DIR)/os_terminal.o $(BUILD_DIR)/os_termcmds.o
+           $(BUILD_DIR)/os_touchcal.o $(BUILD_DIR)/os_terminal.o \
+           $(BUILD_DIR)/os_termcmds.o $(BUILD_DIR)/os_anim.o
 
 CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
@@ -273,6 +274,10 @@ $(BUILD_DIR)/os_terminal.o: $(OS_DIR)/Terminal.c $(OS_DIR)/term.h $(wildcard $(I
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_termcmds.o: $(OS_DIR)/TermCmds.c $(OS_DIR)/term.h $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_anim.o: $(OS_DIR)/Anim.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
