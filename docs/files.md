@@ -74,36 +74,42 @@ there.
 
 ## Redrawing
 
-Moving the cursor repaints two list rows and the two boxes on the top screen,
-not the screens. The first version redrew everything, which meant repainting
-both backgrounds (a gradient pass plus a wallpaper blend pass over 400x240 and
-320x240) on every keypress; it was about 497,000 pixels against the home menu's
-41,000, and it showed.
+A cursor move starts animations rather than repainting in place. The selection
+ring glides to the new row, and the list scrolls when the window has to move;
+each frame repaints the bottom screen from the cached wallpaper, one GPU copy,
+then the rows and the ring. Rows scrolling past either end go under the path bar
+and the footer, which are repainted over them. On the top screen only the icon
+and the card change, and they cross-fade. Entering a folder slides the new
+listing in from the right and going up slides it in from the left; dialogs and
+the X menu fade in and out. The details are in [`ui.md`](ui.md).
 
-Two things make the small redraw exact rather than approximate:
+The first version redrew everything with the CPU on every keypress, both
+backgrounds included (a gradient pass plus a wallpaper blend pass over 400x240
+and 320x240): about 497,000 pixels against the home menu's 41,000, and it
+showed. With the wallpaper back as one GPU copy, a full repaint costs only the
+rows.
+
+Two things still matter for anything redrawn in place, such as the top card
+and the hex editor's panels:
 
 * `ui_patch_round_rect` erases only what an opaque rounded rect will not cover
-  when it is redrawn in place: a frame around it, for a selection ring that has
-  to go, plus its own corners. Corners are alpha-blended, so redrawing one over
-  its own last frame lets it creep toward the fill; left alone, a widget's
-  corners visibly harden after a few dozen selection changes.
-* Rows must not overlap. At `ROW_STEP` 34 and `ROW_H` 30 the selection ring can
-  be at most 2px wide; a 3px ring made consecutive rows overlap by 2 pixels,
-  which made the result depend on the order rows were drawn in, so a two-row
-  update no longer matched a full redraw. That was caught by rendering both
-  paths and comparing them pixel for pixel.
+  when it is redrawn: a frame around it, plus its own corners. Corners are
+  alpha-blended, so redrawing one over its own last frame lets it creep toward
+  the fill; left alone, a widget's corners visibly harden after a few dozen
+  redraws.
+* The erase must copy the real background. A flat colour standing in for the
+  wallpaper leaves a visible box.
 
-The same split was applied to the setup wizard, which used to clear the whole
-bottom screen on every input. Its widgets sit on a flat background, so
-`patch_corners` there is a plain fill rather than a wallpaper patch.
+The setup wizard still repaints only what changed. Its widgets sit on a flat
+background, so `patch_corners` there is a plain fill rather than a wallpaper
+patch.
 
-| Interaction | Before | After |
+| Setup wizard interaction | Before | After |
 |---|---|---|
-| Explorer, cursor move | 497,360 px | 73,892 px |
-| Setup: language | 119,256 px | 30,616 px |
-| Setup: keyboard key | 117,816 px | 1,404 px |
-| Setup: accent swatch | 107,104 px | 10,944 px |
-| Setup: user/date field | 103,440 px | 7,072 px |
+| Language | 119,256 px | 30,616 px |
+| Keyboard key | 117,816 px | 1,404 px |
+| Accent swatch | 107,104 px | 10,944 px |
+| User/date field | 103,440 px | 7,072 px |
 
 ## What each file is
 

@@ -122,15 +122,159 @@ Every wait is bounded (`GPU_POLL_MAX`), so a wedged engine costs one failed
 operation rather than hanging the ARM11, which must keep polling the
 touchscreen.
 
+## Presenting without tearing
+
+A copy into the framebuffer the LCD is scanning shows half of the old frame and
+half of the new one whenever it lands mid-scan. Copies made every 16 ms against
+a 16.7 ms refresh put that seam in a slightly different place each frame, so it
+crawls steadily across the panel: the "wipe" the first animated builds showed.
+
+Each panel's LCD controller (PDC, ARM11 I/O at `0x10400400` for the top screen
+and `0x10400500` for the bottom) scans the framebuffer named in one of two
+address slots, `+0x68` and `+0x6C`; the top screen's right eye has its own pair
+at `+0x94` and `+0x98`. The swap register at `+0x78` selects the slot in bit 0
+and holds the controller's interrupt flags in bits 16-18 (hblank, vblank,
+error), cleared by writing ones; the control register at `+0x74` masks them
+(`0x00010501` on the console tested: vblank on, the other two off). That is the
+layout libn3ds programs.
+
+### How a present waits
+
+The ARM11 runs with interrupts masked, so it watches for the vertical blank by
+polling. Two ways are tried:
+
+| Method | What signals a blank |
+|--------|----------------------|
+| `GPU_VSYNC_GIC` | interrupt 42 (top) or 43 (bottom) pending in the ARM11's interrupt distributor (`0x17E01200`), cleared at `0x17E01280` |
+| `GPU_VSYNC_IRQ` | bit 17 of the panel's swap register |
+| `GPU_VSYNC_OFF` | nothing: frames are copied straight into framebuffer A |
+
+`anim_vsync_setup()` (src/os/Anim.c), run at boot, asks the core to wait four
+blanks of each panel by each method (`GPU_OP_VSYNC_TEST`) and times it with
+the ARM9 timer. Four real blanks take 50 to 67 ms; a flag that is always set
+finishes far sooner and one that never comes times out. The first method that
+takes 39 to 160 ms is kept (`GPU_OP_VSYNC_SET`). The choice lives in the core
+and stays through later `GPU_OP_INIT`s, so after a HOME return a panel that
+already has one is not measured again (GPU Test says `kept`); **A** on GPU
+Test measures regardless. Turning the distributor on to see the pending bit delivers
+nothing to the core, since its interrupts stay masked.
+
+### Three framebuffers per panel
+
+| Panel | A | B | C |
+|-------|---|---|---|
+| top | `0x18300000` | `0x18400000` | `0x18500000` |
+| bottom | `0x18346500` | `0x18446500` | `0x18546500` |
+
+A panel with a method is triple buffered. `GPU_OP_PRESENT` copies the frame
+into the framebuffer that is neither on screen nor was on screen before it,
+waits for a blank, then writes that framebuffer's address into both address
+slots (and both right-eye slots) and toggles the slot select. Writing both slots
+means it does not matter which one the controller reads; the toggle covers a
+controller that only reloads an address when the select changes.
+
+Whether the controller takes a new address at once, at the start of the next
+frame or a blank later, the framebuffer being written is never one it can still
+be scanning: the one shown before last was replaced at least one blank ago. The
+copy can take as long as it likes and the blank can be caught late without a
+tear; the worst a late switch does is show a frame a refresh late.
+
+`GPU_OP_PRESENT2` (`gpu_present2_async()`, used through `anim_present()`) copies
+both panels' frames, then watches both blanks together and switches each panel
+at its own, so an animation that redraws both screens still gets a frame per
+refresh. Presents that wait also pace the animation loops to the display.
+
+`GpuShared.vsync` holds each panel's method and `GpuShared.front` the
+framebuffer with its newest frame, in a cache line the ARM9 never writes;
+`gpu_vsynced()` and `gpu_front()` read them. `vs_presents` and `vs_missed`
+count the presents since the method was set and those that found no blank;
+`vs_swap` and `vs_cnt` keep the swap and control registers as the last test
+found them (not shown any more; `gpu_init()` clears them).
+
+### Framebuffer A stays the one to draw to
+
+Everything that draws to a panel without presenting draws to A, so:
+
+- `GPU_OP_SHOW_A` (`gpu_show_a()`) copies the newest frame into A if it is in
+  B or C and points the controller at A, after a blank in case A was on screen
+  just before. `GPU_OP_INIT` does the same. The OS runs it before it starts an
+  app, and the core runs it before it parks for another core, whose OS may not
+  know about B and C.
+- The crash screen, drawn by the ARM9 with nothing it can trust to present it,
+  is copied into B and C as well.
+- Screenshots and transition snapshots read the framebuffer `gpu_front()`
+  names, and the drawing code takes any of the top framebuffers as 400 pixels
+  wide (`screen_fb_width()`).
+
+### History
+
+- Core 98 flipped between A and B with the slot select and waited for bit 4 of
+  the swap register, which libn3ds calls the slot being scanned, to follow. It
+  never did on the console tested, and the bottom screen kept tearing.
+- Core 99 measured each method at boot. The distributor answered on both
+  panels (86 and 95 ms for six blanks); swap bit 4 never followed and the IRQ
+  method, then reading bit 16 (the masked hblank flag), timed out. Presents
+  waited for the blank and copied into A, which the copy outruns. The bottom
+  screen still tore after a cold boot, yet not after an app had been opened
+  and closed, which this did not explain.
+- Core 100 stops writing to a framebuffer that could be on screen, reads the
+  vblank flag at bit 17, and counts presents and missed blanks on the GPU Test
+  screen. It still tore after a cold boot, and GPU Test then read `Movement
+  only, no GPU frames` with every vsync value empty: the OS had never got the
+  GPU. `gpu_init()` gave up (its wait is about a second) while the newly loaded
+  core was still initialising the codec, so the whole session drew straight
+  into the scanned framebuffer. After an app, the core was already running and
+  answered at once, which is why opening and closing one cured it. The tearing
+  reports up to here were all that, not the present path. Fixed in the OS by
+  waiting for the core (above). On the next cold boot GPU Test read `Core
+  answered after 8178 ms, GPU from 8281 ms` with no missed blanks and no
+  tearing.
+- Core 101 times the core's start-up delays with a hardware timer (see
+  [`audio.md`](audio.md) "A core's start-up"): `Core answered after 1308 ms,
+  GPU at boot`, and a boot timed with a stopwatch from the firm's Boot entry
+  went from about 17 to about 14 seconds.
+- The boot timing then showed where the rest went. The firm's loader paused on
+  "Jumping -> ..." with `delay(20000000)`, which with the ARM9 caches off was
+  about 11 seconds; without it the stopwatch read about 2.6 s from Boot and 4 s
+  from the power button through Luma's chainloader. GPU Test then read `Boot
+  3070 ms: core 15, clock 1933, wait 0, gpu 67 / ui 121, vsync 196, config 6,
+  bg 130, apps 10, menu 586`, so the RTC calibration (`clock`) went too, the
+  asset pack now loads while the core starts, and the vsync test waits four
+  blanks rather than six. After that: `Boot 1507 ms: core 311, ui 121, wait
+  130, gpu 71 / vsync 120, config 7, bg 131, apps 11, menu 601`, the core
+  answering 265 ms after it was woken, and a stopwatch reading of about 1.2 s
+  from the firm's Boot entry and 3.5 s from Luma's chainloader. `core` was
+  15 ms on another cold boot; 311 is most likely a magic left in FCRAM by the
+  previous session, which makes `audio_boot()` wait out its ack timeout
+  (about 300 ms) before loading the core.
+
+**Settings > GPU Test** lists, on the top screen, each panel's method with what
+the methods tried measured, for example `Vsync: top gic (gic 86)  Bottom gic
+(gic 95)`, where `-` is a timeout; then the present counts, for example
+`Presents: top 1520 (0 missed)  bottom 2210 (0 missed)`; then the last
+transition, with how many of its copies the CPU had to do and why the GPU
+refused the last (`gpu_last_fail()`: not ready, bad request, timeout, busy, or
+no answer when the core did not reply in time); then two lines of how long each
+step of the boot took, in milliseconds from `os_main()` to the first Home Menu
+frame (`core` loading the ARM11 core, `ui` the asset pack, `wait` for the
+core to answer, `gpu`, `vsync` the measurements, `config` USER.dat or the setup
+wizard, `bg` the wallpaper, `apps` the app scan, `menu` the first draw and its
+fade); and last how long the core took to answer
+after it was woken and whether the GPU came up with the boot, for example
+`Core answered after 1308 ms, GPU at boot`, or `Core already running` after a
+HOME return. Opening the screen leaves all of it as the boot set it; **A**
+measures again and restarts the counts.
+
 ## GPU Test screen
 
 **Settings > GPU Test.**
 
 - **A**: run `GPU_OP_INIT`: enable clocks, quiesce inherited engine state, read
-  the hardware ID.
-- **X**: PSC fill of the top framebuffer, cycling through three colours.
+  the hardware ID; then measure the vsync methods again.
+- **X**: PSC fill of the top framebuffer on screen, cycling through three
+  colours.
 - **Y**: paint a gradient into the VRAM scratch bank with the CPU, then blit it
-  to the top framebuffer with the PPF.
+  to the top framebuffer on screen with the PPF.
 - **B**: back.
 - **L**: benchmark. Reports, in real microseconds, the cost of one GPU round
   trip, a whole-screen PSC fill, the CPU filling the same screen, and a present.
@@ -281,10 +425,16 @@ construction, rather than by auditing 43 present call sites.
 
 Two traps found while doing this, both worth knowing:
 
-* `timer_ready()` is not a query. It restarts the timer and recalibrates
-  against the real-time clock, which blocks across two RTC second boundaries.
-  Calling it per frame would have frozen the UI outright. `timer_calibrated()`
-  is the cheap check; calibration happens once at start-up.
+* `timer_ready()` used to calibrate the timer against the real-time clock,
+  blocking across two RTC second boundaries, so calling it per frame would
+  have frozen the UI outright. An RTC read that failed or returned a bad date
+  ended a wait early and gave a short count, which once left the timer at a
+  nonsense rate and switched animation off. The timer runs from the fixed
+  67.027964 MHz bus clock divided by 1024, and five calibrations on hardware
+  read 65,441 to 65,477 Hz around the nominal 65,457: the RTC's own jitter.
+  Since the boot timing showed it cost 1.9 s, `timer_ready()` just starts the
+  timer and uses the nominal rate. `timer_calibrated()` remains the cheap
+  check that it has.
 * `GpuShared.seq` is written by the ARM11, so a clean cannot refresh it. Reading
   it after switching from clean-and-invalidate to clean-only latched a stale
   value, and the first completion check then passed against an operation that
@@ -354,6 +504,15 @@ GPU failure leaves the original direct-to-VRAM path intact. Enabling it seeds th
 backbuffers from the current panel contents, so a screen that only redraws part
 of itself cannot flash uninitialised memory.
 
+`gpu_init()` needs the ARM11 core to take requests, and a freshly loaded core
+does not until it has initialised the codec and the touchscreen (see
+[`audio.md`](audio.md) "A core's start-up"). The boot therefore wakes the core,
+loads the asset pack while it starts, and then waits up to `CORE_WAIT_MS`
+(3 s) for it to answer before `gpu_init()`. If it is still busy, the Home Menu loop calls `os_gpu_late()`
+between frames, which brings the GPU, the backbuffers, transitions and vsync
+up as soon as it answers (at most three tries). Until then everything draws
+straight to VRAM.
+
 `screen.c` is linked into the FIRM payload as well as the OS, and the FIRM has no
 ARM11 core. The present therefore goes through the `g_screen_blit` hook, which
 the OS points at `gpu_texcopy()`; when it is NULL the present falls back to a CPU
@@ -371,11 +530,11 @@ only when the Home Menu did the launching, since that is what guarantees the
 ARM11 core is up. A directly booted app keeps the CPU copy rather than stalling
 on a GPU that will never reply. See `auric-lang/docs/language.md`.
 
-Shapes are drawn by coverage rather than a hard in/out test: `draw_pixel_alpha`
-blends into what is already there, and the rounded-corner and upscaled-bitmap
-paths in `src/screen.c` use it, which is what removed the stair-stepping. Panels
-are filled with `draw_vgradient` / `draw_gradient_round_rect` instead of flat
-colour.
+Shapes are drawn by coverage rather than a hard in/out test: a pixel on an edge
+is blended into what is already there by how much of it the shape covers, which
+is what removed the stair-stepping. Panels are filled with `draw_vgradient` /
+`draw_gradient_round_rect` instead of flat colour. How the rounded rects work,
+and the animation built on top of this path, is in [`ui.md`](ui.md).
 
 Icons and text no longer scale at all. They are pre-rendered at the exact size
 the UI draws them and blitted 1:1 from the SD asset pack; see
@@ -391,8 +550,8 @@ six for a coverage blit. Supersampling would have been worse still and no
 sharper, because at an integer scale every subsample of a destination pixel
 falls inside the same source pixel, so coverage only ever comes out 0 or full.
 
-Rounded corners are now table-driven. Coverage inside a corner depends only on
-the radius, so it is computed once per radius and cached (`corner_table` in
+Rounded corners are table-driven. Coverage inside a corner depends only on the
+radius, so it is computed once per radius and cached (`round_tab` in
 `src/screen.c`). It used to call `isqrt32`, a 16-iteration loop, once per corner
 pixel: a settings row draws a radius-10 ring and a radius-8 card, about 650
 isqrt calls, so a six-row redraw spent roughly 63,000 loop iterations on corners
@@ -427,7 +586,7 @@ a label each, and presents through the normal async path, so it measures what
 the Home Menu does rather than a raw fill. The bottom screen shows the running
 numbers four times a second, and B stops early.
 
-Frames are counted per second of the calibrated timer, and each sample is
+Frames are counted per second of the timer, and each sample is
 divided by the microseconds that second really spanned, so a frame straddling
 the boundary does not skew it. The result is the mean of those samples; the
 bottom screen adds the min, max, total frames and elapsed time.

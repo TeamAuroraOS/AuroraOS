@@ -70,10 +70,11 @@ audio was working. It is worth knowing how it went, because the same approach
 applies to any register whose effect cannot be read back:
 
 * Play a tone of an exactly known length and time it against the MCU real-time
-  clock. An ARM9 hardware timer does the counting, calibrated against one RTC
-  second first, so the figure depends on no clock constant in this tree
-  (`src/os/Timer9.c` still provides this). A ratio other than 1.0 is the factor
-  by which the sample clock differs from what the divider assumes.
+  clock, counting with an ARM9 hardware timer over one RTC second, so the
+  figure depends on no clock constant in this tree. (`src/os/Timer9.c` no
+  longer calibrates against the RTC; the RTC loop it used is in the history of
+  that file.) A ratio other than 1.0 is the factor by which the sample clock
+  differs from what the divider assumes.
 * Sweep every unclaimed offset in the channel block, writing the divider plain
   and two's-complement, timing each. The offset that yields the expected length
   is the register. That is what identified `+0x02` two's-complement.
@@ -132,6 +133,30 @@ when an app returns, so an app's music cannot play on over memory the OS has
 taken back. Voices arrived with core version 82; an older core acknowledges both
 commands without acting on them, and apps stay silent. The next section is how
 an older core gets replaced.
+
+## A core's start-up
+
+A core sets its magic first thing, then initialises the codec (a soft reset
+and about 90 ms of settle delays) and the touchscreen, and only then reaches
+the loop that takes requests. So the magic only says the core is alive:
+`audio_ready()` posts `AUDIO_CMD_NONE` and reports when it is taken, without
+blocking, and `audio_wait_ready(ms)` waits for that. `audio_ready_ms()` is how
+long it took from waking the core, shown on Settings > GPU Test. A core that
+was already running counts as ready at once.
+
+The ARM11 runs without its caches, so every instruction comes from FCRAM and a
+nop loop runs about 80 times slower than one sized for a cached core. Up to
+core 100 the settle delays were such loops (`spin(300000)` per millisecond):
+GPU Test reported `Core answered after 8178 ms` on a cold boot, eight seconds
+with no touch, no sound and, until the OS learned to wait, no GPU. From core
+101 `sleep_ms()` (src/os/Core11.c) counts on the core's MPCore private timer
+(`0x17E00600`, one-shot, half the CPU clock). It assumes the New 3DS's
+804 MHz so a wait is never short; at 268 MHz it waits three times as long,
+about a third of a second for the whole start-up. If the timer is found not
+to count, it falls back to the old loop. The GPU's clock-up wait in
+`GPU_OP_INIT` uses it too. On the console tested the core then answered within
+the boot's timer calibration (1.3 to 1.9 s, since removed); without it, a cold
+boot read `Core answered after 265 ms`.
 
 ## Replacing a running core
 

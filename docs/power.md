@@ -124,10 +124,21 @@ unaffected. The CID is kept after the first read, which costs a few
 milliseconds. The bytes are shown in the order GodMode9 prints them, so the two
 can be compared directly.
 
-## Known caveat: RTC offset
+## Clock offset
 
-Aurora reads the hardware RTC directly. The stock 3DS system software stores a
-*offset* in its configuration and displays `RTC + offset`, so Aurora's clock can
-disagree with what System Settings shows even though the hardware register is
-being read correctly. Reading the raw RTC is the right foundation; applying or
-editing an offset would be a separate feature.
+Aurora reads the hardware RTC and never writes it: the only MCU registers it
+writes are `0x20` and `0x22`, to power off. The 3DS's own software never sets
+the RTC from System Settings either. It keeps an *offset* in its encrypted
+configuration and shows `RTC + offset`, so the raw RTC can be hours away from
+the time the 3DS menu shows. An RTC that runs on UTC, for example, reads four
+hours ahead of US Eastern Daylight Time.
+
+Aurora cannot read that offset, so it keeps its own. **Settings > Clock** shows
+the time with Hour and Minute boxes: Up and Down change the focused box, Left
+and Right move between them, X goes back to the raw RTC, A keeps the change and
+B drops it. The change shows in the status bar at once. It is stored in
+`SD:\Aurora\USER.dat` at offset 49 as minutes (little-endian int16, zero in
+older files), wraps to between 12 hours behind and 14 ahead, and is applied
+inside `rtc_read()` (`g_rtc_offset`, carried through the day, month and year),
+so the status bar, the terminal's `date` and screenshot names all agree. The
+RTC itself, and with it the 3DS's own clock, is left as it was.
