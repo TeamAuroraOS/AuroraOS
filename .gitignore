@@ -40,3 +40,6 @@ Thumbs.db
 
 # Windows generated files
 desktop.ini
+
+# Local briefing, kept off GitHub
+CONTEXT.md
