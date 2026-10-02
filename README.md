@@ -28,11 +28,12 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.2.**
 | Images | working | BMP, PNG and baseline JPEG, scaled to fit |
 | WAV playback | working | 8/16-bit PCM, mono or stereo (MP3 not yet) |
 | Display | working | GPU-composited; see [`docs/gpu.md`](docs/gpu.md) |
+| Animations | working | screens slide over each other with parallax, dialogs pop up, the selection springs, tiles lift and lists scroll; each screen is triple buffered and switches frames at the vertical blank, without tearing; see [`docs/ui.md`](docs/ui.md) |
 | GPU (PICA200) | working | PSC fill + PPF blit, verified on hardware |
 | Audio | working | ARM11 CSND core, eight voices for apps; see [`docs/audio.md`](docs/audio.md) |
 | Touchscreen | working | CTR codec on the ARM11, with calibration in Settings |
 | ARM11 core updates | working | a core from another build is swapped out without a power-off, from core 83 on; see [`docs/audio.md`](docs/audio.md) |
-| Clock + battery | working | MCU over I2C; see [`docs/power.md`](docs/power.md) |
+| Clock + battery | working | MCU over I2C, with Aurora's own clock offset in Settings > Clock (the RTC is never written); see [`docs/power.md`](docs/power.md) |
 | Console model | working | New/Old from CFG11_SOCINFO; "N" in the status bar |
 | Crash handler | working | register dump plus a three-beep error tone on a fault |
 | Apps ([Auric](auric-lang/README.md)) | working | sound from the SD card; see [`docs/apps.md`](docs/apps.md) |
@@ -41,7 +42,8 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.2.**
 The UI renders into a cached FCRAM backbuffer and the GPU moves each finished
 screen to the panel in one blit, rather than rasterising straight into uncached
 VRAM. Icons and text are pre-rendered at the exact size they are drawn, so the
-console scales nothing at runtime.
+console scales nothing at runtime. Moving between screens is animated: a slide
+is one GPU copy per frame, so it costs the ARM9 nothing.
 
 ## Source layout
 
@@ -80,6 +82,7 @@ loaded at boot by `src/assets.c`. Run `make assets` after changing either.
 * [`docs/input.md`](docs/input.md): touch calibration and screenshots
 * [`docs/terminal.md`](docs/terminal.md): the terminal, its keys and every command
 * [`docs/gpu.md`](docs/gpu.md): PICA200 driver and the rendering path
+* [`docs/ui.md`](docs/ui.md): rounded shapes, screen transitions and animation
 * [`docs/audio.md`](docs/audio.md): CSND playback and the channel registers
 * [`docs/power.md`](docs/power.md): MCU real-time clock, battery, power off and reboot
 * [`docs/wifi.md`](docs/wifi.md): Wi-Fi bring-up, state and findings
