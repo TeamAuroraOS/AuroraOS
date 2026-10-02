@@ -40,7 +40,6 @@ typedef volatile u32 vu32;
 #define REG_SDBLKCOUNT32  (0x108)
 #define REG_SDFIFO32      (0x10C)
 
-/* TMIO status-register bits. */
 #define TMIO_STAT0_CMDRESPEND     (0x0001)
 #define TMIO_STAT0_DATAEND        (0x0004)
 #define TMIO_STAT0_CARD_REMOVE    (0x0008)
@@ -84,19 +83,17 @@ typedef struct mmcdevice {
     u32       total_size; /* size in 512-byte sectors */
 } mmcdevice;
 
-/* Bring the SD card up. Returns 0 on success, negative on failure. */
+/* 0 on success, negative on failure. */
 int sdmmc_sdcard_init(void);
 
-/* Read numsectors 512-byte sectors starting at sector_no into out.
-   Returns 0 on success, non-zero on error. */
+/* 0 on success. */
 int sdmmc_sdcard_readsectors(u32 sector_no, u32 numsectors, u8 *out);
 int sdmmc_sdcard_readsector(u32 sector_no, u8 *out);
 
-/* Write numsectors 512-byte sectors starting at sector_no from in.
-   Returns 0 on success, non-zero on error. */
+/* 0 on success. */
 int sdmmc_sdcard_writesectors(u32 sector_no, u32 numsectors, const u8 *in);
 
-/* Total capacity of the SD card in 512-byte sectors (valid after init). */
+/* In 512-byte sectors, valid after init. */
 u32 sdmmc_sdcard_size(void);
 
 /* The internal eMMC's 16-byte CID, in the order GodMode9 prints it. Returns 1

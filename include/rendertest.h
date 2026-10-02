@@ -3,8 +3,8 @@
 
 #include "aurora.h"
 
-/* GPU Test > R: draws a UI frame for 60 seconds and reports the mean frame
- * rate. On a New 3DS it first switches the ARM11 to 804 MHz. */
+/* Draws UI frames for 60 seconds and reports the mean frame rate. Switches a
+ * New 3DS to 804 MHz first. */
 void render_test_screen(void);
 
 #endif

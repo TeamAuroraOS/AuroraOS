@@ -34,7 +34,6 @@ void ui_text_mid(volatile u8 *fb, int cx, int y, int sh, const char *s, Color fg
  * cut at a character and ended with "...". */
 void ui_fit(char *out, int outsz, const Font *f, const char *s, int maxw);
 
-/* ui_text and ui_text_mid for text that may not fit in `maxw`. */
 void ui_text_fit(volatile u8 *fb, int x, int y, int sh, const char *s, int maxw,
                  Color fg, Color bg, const Font *f);
 void ui_text_mid_fit(volatile u8 *fb, int cx, int y, int sh, const char *s,
@@ -47,13 +46,13 @@ void ui_icon(volatile u8 *fb, int bx, int by, int box, int sh, u32 asset,
 
 void ui_wallpaper(volatile u8 *fb, int w, int h, int sh);
 
-/* Composes the cached backgrounds, about half a second. Call ui_bg_invalidate()
- * when the accent colour changes. */
+/* Composes the cached backgrounds. Call ui_bg_invalidate() when the accent
+ * colour changes. */
 void ui_bg_build(void);
 void ui_bg_invalidate(void);
 
-/* The same background for one rectangle. Use it to erase a widget before
- * redrawing it, instead of repainting the whole screen. */
+/* The cached background for one rectangle, to erase a widget before redrawing
+ * it. */
 void ui_wallpaper_rect(volatile u8 *fb, int x, int y, int w, int h, int sh);
 
 /* Erase just the parts an opaque rounded rect will not cover when redrawn in

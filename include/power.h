@@ -3,21 +3,26 @@
 
 #include <stdint.h>
 
-/* RTC and battery through the MCU (I2C device 3). Call I2C_init() first. */
+/* Call I2C_init() first. */
 
 typedef struct {
-  int year;  /* full year, e.g. 2026 */
+  int year;  /* full year */
   int month; /* 1-12  */
-  int day;   /* 1-31  */
-  int hour;  /* 0-23  */
-  int min;   /* 0-59  */
-  int sec;   /* 0-59  */
+  int day;
+  int hour;
+  int min;
+  int sec;
   int wday;  /* 0 = Sunday */
 } RtcTime;
 
-/* Read the wall clock. Returns 1 on success, 0 if the MCU did not answer or
- * returned a value that cannot be a real date. */
+/* Read the wall clock, moved by g_rtc_offset. Returns 1 on success, 0 if the
+ * MCU did not answer or returned a value that cannot be a real date. */
 int rtc_read(RtcTime *out);
+
+/* Minutes added to the RTC before it is shown (Settings > Clock). The 3DS's own
+ * menu adds an offset it keeps in its encrypted settings, which Aurora cannot
+ * read, so Aurora keeps its own and never writes the RTC itself. */
+extern int g_rtc_offset;
 
 /* "HH:MM" into a buffer of at least 6 bytes. */
 void rtc_format_time(const RtcTime *t, char *out);
@@ -34,7 +39,7 @@ int battery_charging(void);
 /* Raw MCU power-status register, for diagnosing the charging bit. */
 int power_status_raw(void);
 
-/* Ask the MCU to cut the power or restart the console. Neither returns. */
+/* Through the MCU; neither returns. */
 void power_shutdown(void);
 void power_reboot(void);
 

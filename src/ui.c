@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "anim.h"
 #include "assets.h"
 #include "icons.h"
 #include "font.h"
@@ -11,15 +12,13 @@ Color g_accent = COLOR_AURORA;
 extern void delay(volatile u32 cycles);
 extern void os_dcache_flush(void);
 
-/* Ends one input-loop pass: collects any GPU blit still in flight, then waits
- * out the frame. A caller must pass through here before drawing into a
- * presented buffer. */
 #define UI_FRAME_US 1000u
 
 void ui_idle(void) {
   static u32 frame_ticks;
   u32 t0;
 
+  anim_flush(); /* a transition left waiting on a screen that never presented */
   gpu_wait_idle();
   g_blit_src = 0; /* collected here, so the per-draw guard stays a bare compare */
   if (!timer_calibrated()) {
@@ -279,8 +278,7 @@ void ui_wallpaper_rect(volatile u8 *fb, int x, int y, int w, int h, int sh) {
     return;
 
   screen_touch(fb);
-  bg = bg_for((fb == VRAM_TOP_PHYS || fb == VRAM_TOP_BACK) ? TOP_SCREEN_WIDTH
-                                                           : BOT_SCREEN_WIDTH);
+  bg = bg_for(screen_fb_width(fb));
   for (int col = 0; col < w; col++) {
     u32 base = ((u32)(x + col) * (u32)sh + (u32)(sh - y - h)) * 3u;
     copy_run(fb + base, bg + base, (u32)h * 3u);
@@ -305,7 +303,8 @@ void ui_patch_round_rect(volatile u8 *fb, int x, int y, int w, int h, int r,
   }
 }
 
-/* Drawn rather than blitted, so it works at any size. */
+/* Drawn rather than blitted, so it works at any size. On the bottom screen
+ * the card pops up when it is presented. */
 void ui_dialog(volatile u8 *fb, int w, int h, int sh, const char *title,
                       const char *subtitle, Color title_color, int dim) {
   static const Color scrim = {0x00, 0x00, 0x00};
@@ -314,8 +313,11 @@ void ui_dialog(volatile u8 *fb, int w, int h, int sh, const char *title,
   int dw = w - 56, dh = 92;
   int dx = (w - dw) / 2, dy = (h - dh) / 2;
 
+  if (fb == VRAM_BOT_A)
+    anim_popup(dx, dy, dw, dh);
   if (dim)
     draw_filled_rect_alpha(fb, 0, 0, w, h, sh, scrim, 150);
+  anim_popup_behind();
   draw_gradient_round_rect(fb, dx, dy, dw, dh, 14, sh, card_top, card_bot);
   ui_text_mid_fit(fb, w / 2, dy + 24, sh, title, dw - 24, title_color, card_top,
                   &ui_title);

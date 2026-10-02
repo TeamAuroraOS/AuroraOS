@@ -1,5 +1,3 @@
-/* Touchscreen through the CTR codec, published at TOUCH_SHARED_ADDR for
- * Touch9.c. */
 #include "core11.h"
 #include "touch.h"
 

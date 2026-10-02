@@ -3,12 +3,10 @@
 
 #include "aurora.h"
 
-/* RIFF/WAVE reader: uncompressed PCM, converted to signed mono for CSND. */
-
 typedef enum {
   WAV_OK = 0,
   WAV_ERR_OPEN,
-  WAV_ERR_FORMAT,      /* not a RIFF/WAVE file                 */
+  WAV_ERR_FORMAT,
   WAV_ERR_UNSUPPORTED, /* compressed, or a depth other than 8/16 */
   WAV_ERR_DATA,
 } WavResult;
@@ -17,7 +15,7 @@ typedef enum {
 WavResult wav_play(const char *path, u32 *samples, u32 *rate, u32 *depth);
 
 typedef struct {
-  u32 samples; /* mono samples written          */
+  u32 samples;
   u32 rate;    /* their rate, after any halving */
   u32 depth;   /* 8 or 16                       */
 } WavInfo;

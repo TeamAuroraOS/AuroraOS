@@ -3,9 +3,6 @@
 
 #include "aurora.h"
 
-/* Still images for the File Explorer (BMP, PNG, baseline JPEG), decoded to
- * RGB888. */
-
 /* Working buffers, live only while the viewer is open. Clear of the return
  * descriptor (0x25008000), the OS snapshot (0x26000000) and the ARM11 mailbox
  * (0x27000000). */
@@ -42,7 +39,6 @@ const char *image_error(ImageResult r);
 void image_draw_fit(volatile u8 *fb, int bx, int by, int bw, int bh,
                     int screen_height, const Image *img);
 
-/* Decodes into `rgb` and reports the size through `w`/`h`. */
 ImageResult jpeg_decode(const u8 *data, u32 len, u8 *rgb, u32 rgb_max, int *w,
                         int *h);
 

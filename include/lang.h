@@ -1,7 +1,7 @@
 #ifndef AURORA_LANG_H
 #define AURORA_LANG_H
 
-#include "user.h" /* LANG_COUNT */
+#include "user.h"
 
 typedef enum {
   /* Progress-bar labels: must stay first and in step order (0..4). */
@@ -89,10 +89,16 @@ typedef enum {
   STR_DEVICE,
   STR_NOT_AVAILABLE,
 
+  STR_CLOCK,
+  STR_CLOCK_HINT,
+  STR_CLOCK_KEYS,
+  STR_HOUR,
+  STR_MINUTE,
+
   STR_COUNT
 } StringId;
 
-/* Active language (a LANG_* value). Set from cfg->language. */
+/* LANG_* */
 extern int g_lang;
 
 const char *L(StringId id);

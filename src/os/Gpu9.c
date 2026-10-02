@@ -22,6 +22,9 @@ static inline void inval_line(const volatile void *p) {
 static AudioCtrl *const ctrl = (AudioCtrl *)AUDIO_CTRL_ADDR;
 static GpuShared *const gs = (GpuShared *)GPU_SHARED_ADDR;
 
+/* The ARM11 writes these alone; see GpuShared. */
+typedef char gpu_front_line[(offsetof(GpuShared, front) & 31u) == 0 ? 1 : -1];
+
 int gpu_alive(void) {
   inval_line(&gs->magic);
   return gs->magic == GPU_MAGIC;
@@ -39,6 +42,9 @@ void gpu_get(GpuShared *out) {
  * one is outstanding at all. */
 static u32 pending_seq;
 static int pending;
+static u32 last_fail;
+
+u32 gpu_last_fail(void) { return last_fail; }
 
 /* The parameters must reach RAM before the counter, or the ARM11 can act on a
  * stale op. A whole-cache clean writes lines in index order, so the two are
@@ -65,10 +71,14 @@ static int gpu_collect(void) {
     inval_line(&gs->seq);
     if (gs->seq != pending_seq) {
       pending = 0;
-      return gs->err == GPU_ERR_NONE;
+      if (gs->err == GPU_ERR_NONE)
+        return 1;
+      last_fail = gs->err;
+      return 0;
     }
   }
   pending = 0;
+  last_fail = GPU_FAIL_NO_ANSWER;
   return 0;
 }
 
@@ -115,18 +125,93 @@ int gpu_texcopy(u32 src, u32 dst, u32 len) {
   return gpu_run();
 }
 
-/* Returns without waiting. Draw into the source buffer again only after
- * gpu_wait_idle(). */
-int gpu_texcopy_async(u32 src, u32 dst, u32 len) {
+static int post_copy(u32 op, u32 src, u32 dst, u32 len) {
   if (!gpu_alive())
     return 0;
   gpu_collect(); /* the shared block holds one operation at a time */
-  gs->op = GPU_OP_TEXCOPY;
+  gs->op = op;
   gs->xf_src = src;
   gs->xf_dst = dst;
   gs->xf_len = len;
   gpu_post();
   return 1;
+}
+
+/* Returns without waiting. Draw into the source buffer again only after
+ * gpu_wait_idle(). */
+int gpu_texcopy_async(u32 src, u32 dst, u32 len) {
+  return post_copy(GPU_OP_TEXCOPY, src, dst, len);
+}
+
+int gpu_present_async(u32 src, u32 dst, u32 len) {
+  return post_copy(GPU_OP_PRESENT, src, dst, len);
+}
+
+/* After the operation in flight, so the answer covers the last present. */
+u32 gpu_front(int screen) {
+  u32 a = screen ? GPU_FB_BOT_A : GPU_FB_TOP_A, f;
+  if (!gpu_alive())
+    return a;
+  gpu_collect();
+  inval_line(&gs->front[0]);
+  f = gs->front[screen ? 1 : 0];
+  return f ? f : a;
+}
+
+int gpu_present2_async(u32 top_src, u32 bot_src) {
+  if (!gpu_alive())
+    return 0;
+  gpu_collect();
+  gs->op = GPU_OP_PRESENT2;
+  gs->xf_src = top_src;
+  gs->xf_src2 = bot_src;
+  gpu_post();
+  return 1;
+}
+
+int gpu_vsync_test(int screen, u32 method, u32 blanks) {
+  gs->op = GPU_OP_VSYNC_TEST;
+  gs->xf_flags = (u32)screen;
+  gs->xf_src_w = method;
+  gs->xf_len = blanks;
+  return gpu_run();
+}
+
+int gpu_vsync_set(int screen, u32 method) {
+  gs->op = GPU_OP_VSYNC_SET;
+  gs->xf_flags = (u32)screen;
+  gs->xf_src_w = method;
+  return gpu_run();
+}
+
+void gpu_vsync_info(u32 *vsync, u32 *swap, u32 *cnt, u32 *presents,
+                    u32 *missed) {
+  gpu_collect();
+  inval_line(&gs->vsync);
+  inval_line(&gs->vs_missed[1]);
+  *vsync = gs->vsync;
+  for (int i = 0; i < 2; i++) {
+    swap[i] = gs->vs_swap[i];
+    cnt[i] = gs->vs_cnt[i];
+    presents[i] = gs->vs_presents[i];
+    missed[i] = gs->vs_missed[i];
+  }
+}
+
+uint32_t gpu_vsynced(void) {
+  u32 v;
+  if (!gpu_alive())
+    return 0;
+  inval_line(&gs->vsync);
+  v = gs->vsync;
+  return ((v & 3u) ? 1u : 0u) | ((v & 0xCu) ? 2u : 0u);
+}
+
+int gpu_show_a(void) {
+  if (!gpu_alive())
+    return 0;
+  gs->op = GPU_OP_SHOW_A;
+  return gpu_run();
 }
 
 int gpu_transfer(u32 src, u32 dst, u32 src_w, u32 src_h, u32 dst_w, u32 dst_h,

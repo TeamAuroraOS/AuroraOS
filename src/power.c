@@ -13,6 +13,46 @@
 
 static int bcd(uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); }
 
+int g_rtc_offset = 0;
+
+static int month_days(int month, int year) {
+  static const uint8_t days[12] = {31, 28, 31, 30, 31, 30,
+                                   31, 31, 30, 31, 30, 31};
+  return (month == 2 && !(year % 4)) ? 29 : days[month - 1];
+}
+
+/* Whole minutes, carried through the hour, the day and the date. */
+static void rtc_shift(RtcTime *t, int minutes) {
+  int m = t->hour * 60 + t->min + minutes, days = 0;
+  while (m < 0) {
+    m += 1440;
+    days--;
+  }
+  while (m >= 1440) {
+    m -= 1440;
+    days++;
+  }
+  t->hour = m / 60;
+  t->min = m % 60;
+  t->wday = ((t->wday + days) % 7 + 7) % 7;
+  for (; days > 0; days--)
+    if (++t->day > month_days(t->month, t->year)) {
+      t->day = 1;
+      if (++t->month > 12) {
+        t->month = 1;
+        t->year++;
+      }
+    }
+  for (; days < 0; days++)
+    if (--t->day < 1) {
+      if (--t->month < 1) {
+        t->month = 12;
+        t->year--;
+      }
+      t->day = month_days(t->month, t->year);
+    }
+}
+
 int rtc_read(RtcTime *out) {
   uint8_t r[7];
 
@@ -35,6 +75,8 @@ int rtc_read(RtcTime *out) {
       out->hour > 23 || out->min > 59 || out->sec > 59)
     return 0;
 
+  if (g_rtc_offset)
+    rtc_shift(out, g_rtc_offset);
   return 1;
 }
 

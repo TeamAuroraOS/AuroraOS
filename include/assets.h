@@ -51,7 +51,7 @@ int assets_ok(void);
 /* Null when the pack is absent or `id` is out of range. */
 const Asset *asset_get(uint32_t id);
 
-/* Resolves a font asset into `out`. Returns 0 if unavailable. */
+/* 0 if unavailable. */
 int asset_font(uint32_t id, Font *out);
 
 const char *assets_error(void);

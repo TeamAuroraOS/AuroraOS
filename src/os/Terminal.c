@@ -4,6 +4,7 @@
 
 #include "terminal.h"
 #include "term.h"
+#include "anim.h"
 #include "files.h"
 #include "font.h"
 #include "model.h"
@@ -1152,7 +1153,7 @@ static void t_key(int k) {
     kb_keys();
 }
 
-void terminal_screen(const char *user, void (*launch)(const char *path)) {
+static void terminal_run(const char *user, void (*launch)(const char *path)) {
   static FILINFO fno;
   u32 repeat_mark = 0, repeat_wait = 0;
 
@@ -1251,4 +1252,10 @@ void terminal_screen(const char *user, void (*launch)(const char *path)) {
     ui_idle();
   }
   t_unmount();
+}
+
+void terminal_screen(const char *user, void (*launch)(const char *path)) {
+  anim_transition(ANIM_PUSH, ANIM_BOTH);
+  terminal_run(user, launch);
+  anim_transition(ANIM_POP, ANIM_BOTH);
 }

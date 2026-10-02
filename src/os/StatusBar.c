@@ -1,5 +1,4 @@
-/* Shared by the Home Menu and the setup wizard. Without the asset pack it falls
- * back to the 8x8 font and drawn indicators. */
+/* Without the asset pack it falls back to the 8x8 font and drawn indicators. */
 #include "statusbar.h"
 #include "ui.h"
 #include "power.h"

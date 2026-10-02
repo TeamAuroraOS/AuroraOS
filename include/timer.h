@@ -3,13 +3,11 @@
 
 #include <stdint.h>
 
-/* Microsecond timing from an ARM9 hardware timer, calibrated against the MCU
- * RTC. */
-/* Calibrates against the real-time clock, which means waiting out up to two
- * RTC second boundaries. Call it once at start-up, never on a hot path. */
+/* Starts the timer if timer_start() has not and sets its rate. A running timer
+ * is not restarted, so earlier ticks stay valid. */
 int timer_ready(void);
 
-/* Whether that has already happened. Cheap, and safe to call per frame. */
+/* 1 once timer_ready() has run. */
 int timer_calibrated(void);
 void timer_start(void);
 uint32_t timer_ticks(void);

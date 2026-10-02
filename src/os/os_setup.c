@@ -1,5 +1,6 @@
 #include "statusbar.h"
 #include "aurora.h"
+#include "anim.h"
 #include "ui.h"
 #include "aurora_logo.h"
 #include "ff.h"
@@ -143,6 +144,17 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_DEVICE       */ {"Device", "Dispositivo", "Appareil"},
     /* STR_NOT_AVAILABLE*/
     {"Not available", "No disponible", "Non disponible"},
+    /* STR_CLOCK        */ {"Clock", "Reloj", "Horloge"},
+    /* STR_CLOCK_HINT   */
+    {"Changes Aurora's clock only, not the 3DS's",
+     "Solo cambia el reloj de Aurora, no el de la 3DS",
+     "Ne change que l'horloge d'Aurora, pas celle de la 3DS"},
+    /* STR_CLOCK_KEYS   */
+    {"Up/Down: change  A: Save  X: Reset  B: Back",
+     "Arriba/Abajo: cambiar  A: Guardar  X: Borrar  B: Volver",
+     "Haut/Bas: changer  A: OK  X: Effacer  B: Retour"},
+    /* STR_HOUR         */ {"Hour", "Hora", "Heure"},
+    /* STR_MINUTE       */ {"Minute", "Minuto", "Minute"},
 };
 
 const char *L(StringId id) {
@@ -861,7 +873,9 @@ static Nav step_user(UserConfig *cfg) {
     }
     if (k & BUTTON_A) {
       if (focus == 0) {
+        anim_transition(ANIM_PUSH, ANIM_BOT);
         keyboard_edit(cfg->name, USER_NAME_MAX, KB_NAME, NULL, accent);
+        anim_transition(ANIM_POP, ANIM_BOT);
         setup_top(2, L(STR_USER_L1), L(STR_USER_L2), accent);
         screen_present_top();
         redraw = full = 1;
@@ -877,7 +891,9 @@ static Nav step_user(UserConfig *cfg) {
     int tx, ty;
     if (touch_tap(&tx, &ty)) {
       if (touch_in(tx, ty, 12, 30, BOT_SCREEN_WIDTH - 24, 34)) {
+        anim_transition(ANIM_PUSH, ANIM_BOT);
         keyboard_edit(cfg->name, USER_NAME_MAX, KB_NAME, NULL, accent);
+        anim_transition(ANIM_POP, ANIM_BOT);
         setup_top(2, L(STR_USER_L1), L(STR_USER_L2), accent);
         screen_present_top();
         redraw = full = 1;
@@ -1079,8 +1095,11 @@ void setup_run(UserConfig *cfg) {
     if (n == NAV_BACK) {
       if (step > 0)
         step--;
+      anim_transition(ANIM_POP, ANIM_BOTH);
     } else {
       step++;
+      if (step < 5)
+        anim_transition(ANIM_PUSH, ANIM_BOTH);
     }
   }
   cfg->setup_done = 1;
@@ -1103,6 +1122,7 @@ void user_config_defaults(UserConfig *cfg) {
     cfg->name[i] = 0;
   cfg->touch_set = 0;
   touch_cal_default(&cfg->touch);
+  cfg->clock_offset = 0;
 }
 
 static s16 get16(const u8 *p) { return (s16)(p[0] | (p[1] << 8)); }
@@ -1152,6 +1172,12 @@ int user_config_load(UserConfig *cfg) {
     cfg->touch_set = 1;
   }
 
+  if (br >= USER_DAT_CLOCK + 2u) {
+    cfg->clock_offset = get16(s_buf + USER_DAT_CLOCK);
+    if (cfg->clock_offset <= -1440 || cfg->clock_offset >= 1440)
+      cfg->clock_offset = 0;
+  }
+
   if (cfg->language >= LANG_COUNT)
     cfg->language = LANG_ENGLISH;
   if (cfg->accent >= AURORA_ACCENT_COUNT)
@@ -1182,6 +1208,7 @@ int user_config_save(const UserConfig *cfg) {
   s_buf[11] = (u8)(cfg->birth_year >> 8);
   for (int i = 0; i < USER_NAME_MAX; i++)
     s_buf[12 + i] = (u8)cfg->name[i];
+  put16(s_buf + USER_DAT_CLOCK, cfg->clock_offset);
   if (cfg->touch_set) {
     u8 *t = s_buf + USER_DAT_TOUCH;
     t[0] = 1;

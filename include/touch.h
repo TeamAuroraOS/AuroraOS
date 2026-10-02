@@ -7,7 +7,7 @@
 
 typedef struct {
   volatile uint32_t seq;     /* bumped on each ARM11 update (heartbeat) */
-  volatile uint32_t pressed; /* 1 while the screen is being touched     */
+  volatile uint32_t pressed;
   volatile uint32_t raw_x;   /* raw ADC X (12-bit)                      */
   volatile uint32_t raw_y;   /* raw ADC Y (12-bit)                      */
   /* Raw codec sample bytes, updated even when not pressed. */
@@ -36,8 +36,8 @@ int touch_cal_is_default(void);
  * go through rawx/rawy when non-NULL. */
 int touch_read(int *sx, int *sy, int *rawx, int *rawy);
 
-/* Press-edge "tap": returns 1 once at the moment a new touch begins, filling
- * the tap position. Call once per input-loop iteration (like get_keys_down). */
+/* Returns 1 once, when a new touch begins. Call once per input-loop pass, like
+ * get_keys_down(). */
 int touch_tap(int *x, int *y);
 
 static inline int touch_in(int tx, int ty, int x, int y, int w, int h) {

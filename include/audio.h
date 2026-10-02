@@ -1,5 +1,3 @@
-/* ARM9 <-> ARM11 audio contract: the ARM9 posts commands into a shared FCRAM
- * block and the ARM11 core services them. See docs/audio.md. */
 #ifndef AURORA_AUDIO_H
 #define AURORA_AUDIO_H
 
@@ -8,16 +6,15 @@
 /* Shared FCRAM, clear of the OS image (0x22000000..0x23000000) and the
  * app-launch staging area (0x24000000+). */
 #define AUDIO_CORE_ADDR     0x23000000u /* ARM11 core code (load + entry)      */
-#define AUDIO_CTRL_ADDR     0x23300000u /* AudioCtrl command block             */
-#define AUDIO_PCM_ADDR      0x23400000u /* PCM sample buffer                   */
+#define AUDIO_CTRL_ADDR     0x23300000u
+#define AUDIO_PCM_ADDR      0x23400000u
 #define AUDIO_ARM11_MAILBOX 0x27000000u /* firm ARM11 wake mailbox (loader.h)  */
 
 #define AUDIO_MAGIC 0x4F494441u /* 'ADIO': set by the core once it is alive */
 
-/* The ARM11 can keep running a core from an earlier boot. audio_boot() compares
- * this with the running core's version and replaces that core when they differ.
- * Bump this whenever the core changes. */
-#define AUDIO_CORE_VERSION 97
+/* audio_boot() replaces a running core whose version differs, so bump this on
+ * any core change. */
+#define AUDIO_CORE_VERSION 101
 
 /* The first core that understands AUDIO_CMD_PARK. An older one can only be
  * replaced by powering the console off. */
@@ -158,5 +155,16 @@ void audio_play_pcm(uint32_t samples, uint32_t rate, uint32_t depth);
 
 /* Stops every app voice and waits for the core to take the request. */
 void audio_voices_stop(void);
+
+/* 1 once the core takes requests; a fresh core first initialises the codec and
+ * touchscreen. Does not block. Needs the timer started before audio_boot(). */
+int audio_ready(void);
+
+/* Waits up to `ms` for audio_ready(). */
+int audio_wait_ready(uint32_t ms);
+
+/* Milliseconds from waking the core to its first answer: 0 for a core already
+ * running, -1 while it has not answered. */
+int audio_ready_ms(void);
 
 #endif

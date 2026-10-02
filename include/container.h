@@ -6,13 +6,13 @@
 
 typedef enum {
   AURORA_OK = 0,
-  AURORA_ERR_READ,     /* header could not be read */
+  AURORA_ERR_READ,
   AURORA_ERR_MAGIC,    /* magic is neither "AOS1" nor "AUR1" */
-  AURORA_ERR_PAYLOAD,  /* ARM9 payload could not be read */
+  AURORA_ERR_PAYLOAD,
 } aurora_status_t;
 
-/* Read the 36-byte header from `fp` (at its current position) into `hdr` and
- * validate the magic. Returns AURORA_OK on success. */
+/* Reads the 36-byte header at the file's current position and checks the
+ * magic. */
 aurora_status_t aurora_parse_header(FIL *fp, aos_header_t *hdr);
 
 /* Reads the ARM9 payload described by `hdr` into `dst`: the firm passes the

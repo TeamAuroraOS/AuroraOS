@@ -2,6 +2,7 @@
 #include "crash.h"
 #include "crash_shared.h"
 #include "font.h"
+#include "gpu.h"
 #include "i2c.h"
 
 /* Shared with crash.s (filled by the exception stubs). */
@@ -165,6 +166,23 @@ static void crash_wait_1s(void) {
   }
 }
 
+/* The panel may be showing any of its framebuffers, and the ARM11 that would
+ * switch it may be the one that failed, so the crash screen goes into all. */
+static void mirror(void) {
+  const volatile u32 *t = (const volatile u32 *)VRAM_TOP_PHYS;
+  const volatile u32 *b = (const volatile u32 *)VRAM_BOT_PHYS;
+  static const u32 tops[2] = {GPU_FB_TOP_B, GPU_FB_TOP_C};
+  static const u32 bots[2] = {GPU_FB_BOT_B, GPU_FB_BOT_C};
+  for (int k = 0; k < 2; k++) {
+    volatile u32 *tb = (volatile u32 *)tops[k];
+    volatile u32 *bb = (volatile u32 *)bots[k];
+    for (u32 i = 0; i < TOP_FB_SIZE / 4u; i++)
+      tb[i] = t[i];
+    for (u32 i = 0; i < BOT_FB_SIZE / 4u; i++)
+      bb[i] = b[i];
+  }
+}
+
 void crash_handle(CrashDump *d) {
   /* Mask IRQ + FIQ so nothing disturbs the final screen. */
   __asm__ volatile("mrs r0, cpsr\n\t"
@@ -186,6 +204,7 @@ void crash_handle(CrashDump *d) {
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_CRASH);
   draw_sad_face();
   draw_dump(d);
+  mirror();
 
   I2C_init(); /* bring up I2C so the RTC-based countdown can read the clock */
 
@@ -202,6 +221,7 @@ void crash_handle(CrashDump *d) {
     }
     scpy(p, "s...");
     draw_string(VRAM_BOT_A, 8, SH_B - 16, SH_B, line, COLOR_WHITE, COLOR_CRASH);
+    mirror();
     crash_wait_1s();
   }
   crash_power_off();
@@ -239,7 +259,7 @@ void crash_poll_arm11(void) {
   d.dfar = cs->dfar;
   d.cpu = cs->cpu;
   d.core = cs->core;
-  crash_handle(&d); /* never returns */
+  crash_handle(&d);
 }
 
 void crash_init(void) {

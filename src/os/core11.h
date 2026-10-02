@@ -32,13 +32,14 @@ static inline void dcache_clean_inval(void) {
   dsb();
 }
 
+/* Runs from uncached memory: a pass takes roughly a quarter of a microsecond,
+ * so it only suits short pauses. */
 static inline void spin(uint32_t n) {
   while (n--)
     __asm__ volatile("nop");
 }
-/* Coarse and over-sleeps, which is fine for the codec settle delays it is used
- * for. */
-static inline void sleep_ms(uint32_t ms) { spin(ms * 300000u); }
+/* At least `ms`, timed by this core's private timer (Core11.c). */
+void sleep_ms(uint32_t ms);
 
 /* IO_COMMON_BASE = 0x10100000 on the ARM11 (libn3ds mem_map). */
 #define IO_BASE 0x10100000u
@@ -104,6 +105,8 @@ void wifi11_probe(void);
 void wifi11_boot(uint32_t opts);
 
 void gpu11_run(void);
+/* Leaves framebuffer A on screen, for whatever runs on the panels next. */
+void gpu11_show_a(void);
 
 /* AUDIO_CMD_N3DS: ask for New 3DS clock mode `mode` and report the outcome in
  * ct->n3ds_before, n3ds_after and n3ds_status. */

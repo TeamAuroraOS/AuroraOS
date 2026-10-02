@@ -13,7 +13,6 @@
 #define T_INPUT 256 /* one command line, including the NUL */
 #define T_COLS  49
 
-/* Output colours; Terminal.c maps them to RGB. */
 enum {
   TC_TEXT = 0,
   TC_DIM,

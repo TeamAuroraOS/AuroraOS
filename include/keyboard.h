@@ -3,9 +3,6 @@
 
 #include "aurora.h"
 
-/* On-screen keyboard (src/os/os_setup.c), shared by setup and the File
- * Explorer. */
-
 enum {
   KB_NAME = 0,     /* letters, digits and space */
   KB_FILENAME = 1, /* adds - _ and . */

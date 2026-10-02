@@ -7,6 +7,7 @@
 #include "fileview.h"
 #include "assets.h"
 #include "ui.h"
+#include "anim.h"
 #include "container.h"
 #include "ff.h"
 #include "icons.h"
@@ -29,9 +30,8 @@
 #define ROW_H    30
 #define ROW_STEP 34
 #define ROW_Y0   40
-/* At ROW_STEP 34 and ROW_H 30 a 2px ring makes neighbouring rings just touch.
- * Wider rings overlap, and a two-row update would no longer match a full
- * redraw. */
+/* The selection ring's width; at ROW_STEP 34 and ROW_H 30 a ring of 2 fills
+ * the gap between rows exactly. */
 #define ROW_RING 2
 
 typedef struct {
@@ -441,30 +441,35 @@ static void files_draw_top(int sel) {
   screen_present_top();
 }
 
-static int list_top(int sel) {
-  int top = sel - FILES_VISIBLE / 2;
-  if (top > entry_count - FILES_VISIBLE)
-    top = entry_count - FILES_VISIBLE;
-  if (top < 0)
-    top = 0;
-  return top;
+static void files_fade_top(int sel) {
+  anim_xfade_begin(ANIM_TOP);
+  files_top_item(sel);
+  if (entry_count <= 0) {
+    anim_xfade_area(ANIM_TOP, 0, 24, TOP_SCREEN_WIDTH, CARD_Y + CARD_H - 24);
+  } else {
+    anim_xfade_area(ANIM_TOP, (TOP_SCREEN_WIDTH - ICON_BOX) / 2, ICON_Y,
+                    ICON_BOX, ICON_BOX);
+    anim_xfade_area(ANIM_TOP, CARD_X, CARD_Y, CARD_W, CARD_H);
+  }
+  anim_xfade_start(ANIM_TOP, 0);
+  screen_present_top();
 }
 
-/* Background included, so a row can be repainted on its own. */
-static void files_row(int r, int i, int selected) {
-  int y = ROW_Y0 + r * ROW_STEP;
+/* The rows scroll between the path bar and the footer. */
+#define LIST_TOP 36
+#define LIST_END (ROW_Y0 + FILES_VISIBLE * ROW_STEP)
+
+static AnimList flist = {.visible = FILES_VISIBLE, .step = ROW_STEP};
+
+static int list_top(int sel) {
+  flist.count = entry_count;
+  return anim_list_top(&flist, sel);
+}
+
+/* One row's card at `y`; the selection ring is drawn separately. */
+static void files_row(int y, int i) {
   const FileEntry *e = &entries[i];
   char right[16];
-
-  /* The ring is drawn over the background, so a row losing it needs that
-   * frame back; the card below covers everything except its own corners. */
-  if (selected)
-    draw_filled_round_rect(VRAM_BOT_A, ROW_X - ROW_RING, y - ROW_RING,
-                           ROW_W + 2 * ROW_RING, ROW_H + 2 * ROW_RING, 10,
-                           BOT_SCREEN_HEIGHT, g_accent);
-  else
-    ui_patch_round_rect(VRAM_BOT_A, ROW_X, y, ROW_W, ROW_H, 8, ROW_RING,
-                        BOT_SCREEN_HEIGHT);
 
   draw_gradient_round_rect(VRAM_BOT_A, ROW_X, y, ROW_W, ROW_H, 8,
                            BOT_SCREEN_HEIGHT, COLOR_HM_SLOT_TOP,
@@ -521,13 +526,30 @@ static void files_hints(const char *hint) {
               "X: Menu", COLOR_WHITE, COLOR_HM_SLOT, &ui_small);
 }
 
-/* The list as files_draw_bottom shows it, without presenting, so a dialog can
- * go over it. */
+/* The list as files_draw_bottom shows it, where its animation has it, without
+ * presenting, so a dialog can go over it. */
 static void files_paint_bottom(int sel) {
   char shown[128];
 
   ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
                BOT_SCREEN_HEIGHT);
+  if (entry_count > 0) {
+    int scroll = anim_px(&flist.scroll);
+    for (int i = 0; i < entry_count; i++) {
+      int y = ROW_Y0 + i * ROW_STEP - scroll;
+      if (y + ROW_H > LIST_TOP && y < LIST_END)
+        files_row(y, i);
+    }
+    draw_round_ring(VRAM_BOT_A, ROW_X - ROW_RING,
+                    ROW_Y0 + anim_px(&flist.ring) - scroll - ROW_RING,
+                    ROW_W + 2 * ROW_RING, ROW_H + 2 * ROW_RING, 10,
+                    ROW_RING + 1, BOT_SCREEN_HEIGHT, g_accent);
+    ui_wallpaper_rect(VRAM_BOT_A, 0, 0, BOT_SCREEN_WIDTH, LIST_TOP,
+                      BOT_SCREEN_HEIGHT);
+    ui_wallpaper_rect(VRAM_BOT_A, 0, LIST_END, BOT_SCREEN_WIDTH,
+                      BOT_SCREEN_HEIGHT - LIST_END, BOT_SCREEN_HEIGHT);
+  }
+
   draw_filled_round_rect(VRAM_BOT_A, 8, 6, BOT_SCREEN_WIDTH - 16, 26, 9,
                          BOT_SCREEN_HEIGHT, COLOR_HM_BAR);
   fit_path(shown, sizeof(shown), cwd, &ui_font, BOT_SCREEN_WIDTH - 34);
@@ -540,38 +562,34 @@ static void files_paint_bottom(int sel) {
     files_hints("B: up");
     return;
   }
-
-  int top = list_top(sel);
-  for (int r = 0; r < FILES_VISIBLE && top + r < entry_count; r++)
-    files_row(r, top + r, top + r == sel);
-
   files_footer(sel);
   files_hints("A: open   B: up");
 }
 
 static void files_draw_bottom(int sel) {
+  flist.count = entry_count;
+  anim_list_jump(&flist, sel);
   files_paint_bottom(sel);
   screen_present_bottom();
 }
 
-static void files_update(int old_sel, int new_sel) {
-  int top_old = list_top(old_sel), top_new = list_top(new_sel);
-  if (top_old != top_new || entry_count <= 0) {
-    files_draw_bottom(new_sel);
-  } else {
-    files_row(old_sel - top_new, old_sel, 0);
-    files_row(new_sel - top_new, new_sel, 1);
-    files_footer(new_sel);
+static void files_update(int new_sel) {
+  flist.count = entry_count;
+  anim_list_to(&flist, new_sel);
+  if (!anim_list_moving(&flist)) {
+    files_paint_bottom(new_sel);
     screen_present_bottom();
   }
-  files_top_item(new_sel);
-  screen_present_top();
+  files_fade_top(new_sel);
 }
 
 static void files_redraw(int sel) {
   files_draw_bottom(sel);
   files_draw_top(sel);
 }
+
+/* After a dialog: the list fades back when the caller redraws it. */
+static void files_fade(void) { anim_transition(ANIM_FADE, ANIM_BOT); }
 
 /* Left on screen without waiting for a key, for a notice that something slow is
  * running. */
@@ -589,9 +607,10 @@ static void files_message(const char *title, const char *detail) {
     u32 k = get_keys_down();
     int tx, ty;
     if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty))
-      return;
+      break;
     ui_idle();
   }
+  files_fade();
 }
 
 /* Until the user backs out; the file list stays on the bottom screen. */
@@ -606,6 +625,7 @@ static void view_image(const char *name, const Image *img) {
   *p = 0;
   int dw = ui_tw(&ui_small, detail);
 
+  anim_transition(ANIM_FADE, ANIM_TOP);
   draw_filled_rect(VRAM_TOP_LA, 0, 0, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT,
                    TOP_SCREEN_HEIGHT, COLOR_HM_BG);
   image_draw_fit(VRAM_TOP_LA, 0, 24, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT - 24,
@@ -622,9 +642,10 @@ static void view_image(const char *name, const Image *img) {
     u32 k = get_keys_down();
     int tx, ty;
     if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty))
-      return;
+      break;
     ui_idle();
   }
+  anim_transition(ANIM_FADE, ANIM_BOTH);
 }
 
 static void open_media(const FileEntry *e) {
@@ -701,6 +722,7 @@ static void progress_start(const char *title, int sel) {
   pg_title = title;
   pg_sel = sel;
   pg_drawn = 0;
+  anim_popup(PG_X, PG_Y, PG_W, PG_H); /* runs when the card is first shown */
 }
 
 static void progress_draw(const char *name, u32 done, u32 total) {
@@ -710,6 +732,7 @@ static void progress_draw(const char *name, u32 done, u32 total) {
 
   files_paint_bottom(pg_sel);
   draw_filled_rect_alpha(fb, 0, 0, BOT_SCREEN_WIDTH, sh, sh, scrim, 150);
+  anim_popup_behind();
   draw_gradient_round_rect(fb, PG_X, PG_Y, PG_W, PG_H, 14, sh, COLOR_PANEL_TOP,
                            COLOR_PANEL_BOT);
   ui_text_mid(fb, BOT_SCREEN_WIDTH / 2, PG_Y + 14, sh, pg_title, COLOR_WHITE,
@@ -809,6 +832,7 @@ static void menu_draw(int sel, int item, const u8 *on) {
 
   files_paint_bottom(sel);
   draw_filled_rect_alpha(fb, 0, 0, BOT_SCREEN_WIDTH, sh, sh, scrim, 150);
+  anim_popup_behind();
   draw_gradient_round_rect(fb, MN_X, MN_Y, MN_W, MN_H, 14, sh, COLOR_PANEL_TOP,
                            COLOR_PANEL_BOT);
   if (entry_count > 0) {
@@ -833,7 +857,7 @@ static void menu_draw(int sel, int item, const u8 *on) {
 }
 
 /* The chosen M_* item, or -1 when closed with B, X or a tap outside. */
-static int files_menu(int sel) {
+static int files_menu_run(int sel) {
   u8 on[M_COUNT];
   int has = entry_count > 0;
   int item = has ? M_COPY : M_NEWDIR;
@@ -841,6 +865,7 @@ static int files_menu(int sel) {
   on[M_COPY] = on[M_MOVE] = on[M_RENAME] = on[M_DELETE] = (u8)has;
   on[M_NEWDIR] = 1;
   on[M_PASTE] = (u8)(clip_mode != CLIP_NONE);
+  anim_popup(MN_X, MN_Y, MN_W, MN_H);
   menu_draw(sel, item, on);
 
   for (;;) {
@@ -870,6 +895,12 @@ static int files_menu(int sel) {
       menu_draw(sel, item, on);
     ui_idle();
   }
+}
+
+static int files_menu(int sel) {
+  int item = files_menu_run(sel);
+  files_fade(); /* back to the list, or on to what was chosen */
+  return item;
 }
 
 /* The top screen while the keyboard has the bottom one. */
@@ -907,11 +938,13 @@ static int same_str(const char *a, const char *b) {
  * empty. */
 static int ask_name(char *buf, const char *start, const char *title,
                     const char *detail) {
+  int ok;
   copy_name(buf, start);
+  anim_transition(ANIM_PUSH, ANIM_BOTH);
   name_top(title, detail);
-  if (!keyboard_edit(buf, FILES_NAME, KB_FILENAME, "Enter a name", g_accent))
-    return 0;
-  return buf[0] != 0;
+  ok = keyboard_edit(buf, FILES_NAME, KB_FILENAME, "Enter a name", g_accent);
+  anim_transition(ANIM_POP, ANIM_BOTH);
+  return ok && buf[0] != 0;
 }
 
 static void op_rename(int *sel) {
@@ -977,6 +1010,7 @@ static void op_delete(int *sel) {
   FoResult r;
 
   copy_name(name, e->name);
+  files_paint_bottom(*sel); /* the question goes over the list, not the menu */
   if (!fv_confirm(is_dir ? "Delete folder and contents?" : "Delete this file?",
                   name, "Delete", "Cancel")) {
     files_draw_bottom(*sel);
@@ -1061,15 +1095,17 @@ static void files_run_menu(int *sel) {
   }
 }
 
-void files_screen(void (*launch)(const char *path)) {
+/* 0 when there was no card, so only a message was shown. */
+static int files_run(void (*launch)(const char *path)) {
   static FATFS fs;
   int sel = 0;
+  u32 frame_at = 0;
 
   if (f_mount(&fs, "", 1) != FR_OK) {
     ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
                  BOT_SCREEN_HEIGHT);
     files_message("No SD card", "Insert a card and try again");
-    return;
+    return 0;
   }
 
   cwd[0] = '0';
@@ -1120,7 +1156,7 @@ void files_screen(void (*launch)(const char *path)) {
     }
 
     if (sel != prev)
-      files_update(prev, sel);
+      files_update(sel);
 
     if (k & BUTTON_X) {
       files_run_menu(&sel);
@@ -1136,6 +1172,8 @@ void files_screen(void (*launch)(const char *path)) {
         } else if (!read_dir()) {
           path_up();
           read_dir();
+        } else {
+          anim_transition(ANIM_PUSH, ANIM_BOTH);
         }
         sel = 0;
         files_redraw(sel);
@@ -1165,12 +1203,30 @@ void files_screen(void (*launch)(const char *path)) {
         break;
       read_dir();
       sel = 0;
+      anim_transition(ANIM_POP, ANIM_BOTH);
       files_redraw(sel);
     }
     if (k & BUTTON_START)
       break;
+    int ms = anim_frame(&frame_at);
+    if (ms) {
+      int show = 0;
+      if (anim_list_step(&flist, ms)) {
+        files_paint_bottom(sel);
+        show |= ANIM_BOT;
+      }
+      if (anim_xfade_frame(ANIM_TOP))
+        show |= ANIM_TOP;
+      anim_present(show);
+    }
     ui_idle();
   }
 
   f_mount(NULL, "", 0);
+  return 1;
+}
+
+void files_screen(void (*launch)(const char *path)) {
+  anim_transition(ANIM_PUSH, ANIM_BOTH);
+  anim_transition(files_run(launch) ? ANIM_POP : ANIM_FADE, ANIM_BOTH);
 }

@@ -38,8 +38,6 @@
 #define VRAM_TOP_BACK       ((volatile uint8_t *)0x23E80000)
 #define VRAM_BOT_BACK       ((volatile uint8_t *)0x23F00000)
 
-/* Current draw targets: the physical framebuffers until
- * screen_use_backbuffer(1) redirects them to FCRAM. */
 /* Set while an async blit may still read a backbuffer; drawing into that buffer
  * waits for it first. */
 extern volatile uint8_t *g_blit_src;
@@ -52,6 +50,8 @@ static inline void screen_touch(volatile uint8_t *fb) {
   }
 }
 
+/* The physical framebuffers until screen_use_backbuffer(1) redirects them to
+ * FCRAM. */
 extern volatile uint8_t *g_fb_top;
 extern volatile uint8_t *g_fb_bot;
 #define VRAM_TOP_LA         (g_fb_top)
@@ -111,7 +111,6 @@ typedef struct {
 #define COLOR_HM_SLOT_EMPTY ((Color){0x1B, 0x1B, 0x1B})
 #define COLOR_HM_TEXT2     ((Color){0x9A, 0x9A, 0x9A})
 
-/* Card colours for the info card and dialogs (icons/diolog-box.png). */
 #define COLOR_PANEL_TOP    ((Color){0x45, 0x45, 0x49})
 #define COLOR_PANEL_BOT    ((Color){0x39, 0x39, 0x3D})
 
@@ -133,10 +132,16 @@ void screen_present_bottom(void);
  * With backbuffers on, nothing reaches the panel until screen_present_*(). */
 void screen_use_backbuffer(int on);
 
+/* 400 for any of the top panel's framebuffers or its backbuffer, else 320. */
+int screen_fb_width(volatile u8 *fb);
+
 /* Present hook: (src, dst, bytes) -> non-zero on success. NULL falls back to a
  * CPU copy. A hook rather than a call because screen.c is also linked into the
  * firm, which has no GPU driver. */
 extern int (*g_screen_blit)(u32 src, u32 dst, u32 len);
+/* Set by the OS while a screen transition waits for the next frame: non-zero
+ * means it took this present over (src/os/Anim.c). */
+extern int (*g_screen_intercept)(volatile u8 *back);
 void clear_screen(volatile u8 *fb, u32 fb_size, Color color);
 void draw_pixel(volatile u8 *fb, int x, int y, int screen_height, Color color);
 void draw_char(volatile u8 *fb, int x, int y, int screen_height, char c, Color fg, Color bg);
@@ -145,8 +150,7 @@ void draw_aurora_logo(volatile u8 *fb, int x0, int y0, int screen_height, Color 
 
 void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h, int screen_height, Color color);
 
-/* Blend `color` into the pixel already there. alpha is 0..256. The anti-aliased
- * primitives below are built on this. */
+/* alpha is 0..256. */
 void draw_filled_rect_alpha(volatile u8 *fb, int x, int y, int w, int h,
                             int screen_height, Color color, int alpha);
 void draw_pixel_alpha(volatile u8 *fb, int x, int y, int screen_height,
@@ -162,6 +166,9 @@ void draw_gradient_round_rect(volatile u8 *fb, int x, int y, int w, int h,
 void draw_string_scaled(volatile u8 *fb, int x, int y, int screen_height,
                         const char *str, Color color, int scale);
 void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h, int radius, int screen_height, Color color);
+/* The outline of that shape, `t` pixels thick; what is inside shows through. */
+void draw_round_ring(volatile u8 *fb, int x, int y, int w, int h, int radius,
+                     int t, int screen_height, Color color);
 void draw_icon_32(volatile u8 *fb, int x, int y, int screen_height, const unsigned char *icon_bits, Color color);
 void draw_icon_scaled(volatile u8 *fb, int x, int y, int screen_height, const unsigned char *icon_bits, Color color, int scale);
 

@@ -19,8 +19,8 @@ typedef struct {
   u32 pc;
   u32 cpsr;
   u32 exc;   /* CRASH_*                       */
-  u32 dfsr;  /* data fault status (Data Abort)*/
-  u32 dfar;  /* data fault address (Data Abort)*/
+  u32 dfsr;  /* Data Abort only */
+  u32 dfar;
   u32 cpu;   /* CRASH_CPU_* (crash_shared.h)  */
   u32 core;  /* ARM11 core id, else 0         */
 } CrashDump;
@@ -28,13 +28,12 @@ typedef struct {
 /* Call once at OS startup. */
 void crash_init(void);
 
-/* Shows the crash screen for `d`; never returns. */
+/* Never returns. */
 void crash_handle(CrashDump *d);
 
-/* Captures the current CPU state as a user-forced crash; never returns. */
+/* A user-forced crash of the current state; never returns. */
 void crash_force(void);
 
-/* asm (crash.s): fill `d` with the current register state. */
 void crash_capture(CrashDump *d);
 
 /* Shows the crash screen if the ARM11 posted a fault. Cheap enough to call from

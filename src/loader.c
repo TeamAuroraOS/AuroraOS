@@ -151,7 +151,6 @@ void boot_aurora(void) {
   p = lcpy(line, "Jumping -> ");
   lhex32(p, hdr.arm9_entry);
   loader_line(line, COLOR_GREEN);
-  delay(20000000);
 
   aurora_jump_arm9(hdr.arm9_entry);
 }

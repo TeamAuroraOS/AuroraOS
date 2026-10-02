@@ -16,8 +16,17 @@
 #define GPU_SHARED_ADDR 0x233C0000u
 #define GPU_MAGIC       0x55504733u /* "3GPU": the ARM11 GPU code has run */
 
-/* PICA200 register block (ARM11 I/O). */
 #define GPU_REG_BASE 0x10400000u
+
+/* Each panel's three framebuffers. Everything that draws to a panel directly
+ * draws to A; the Home Menu's presents rotate through all three, the LCD
+ * controller switching to each at a vertical blank (GPU_OP_PRESENT). */
+#define GPU_FB_TOP_A 0x18300000u
+#define GPU_FB_TOP_B 0x18400000u
+#define GPU_FB_TOP_C 0x18500000u
+#define GPU_FB_BOT_A 0x18346500u
+#define GPU_FB_BOT_B 0x18446500u
+#define GPU_FB_BOT_C 0x18546500u
 
 /* Pixel formats, as encoded in the PPF flags field (bits 8-11 in, 12-15 out). */
 enum {
@@ -28,7 +37,6 @@ enum {
   GPU_FMT_RGBA4  = 4,
 };
 
-/* PPF transfer flags (AuroraOS-level; mapped onto the hardware flag bits). */
 #define GPU_XF_FLIP_VERT 0x0001u /* hardware flags bit0  */
 #define GPU_XF_BLOCK32   0x0002u /* hardware flags bit16 */
 
@@ -47,6 +55,19 @@ enum {
   GPU_OP_FILL     = 2, /* PSC memory fill  */
   GPU_OP_TRANSFER = 3, /* PPF display transfer (de-tiles + converts format) */
   GPU_OP_TEXCOPY  = 4, /* PPF texture copy (raw linear -> linear blit)      */
+  GPU_OP_PRESENT  = 5, /* texture copy to a panel, synced as chosen below  */
+  GPU_OP_SHOW_A   = 6, /* newest frame into framebuffer A, and show A       */
+  GPU_OP_PRESENT2 = 7, /* both panels at once: xf_src top, xf_src2 bottom   */
+  GPU_OP_VSYNC_TEST = 8, /* wait xf_len blanks of panel xf_flags by method  */
+  GPU_OP_VSYNC_SET  = 9, /* sync panel xf_flags by method xf_src_w from now */
+};
+
+/* How a panel's presents are synchronised with its vertical blank; see
+ * Gpu11.c. */
+enum {
+  GPU_VSYNC_OFF = 0, /* copied straight into framebuffer A                */
+  GPU_VSYNC_IRQ = 1, /* the controller's vblank interrupt flag             */
+  GPU_VSYNC_GIC = 2, /* that interrupt, pending in the ARM11's distributor */
 };
 
 /* How far the last operation got, so a hang localises to the last step set. */
@@ -101,6 +122,18 @@ typedef struct {
   volatile uint32_t xf_dst_fmt; /* GPU_FMT_*                                  */
   volatile uint32_t xf_flags;   /* GPU_XF_*                                   */
   volatile uint32_t xf_len;     /* texture-copy length in bytes (16-aligned)  */
+
+  volatile uint32_t xf_src2;    /* GPU_OP_PRESENT2: the bottom panel's frame  */
+  volatile uint32_t pad[5];
+
+  /* Written only by the ARM11, in a cache line of their own: an ARM9 clean of
+   * the parameters above must not write stale copies back over them. */
+  volatile uint32_t front[2];   /* top, bottom: framebuffer with the newest frame */
+  volatile uint32_t vsync;      /* GPU_VSYNC_* per panel, 2 bits, top first       */
+  volatile uint32_t vs_swap[2]; /* swap and control registers as the */
+  volatile uint32_t vs_cnt[2];  /* last test found them */
+  volatile uint32_t vs_presents[2]; /* presents since the method was set, and */
+  volatile uint32_t vs_missed[2];   /* how many found no blank to wait for    */
 } GpuShared;
 
 /* ARM9 API (src/os/Gpu9.c). Each call blocks (bounded) until the ARM11 answers
@@ -125,15 +158,50 @@ int gpu_transfer(uint32_t src, uint32_t dst, uint32_t src_w, uint32_t src_h,
                  uint32_t dst_w, uint32_t dst_h, uint32_t src_fmt,
                  uint32_t dst_fmt, uint32_t flags);
 
-/* PPF texture copy: a raw linear -> linear blit of `len` bytes (multiple of
- * 16), with no tiling or format conversion. This is the framebuffer blit
- * primitive. */
+/* PPF texture copy: a raw linear -> linear blit of `len` bytes (a multiple of
+ * 16), with no tiling or format conversion. */
 int gpu_texcopy(uint32_t src, uint32_t dst, uint32_t len);
 
 /* Post a blit without waiting for it. The copy overlaps whatever the CPU does
  * next; call gpu_wait_idle() before drawing into the source buffer again. */
 int gpu_texcopy_async(uint32_t src, uint32_t dst, uint32_t len);
 void gpu_wait_idle(void);
+
+/* The OS's present: like gpu_texcopy_async to a panel's framebuffer A, but
+ * shown at the panel's vertical blank when anim_vsync_setup() found a way to
+ * wait for one, so it does not tear. */
+int gpu_present_async(uint32_t src, uint32_t dst, uint32_t len);
+
+/* Both panels in one operation, so waiting for two blanks costs one frame. */
+int gpu_present2_async(uint32_t top_src, uint32_t bot_src);
+
+/* Waits `blanks` vertical blanks of screen 0 or 1 by a GPU_VSYNC_* method;
+ * 0 if one never came. The caller times it to see whether the method is real
+ * (anim_vsync_setup). */
+int gpu_vsync_test(int screen, uint32_t method, uint32_t blanks);
+
+int gpu_vsync_set(int screen, uint32_t method);
+
+/* GpuShared.vsync, the swap and control registers the last tests read, and each
+ * panel's presents and missed blanks. */
+void gpu_vsync_info(uint32_t *vsync, uint32_t *swap, uint32_t *cnt,
+                    uint32_t *presents, uint32_t *missed);
+
+/* The framebuffer holding the newest frame of screen 0 (top) or 1 (bottom). */
+uint32_t gpu_front(int screen);
+
+/* Framebuffer A back on screen with the newest frame, before anything that
+ * draws to the panel directly, such as an app. Presents carry on rotating from
+ * there. */
+int gpu_show_a(void);
+
+/* Bit 0 top, bit 1 bottom: panels whose presents wait for the display. */
+uint32_t gpu_vsynced(void);
+
+/* Why the last operation that failed did: a GPU_ERR_* code, or
+ * GPU_FAIL_NO_ANSWER when the core did not answer in time. */
+#define GPU_FAIL_NO_ANSWER 0x100u
+uint32_t gpu_last_fail(void);
 
 /* Read the shared block back (invalidates the ARM9 cache first). */
 void gpu_get(GpuShared *out);

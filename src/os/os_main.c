@@ -1,6 +1,7 @@
 #include "aurora.h"
 #include "assets.h"
 #include "ui.h"
+#include "anim.h"
 #include "files.h"
 #include "fileview.h"
 #include "model.h"
@@ -80,7 +81,6 @@ static u32 str_len(const char *s) {
 
 static int g_accent_idx = 0;
 
-/* USER.dat as loaded at boot. */
 static UserConfig g_cfg;
 
 
@@ -131,51 +131,83 @@ extern void os_cache_sync(void);
 /* Does not present. */
 static void hm_status_bar(void) { status_bar_draw(); }
 
+/* Does not present. */
 static void hm_top_static(void) {
   ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT,
                TOP_SCREEN_HEIGHT);
   hm_status_bar();
-  screen_present_top();
 }
 
+#define PV_BOX   96
+#define PV_BOX_X ((TOP_SCREEN_WIDTH - PV_BOX) / 2)
+#define PV_BOX_Y 34
+#define PV_CARD_X 40
+#define PV_CARD_Y 148
+#define PV_CARD_W (TOP_SCREEN_WIDTH - 2 * PV_CARD_X)
+#define PV_CARD_H 62
+
+/* Erases what was there first, so a redraw matches a fresh one. Does not
+ * present. */
 static void hm_top_item(int selected) {
   const HomeApp *app = &home_apps[selected];
-
-  int box = 96, bx = (TOP_SCREEN_WIDTH - box) / 2, by = 34;
   Color tint = app->name ? app->tint : COLOR_HM_EMPTY_TOP;
   Color tint_dark;
   tint_dark.r = (u8)((tint.r * 5) / 9);
   tint_dark.g = (u8)((tint.g * 5) / 9);
   tint_dark.b = (u8)((tint.b * 5) / 9);
-  draw_gradient_round_rect(VRAM_TOP_LA, bx, by, box, box, 16,
+
+  ui_wallpaper_rect(VRAM_TOP_LA, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX,
+                    TOP_SCREEN_HEIGHT);
+  ui_wallpaper_rect(VRAM_TOP_LA, PV_CARD_X, PV_CARD_Y, PV_CARD_W, PV_CARD_H,
+                    TOP_SCREEN_HEIGHT);
+  draw_gradient_round_rect(VRAM_TOP_LA, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX, 16,
                            TOP_SCREEN_HEIGHT, tint, tint_dark);
   if (app->icon || app->asset_lg != UI_NO_ASSET)
-    ui_icon(VRAM_TOP_LA, bx, by, box, TOP_SCREEN_HEIGHT, app->asset_lg,
-            app->icon, COLOR_WHITE);
+    ui_icon(VRAM_TOP_LA, PV_BOX_X, PV_BOX_Y, PV_BOX, TOP_SCREEN_HEIGHT,
+            app->asset_lg, app->icon, COLOR_WHITE);
 
-  int cy = 148, cw = TOP_SCREEN_WIDTH - 80, ch = 62;
-  draw_gradient_round_rect(VRAM_TOP_LA, 40, cy, cw, ch, 11, TOP_SCREEN_HEIGHT,
-                           COLOR_PANEL_TOP, COLOR_PANEL_BOT);
+  draw_gradient_round_rect(VRAM_TOP_LA, PV_CARD_X, PV_CARD_Y, PV_CARD_W,
+                           PV_CARD_H, 11, TOP_SCREEN_HEIGHT, COLOR_PANEL_TOP,
+                           COLOR_PANEL_BOT);
   const char *name = app->name ? app->name : L(STR_EMPTY_SLOT);
   const char *dev = app->dev ? app->dev : "";
-  ui_text_mid_fit(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, cy + 7, TOP_SCREEN_HEIGHT,
-                  name, cw - 24, COLOR_WHITE, COLOR_PANEL_TOP, &ui_title);
-  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, cy + 31, TOP_SCREEN_HEIGHT,
-              dev, COLOR_HM_TEXT2, COLOR_PANEL_BOT, &ui_font);
+  ui_text_mid_fit(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, PV_CARD_Y + 7,
+                  TOP_SCREEN_HEIGHT, name, PV_CARD_W - 24, COLOR_WHITE,
+                  COLOR_PANEL_TOP, &ui_title);
+  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, PV_CARD_Y + 31,
+              TOP_SCREEN_HEIGHT, dev, COLOR_HM_TEXT2, COLOR_PANEL_BOT,
+              &ui_font);
+}
+
+/* Cross-fades the top screen to another app, the new one sliding in from the
+ * side the selection moved towards. */
+static void hm_preview(int sel, int dir) {
+  anim_xfade_begin(ANIM_TOP);
+  hm_top_item(sel);
+  anim_xfade_area(ANIM_TOP, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX);
+  anim_xfade_area(ANIM_TOP, PV_CARD_X, PV_CARD_Y, PV_CARD_W, PV_CARD_H);
+  anim_xfade_start(ANIM_TOP, dir);
   screen_present_top();
 }
 
 #define SLOT_SIZE 46
 #define SLOT_GAP  12
 #define SLOT_STEP (SLOT_SIZE + SLOT_GAP)
+#define SLOT_RING 3
+#define SLOT_LIFT 3 /* how far the selected tile grows on each side */
 #define GRID_W    (HOME_COLS * SLOT_SIZE + (HOME_COLS - 1) * SLOT_GAP)
 #define GRID_X    ((BOT_SCREEN_WIDTH - GRID_W) / 2)
 #define GRID_Y    52
 
-static void hm_bottom_static(void) {
-  ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
-               BOT_SCREEN_HEIGHT);
+static int slot_x(int i) { return GRID_X + (i % HOME_COLS) * SLOT_STEP; }
+static int slot_y(int i) { return GRID_Y + (i / HOME_COLS) * SLOT_STEP; }
 
+/* Where the selection ring is, and how far each tile stands out from its slot:
+ * the selected one grows, and dips when pressed. */
+static AnimVal hm_ring_x, hm_ring_y, hm_lift[HOME_COUNT];
+static int hm_sel;
+
+static void hm_bar(void) {
   draw_filled_round_rect(VRAM_BOT_A, 8, 8, BOT_SCREEN_WIDTH - 16, 30, 10,
                          BOT_SCREEN_HEIGHT, COLOR_HM_BAR);
   int sx = BOT_SCREEN_WIDTH - 62, sy = 16;
@@ -196,46 +228,100 @@ static void hm_bottom_static(void) {
                          COLOR_WHITE);
 }
 
-static void hm_slot(int i, int selected) {
-  int col = i % HOME_COLS, row = i / HOME_COLS;
-  int x = GRID_X + col * SLOT_STEP, y = GRID_Y + row * SLOT_STEP;
+static void hm_tile(int i) {
   const HomeApp *app = &home_apps[i];
+  int l = anim_px(&hm_lift[i]);
+  int x = slot_x(i) - l, y = slot_y(i) - l, size = SLOT_SIZE + 2 * l;
 
-  if (selected) {
-    draw_filled_round_rect(VRAM_BOT_A, x - 3, y - 3, SLOT_SIZE + 6,
-                           SLOT_SIZE + 6, 12, BOT_SCREEN_HEIGHT, g_accent);
-  } else {
-    int t = (y * 255) / BOT_SCREEN_HEIGHT;
-    Color bg;
-    bg.r = (u8)((COLOR_HM_BG_TOP.r * (255 - t) + COLOR_HM_BG_BOT.r * t) / 255);
-    bg.g = (u8)((COLOR_HM_BG_TOP.g * (255 - t) + COLOR_HM_BG_BOT.g * t) / 255);
-    bg.b = (u8)((COLOR_HM_BG_TOP.b * (255 - t) + COLOR_HM_BG_BOT.b * t) / 255);
-    draw_filled_rect(VRAM_BOT_A, x - 3, y - 3, SLOT_SIZE + 6, SLOT_SIZE + 6,
-                     BOT_SCREEN_HEIGHT, bg);
-  }
-  draw_gradient_round_rect(VRAM_BOT_A, x, y, SLOT_SIZE, SLOT_SIZE, 10,
+  draw_gradient_round_rect(VRAM_BOT_A, x, y, size, size, 10 + l / 2,
                            BOT_SCREEN_HEIGHT,
                            app->name ? COLOR_HM_SLOT_TOP : COLOR_HM_EMPTY_TOP,
                            app->name ? COLOR_HM_SLOT_BOT : COLOR_HM_EMPTY_BOT);
   if (app->icon || app->asset_sm != UI_NO_ASSET)
-    ui_icon(VRAM_BOT_A, x, y, SLOT_SIZE, BOT_SCREEN_HEIGHT, app->asset_sm,
+    ui_icon(VRAM_BOT_A, x, y, size, BOT_SCREEN_HEIGHT, app->asset_sm,
             app->icon, COLOR_WHITE);
+}
+
+/* The whole bottom screen, as its animations have it now. Does not present. */
+static void hm_bottom(void) {
+  const int out = SLOT_RING + SLOT_LIFT;
+  ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+               BOT_SCREEN_HEIGHT);
+  hm_bar();
+  for (int i = 0; i < HOME_COUNT; i++)
+    hm_tile(i);
+  /* Over the tiles, so all of it shows as it moves; one pixel thicker than the
+   * gap, so it also covers the lifted tile's softened edge. */
+  draw_round_ring(VRAM_BOT_A, anim_px(&hm_ring_x), anim_px(&hm_ring_y),
+                  SLOT_SIZE + 2 * out, SLOT_SIZE + 2 * out,
+                  10 + SLOT_LIFT / 2 + SLOT_RING, SLOT_RING + 1,
+                  BOT_SCREEN_HEIGHT, g_accent);
+}
+
+/* Points the ring and the lifts at `sel`; `jump` skips the animation. */
+static void hm_target(int sel, int jump) {
+  void (*set)(AnimVal *, int) = jump ? anim_jump : anim_to;
+  const int out = SLOT_RING + SLOT_LIFT;
+  hm_ring_x.bounce = hm_ring_y.bounce = 1;
+  set(&hm_ring_x, slot_x(sel) - out);
+  set(&hm_ring_y, slot_y(sel) - out);
+  for (int i = 0; i < HOME_COUNT; i++) {
+    hm_lift[i].bounce = 1;
+    set(&hm_lift[i], i == sel ? SLOT_LIFT : 0);
+  }
+  hm_sel = sel;
 }
 
 static void hm_draw_full(int sel) {
   hm_top_static();
   hm_top_item(sel);
-  hm_bottom_static();
-  for (int i = 0; i < HOME_COUNT; i++)
-    hm_slot(i, i == sel);
+  screen_present_top();
+  hm_target(sel, 1);
+  hm_bottom();
   screen_present_bottom();
 }
 
-static void hm_update(int old_sel, int new_sel) {
-  hm_slot(old_sel, 0);
-  hm_slot(new_sel, 1);
-  screen_present_bottom();
-  hm_top_item(new_sel);
+static void hm_update(int new_sel) {
+  int dir = new_sel > hm_sel ? 1 : -1;
+  hm_target(new_sel, 0);
+  if (!anim_moving(&hm_ring_x) && !anim_moving(&hm_ring_y)) {
+    hm_bottom(); /* no animation to carry it */
+    screen_present_bottom();
+  }
+  hm_preview(new_sel, dir);
+}
+
+static void hm_animate(int ms) {
+  int moved = anim_step(&hm_ring_x, ms), show = 0;
+  moved |= anim_step(&hm_ring_y, ms);
+  for (int i = 0; i < HOME_COUNT; i++)
+    moved |= anim_step(&hm_lift[i], ms);
+  if (moved) {
+    hm_bottom();
+    show |= ANIM_BOT;
+  }
+  if (anim_xfade_frame(ANIM_TOP))
+    show |= ANIM_TOP;
+  anim_present(show);
+}
+
+/* The tile dips under the press before its screen opens. */
+static void hm_press(int sel) {
+  u32 t0 = anim_now(), frame_at = 0;
+  anim_to(&hm_lift[sel], -2);
+  while (anim_ms(t0) < 110) {
+    int ms = anim_frame(&frame_at);
+    if (ms)
+      hm_animate(ms);
+    ui_idle();
+  }
+}
+
+/* Slides a screen in, and slides back to the caller, which then redraws. */
+static void open_screen(void (*screen)(void)) {
+  anim_transition(ANIM_PUSH, ANIM_BOTH);
+  screen();
+  anim_transition(ANIM_POP, ANIM_BOTH);
 }
 
 /* Shared with os_setup.c, so a saved index means the same everywhere. */
@@ -256,6 +342,7 @@ static void settings_header(u32 asset, const unsigned char *icon,
 typedef enum {
   SET_WIFI = 0,
   SET_ACCENT,
+  SET_CLOCK,
   SET_BRIGHTNESS,
   SET_TOUCHCAL,
   SET_WIFITEST,
@@ -283,6 +370,16 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
     case SET_ACCENT:
       *icon = NULL; *name = L(STR_ACCENT_COLOR);
       *value = accent_names[g_accent_idx]; break;
+    case SET_CLOCK: {
+      static char now_text[8];
+      RtcTime t;
+      *icon = NULL; *name = L(STR_CLOCK); *value = "--:--";
+      if (rtc_read(&t)) {
+        rtc_format_time(&t, now_text);
+        *value = now_text;
+      }
+      break;
+    }
     case SET_BRIGHTNESS:
       *asset = ASSET_ICON_DISPLAY_32;
       *icon = icon_brightness_bits; *name = L(STR_BRIGHTNESS);
@@ -307,31 +404,171 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
   }
 }
 
-static void settings_row(int drow, int id, int sel) {
+static char *hm_str_copy(char *dst, const char *src);
+
+/* A clock face of radius r centred on (cx, cy), hands at ten past two. */
+static void clock_glyph(volatile u8 *fb, int cx, int cy, int r, int sh) {
+  draw_round_ring(fb, cx - r, cy - r, 2 * r, 2 * r, r, r > 16 ? 4 : 2, sh,
+                  COLOR_WHITE);
+  draw_filled_round_rect(fb, cx - 1, cy - r * 6 / 10, 3, r * 6 / 10 + 1, 1, sh,
+                         COLOR_WHITE);
+  draw_filled_round_rect(fb, cx - 1, cy - 1, r * 7 / 10, 3, 1, sh,
+                         COLOR_WHITE);
+}
+
+/* Settings > Clock: Aurora's offset from the RTC, which stays as it is. */
+#define CK_BOX_W 96
+#define CK_BOX_H 64
+#define CK_GAP   28
+#define CK_BOX_Y 72
+#define CK_BOX_X(i) ((BOT_SCREEN_WIDTH - 2 * CK_BOX_W - CK_GAP) / 2 + \
+                     (i) * (CK_BOX_W + CK_GAP))
+
+static AnimVal ck_ring;
+
+static void clock_top(void) {
+  char tb[8], db[16];
+  RtcTime t;
+  if (rtc_read(&t)) {
+    rtc_format_time(&t, tb);
+    rtc_format_date(&t, db);
+  } else {
+    hm_str_copy(tb, "--:--");
+    db[0] = 0;
+  }
+  hm_top_static();
+  clock_glyph(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 78, 34, TOP_SCREEN_HEIGHT);
+  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 124, TOP_SCREEN_HEIGHT, tb,
+              COLOR_WHITE, COLOR_HM_BG_BOT, &ui_title);
+  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 152, TOP_SCREEN_HEIGHT, db,
+              COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_font);
+  ui_text_mid_fit(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 196, TOP_SCREEN_HEIGHT,
+                  L(STR_CLOCK_HINT), TOP_SCREEN_WIDTH - 24, COLOR_HM_TEXT2,
+                  COLOR_HM_BG_BOT, &ui_small);
+  screen_present_top();
+}
+
+static void clock_bottom(void) {
+  RtcTime t;
+  int have = rtc_read(&t);
+  ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+               BOT_SCREEN_HEIGHT);
+  for (int i = 0; i < 2; i++) {
+    char v[4] = {'-', '-', 0, 0};
+    int x = CK_BOX_X(i), n = i ? t.min : t.hour;
+    if (have) {
+      v[0] = (char)('0' + n / 10);
+      v[1] = (char)('0' + n % 10);
+    }
+    ui_text_mid(VRAM_BOT_A, x + CK_BOX_W / 2, CK_BOX_Y - 24, BOT_SCREEN_HEIGHT,
+                L(i ? STR_MINUTE : STR_HOUR), COLOR_HM_TEXT2, COLOR_HM_BG_TOP,
+                &ui_small);
+    draw_gradient_round_rect(VRAM_BOT_A, x, CK_BOX_Y, CK_BOX_W, CK_BOX_H, 12,
+                             BOT_SCREEN_HEIGHT, COLOR_HM_SLOT_TOP,
+                             COLOR_HM_SLOT_BOT);
+    ui_text_mid(VRAM_BOT_A, x + CK_BOX_W / 2,
+                CK_BOX_Y + (CK_BOX_H - ui_th(&ui_title)) / 2,
+                BOT_SCREEN_HEIGHT, v, COLOR_WHITE, COLOR_HM_SLOT, &ui_title);
+  }
+  draw_round_ring(VRAM_BOT_A, anim_px(&ck_ring), CK_BOX_Y - 3, CK_BOX_W + 6,
+                  CK_BOX_H + 6, 15, 4, BOT_SCREEN_HEIGHT, g_accent);
+  ui_text_mid_fit(VRAM_BOT_A, BOT_SCREEN_WIDTH / 2, BOT_SCREEN_HEIGHT - 26,
+                  BOT_SCREEN_HEIGHT, L(STR_CLOCK_KEYS), BOT_SCREEN_WIDTH - 16,
+                  COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_small);
+  screen_present_bottom();
+}
+
+/* Up and Down move the focused box; the change shows at once and is kept
+ * with A. Offsets wrap to between UTC-12 and UTC+14 worth of shift. */
+static void clock_screen(void) {
+  int focus = 0, off = g_rtc_offset, kept = g_rtc_offset, tick = 0, last = -1;
+  u32 frame_at = 0;
+  ck_ring.bounce = 1;
+  anim_jump(&ck_ring, CK_BOX_X(0) - 3);
+  clock_top();
+  clock_bottom();
+  for (;;) {
+    u32 k = get_keys_down();
+    int redraw = 0, tx, ty;
+    RtcTime t;
+
+    if (k & (BUTTON_DLEFT | BUTTON_DRIGHT)) {
+      focus = !focus;
+      anim_to(&ck_ring, CK_BOX_X(focus) - 3);
+      redraw = 1;
+    }
+    if (k & BUTTON_DUP) {
+      off += focus ? 1 : 60;
+      redraw = 2;
+    }
+    if (k & BUTTON_DDOWN) {
+      off -= focus ? 1 : 60;
+      redraw = 2;
+    }
+    if (touch_tap(&tx, &ty))
+      for (int i = 0; i < 2; i++)
+        if (touch_in(tx, ty, CK_BOX_X(i), CK_BOX_Y, CK_BOX_W, CK_BOX_H)) {
+          if (focus != i)
+            anim_to(&ck_ring, CK_BOX_X(i) - 3);
+          focus = i;
+          off += (ty < CK_BOX_Y + CK_BOX_H / 2 ? 1 : -1) * (i ? 1 : 60);
+          redraw = 2;
+        }
+    if (k & BUTTON_X) {
+      off = 0;
+      redraw = 2;
+    }
+    if (off >= 14 * 60)
+      off -= 24 * 60;
+    if (off < -12 * 60)
+      off += 24 * 60;
+    if (k & BUTTON_A) {
+      g_rtc_offset = off;
+      g_cfg.clock_offset = (s16)off;
+      user_config_save(&g_cfg);
+      return;
+    }
+    if (k & BUTTON_B) {
+      g_rtc_offset = kept;
+      return;
+    }
+    if (redraw == 2)
+      g_rtc_offset = off;
+    if (++tick >= 96) { /* the minute turning over */
+      tick = 0;
+      if (rtc_read(&t) && t.min != last) {
+        last = t.min;
+        redraw = 2;
+      }
+    }
+    if (redraw == 2)
+      clock_top();
+    if (redraw && !anim_moving(&ck_ring))
+      clock_bottom();
+    int ms = anim_frame(&frame_at);
+    if (ms && anim_step(&ck_ring, ms))
+      clock_bottom();
+    ui_idle();
+  }
+}
+
+static AnimList set_list = {.count = SET_COUNT, .visible = SET_VISIBLE,
+                            .step = ROW_STEP};
+
+/* One row's card at `y`; the selection ring is drawn separately. */
+static void settings_row(int y, int id) {
   const unsigned char *icon;
   const char *name, *value;
   u32 asset;
   settings_content(id, &asset, &icon, &name, &value);
 
-  int y = ROW_Y0 + drow * ROW_STEP;
-  /* Unselected rows repaint the ring area in the background shade, so no halo
-   * is left. */
-  if (id == sel) {
-    draw_filled_round_rect(VRAM_BOT_A, ROW_X - 3, y - 3, ROW_W + 6, ROW_H + 6,
-                           10, BOT_SCREEN_HEIGHT, g_accent);
-  } else {
-    int t = (y * 255) / BOT_SCREEN_HEIGHT;
-    Color bg;
-    bg.r = (u8)((COLOR_HM_BG_TOP.r * (255 - t) + COLOR_HM_BG_BOT.r * t) / 255);
-    bg.g = (u8)((COLOR_HM_BG_TOP.g * (255 - t) + COLOR_HM_BG_BOT.g * t) / 255);
-    bg.b = (u8)((COLOR_HM_BG_TOP.b * (255 - t) + COLOR_HM_BG_BOT.b * t) / 255);
-    draw_filled_rect(VRAM_BOT_A, ROW_X - 3, y - 3, ROW_W + 6, ROW_H + 6,
-                     BOT_SCREEN_HEIGHT, bg);
-  }
   draw_gradient_round_rect(VRAM_BOT_A, ROW_X, y, ROW_W, ROW_H, 8,
                            BOT_SCREEN_HEIGHT, COLOR_HM_SLOT_TOP,
                            COLOR_HM_SLOT_BOT);
-  if (icon || asset != UI_NO_ASSET)
+  if (id == SET_CLOCK)
+    clock_glyph(VRAM_BOT_A, ROW_X + 6 + ROW_H / 2, y + ROW_H / 2, 9,
+                BOT_SCREEN_HEIGHT);
+  else if (icon || asset != UI_NO_ASSET)
     ui_icon(VRAM_BOT_A, ROW_X + 6, y, ROW_H, BOT_SCREEN_HEIGHT, asset, icon,
             COLOR_WHITE);
   else
@@ -347,65 +584,80 @@ static void settings_row(int drow, int id, int sel) {
           BOT_SCREEN_HEIGHT, ">", COLOR_HM_TEXT2, COLOR_HM_SLOT, &ui_font);
 }
 
-static int settings_top(int sel) {
-  int top = sel - SET_VISIBLE / 2;
-  if (top > SET_COUNT - SET_VISIBLE)
-    top = SET_COUNT - SET_VISIBLE;
-  if (top < 0)
-    top = 0;
-  return top;
+/* The list where its animation has it. */
+static void settings_paint(void) {
+  int scroll = anim_px(&set_list.scroll);
+
+  ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+               BOT_SCREEN_HEIGHT);
+  for (int i = 0; i < SET_COUNT; i++) {
+    int y = ROW_Y0 + i * ROW_STEP - scroll;
+    if (y + ROW_H > 0 && y < BOT_SCREEN_HEIGHT)
+      settings_row(y, i);
+  }
+  draw_round_ring(VRAM_BOT_A, ROW_X - 3,
+                  ROW_Y0 + anim_px(&set_list.ring) - scroll - 3, ROW_W + 6,
+                  ROW_H + 6, 11, 4, BOT_SCREEN_HEIGHT, g_accent);
+  screen_present_bottom();
 }
 
 static void settings_draw(int sel) {
-  int top = settings_top(sel);
-
-  draw_vgradient(VRAM_BOT_A, 0, 0, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
-                 BOT_SCREEN_HEIGHT, COLOR_HM_BG_TOP, COLOR_HM_BG_BOT);
-  for (int r = 0; r < SET_VISIBLE && top + r < SET_COUNT; r++)
-    settings_row(r, top + r, sel);
-  screen_present_bottom();
-}
-
-static void settings_update(int old_sel, int new_sel) {
-  int top = settings_top(new_sel);
-
-  if (settings_top(old_sel) != top) {
-    settings_draw(new_sel);
-    return;
-  }
-  settings_row(old_sel - top, old_sel, new_sel);
-  settings_row(new_sel - top, new_sel, new_sel);
-  screen_present_bottom();
+  anim_list_jump(&set_list, sel);
+  settings_paint();
 }
 
 #define WIFI_POINTS 5
 
-static void wifi_draw(int sel) {
-  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
-  draw_string(VRAM_BOT_A, 12, 10, BOT_SCREEN_HEIGHT, "wifi", COLOR_HM_TEXT2,
-              COLOR_HM_BG);
+#define WIFI_BTN_W 170
+#define WIFI_BTN_H 34
+#define WIFI_BTN_X ((BOT_SCREEN_WIDTH - WIFI_BTN_W) / 2)
+#define WIFI_BTN_Y 28
+#define WIFI_ROW_Y(j) (80 + (j) * 30)
 
-  int bw = 170, bh = 34, bx = (BOT_SCREEN_WIDTH - bw) / 2, by = 28;
-  if (sel == 0)
-    draw_filled_round_rect(VRAM_BOT_A, bx - 3, by - 3, bw + 6, bh + 6, 12,
-                           BOT_SCREEN_HEIGHT, COLOR_WHITE);
-  draw_filled_round_rect(VRAM_BOT_A, bx, by, bw, bh, 10, BOT_SCREEN_HEIGHT,
-                         g_accent);
-  const char *bl = "Setup Wifi";
-  draw_string(VRAM_BOT_A, bx + (bw - (int)str_len(bl) * FONT_WIDTH) / 2,
-              by + (bh - FONT_HEIGHT) / 2, BOT_SCREEN_HEIGHT, bl, COLOR_WHITE,
-              g_accent);
+/* The ring around item `sel`: the Setup button, or one of the networks. It
+ * glides, and changes shape, between them. */
+static AnimVal wifi_rx, wifi_ry, wifi_rw, wifi_rh;
+
+static void wifi_ring_to(int sel, int jump) {
+  void (*set)(AnimVal *, int) = jump ? anim_jump : anim_to;
+  wifi_rx.bounce = wifi_ry.bounce = wifi_rw.bounce = wifi_rh.bounce = 1;
+  if (sel == 0) {
+    set(&wifi_rx, WIFI_BTN_X - 3);
+    set(&wifi_ry, WIFI_BTN_Y - 3);
+    set(&wifi_rw, WIFI_BTN_W + 6);
+    set(&wifi_rh, WIFI_BTN_H + 6);
+  } else {
+    set(&wifi_rx, 9);
+    set(&wifi_ry, WIFI_ROW_Y(sel - 1) - 3);
+    set(&wifi_rw, BOT_SCREEN_WIDTH - 18);
+    set(&wifi_rh, 30);
+  }
+}
+
+static void wifi_draw(int sel) {
+  int bx = WIFI_BTN_X, by = WIFI_BTN_Y;
+
+  ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+               BOT_SCREEN_HEIGHT);
+  ui_text(VRAM_BOT_A, 12, 6, BOT_SCREEN_HEIGHT, "Wi-Fi", COLOR_HM_TEXT2,
+          COLOR_HM_BG_TOP, &ui_small);
+  draw_filled_round_rect(VRAM_BOT_A, bx, by, WIFI_BTN_W, WIFI_BTN_H, 10,
+                         BOT_SCREEN_HEIGHT, g_accent);
+  ui_text_mid(VRAM_BOT_A, bx + WIFI_BTN_W / 2,
+              by + (WIFI_BTN_H - ui_th(&ui_bold)) / 2, BOT_SCREEN_HEIGHT,
+              "Setup Wi-Fi", COLOR_WHITE, g_accent, &ui_bold);
 
   for (int j = 0; j < WIFI_POINTS; j++) {
-    int y = 80 + j * 30;
-    int s = (sel == 1 + j);
-    draw_filled_round_rect(VRAM_BOT_A, 9, y - 3, BOT_SCREEN_WIDTH - 18 + 6, 24 + 6,
-                           8, BOT_SCREEN_HEIGHT, s ? g_accent : COLOR_HM_BG);
-    draw_filled_round_rect(VRAM_BOT_A, 12, y, BOT_SCREEN_WIDTH - 24, 24, 6,
-                           BOT_SCREEN_HEIGHT, COLOR_HM_SLOT);
-    draw_string(VRAM_BOT_A, 24, y + (24 - FONT_HEIGHT) / 2, BOT_SCREEN_HEIGHT,
-                "Wifi point", COLOR_WHITE, COLOR_HM_SLOT);
+    int y = WIFI_ROW_Y(j);
+    draw_gradient_round_rect(VRAM_BOT_A, 12, y, BOT_SCREEN_WIDTH - 24, 24, 8,
+                             BOT_SCREEN_HEIGHT, COLOR_HM_SLOT_TOP,
+                             COLOR_HM_SLOT_BOT);
+    ui_text(VRAM_BOT_A, 24, y + (24 - ui_th(&ui_font)) / 2, BOT_SCREEN_HEIGHT,
+            "Wi-Fi point", COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
   }
+  draw_round_ring(VRAM_BOT_A, anim_px(&wifi_rx), anim_px(&wifi_ry),
+                  anim_px(&wifi_rw), anim_px(&wifi_rh), 11, 4, BOT_SCREEN_HEIGHT,
+                  sel ? g_accent : COLOR_WHITE);
   screen_present_bottom();
 }
 
@@ -413,6 +665,8 @@ static void wifi_screen(void) {
   settings_header(ASSET_ICON_WIFI_64, icon_wifi_bits, "Wifi Configuration",
                   COLOR_WHITE);
   int sel = 0, n = 1 + WIFI_POINTS;
+  u32 frame_at = 0;
+  wifi_ring_to(sel, 1);
   wifi_draw(sel);
   while (1) {
     u32 k = get_keys_down();
@@ -421,10 +675,21 @@ static void wifi_screen(void) {
       sel--;
     if ((k & BUTTON_DDOWN) && sel < n - 1)
       sel++;
-    if (sel != prev)
-      wifi_draw(sel);
+    if (sel != prev) {
+      wifi_ring_to(sel, 0);
+      if (!anim_moving(&wifi_ry))
+        wifi_draw(sel);
+    }
     if (k & BUTTON_B)
       return;
+    int ms = anim_frame(&frame_at);
+    if (ms) {
+      int moved = anim_step(&wifi_rx, ms);
+      moved |= anim_step(&wifi_ry, ms);
+      moved |= anim_step(&wifi_rw, ms);
+      if (anim_step(&wifi_rh, ms) | moved)
+        wifi_draw(sel);
+    }
     ui_idle();
   }
 }
@@ -436,42 +701,65 @@ static void wifi_screen(void) {
 #define SW_X    ((BOT_SCREEN_WIDTH - SW_W) / 2)
 #define SW_Y    48
 
-static void accent_draw(int sel) {
-  hm_top_static();
-  draw_filled_round_rect(VRAM_TOP_LA, (TOP_SCREEN_WIDTH - 96) / 2, 40, 96, 96, 16,
-                         TOP_SCREEN_HEIGHT, accent_presets[sel]);
-  const char *t = L(STR_ACCENT_COLOR);
-  draw_string(VRAM_TOP_LA, (TOP_SCREEN_WIDTH - (int)str_len(t) * FONT_WIDTH) / 2,
-              150, TOP_SCREEN_HEIGHT, t, COLOR_WHITE, COLOR_HM_BG);
-  draw_string(VRAM_TOP_LA,
-              (TOP_SCREEN_WIDTH - (int)str_len(accent_names[sel]) * FONT_WIDTH) / 2,
-              170, TOP_SCREEN_HEIGHT, accent_names[sel], COLOR_HM_TEXT2,
-              COLOR_HM_BG);
-  screen_present_top();
+static int sw_x(int i) { return SW_X + (i % SW_COLS) * (SW_SIZE + SW_GAP); }
+static int sw_y(int i) { return SW_Y + (i / SW_COLS) * (SW_SIZE + SW_GAP); }
 
-  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
-  draw_string(VRAM_BOT_A, 12, 14, BOT_SCREEN_HEIGHT, L(STR_PICK_ACCENT),
-              COLOR_HM_TEXT2, COLOR_HM_BG);
+static AnimVal sw_ring_x, sw_ring_y;
+
+/* Does not present. */
+static void accent_top(int sel) {
+  const char *t = L(STR_ACCENT_COLOR);
+  ui_wallpaper_rect(VRAM_TOP_LA, 0, 36, TOP_SCREEN_WIDTH, 150,
+                    TOP_SCREEN_HEIGHT);
+  draw_filled_round_rect(VRAM_TOP_LA, (TOP_SCREEN_WIDTH - 96) / 2, 40, 96, 96,
+                         16, TOP_SCREEN_HEIGHT, accent_presets[sel]);
+  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 146, TOP_SCREEN_HEIGHT, t,
+              COLOR_WHITE, COLOR_HM_BG_BOT, &ui_title);
+  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 170, TOP_SCREEN_HEIGHT,
+              accent_names[sel], COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_font);
+}
+
+/* The palette, ring where its animation has it. Does not present. */
+static void accent_paint(void) {
+  ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+               BOT_SCREEN_HEIGHT);
+  ui_text(VRAM_BOT_A, 12, 14, BOT_SCREEN_HEIGHT, L(STR_PICK_ACCENT),
+          COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_font);
   for (int i = 0; i < ACCENT_COUNT; i++) {
-    int col = i % SW_COLS, row = i / SW_COLS;
-    int x = SW_X + col * (SW_SIZE + SW_GAP), y = SW_Y + row * (SW_SIZE + SW_GAP);
-    if (i == sel)
-      draw_filled_round_rect(VRAM_BOT_A, x - 3, y - 3, SW_SIZE + 6, SW_SIZE + 6,
-                             12, BOT_SCREEN_HEIGHT, COLOR_WHITE);
+    int x = sw_x(i), y = sw_y(i);
     draw_filled_round_rect(VRAM_BOT_A, x, y, SW_SIZE, SW_SIZE, 10,
                            BOT_SCREEN_HEIGHT, accent_presets[i]);
     if (i == g_accent_idx)
-      draw_filled_round_rect(VRAM_BOT_A, x + SW_SIZE / 2 - 5, y + SW_SIZE / 2 - 5,
-                             10, 10, 3, BOT_SCREEN_HEIGHT, COLOR_WHITE);
+      draw_filled_round_rect(VRAM_BOT_A, x + SW_SIZE / 2 - 5,
+                             y + SW_SIZE / 2 - 5, 10, 10, 3, BOT_SCREEN_HEIGHT,
+                             COLOR_WHITE);
   }
-  draw_string(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 18, BOT_SCREEN_HEIGHT,
-              L(STR_A_APPLY_B_BACK), COLOR_HM_TEXT2, COLOR_HM_BG);
+  draw_round_ring(VRAM_BOT_A, anim_px(&sw_ring_x), anim_px(&sw_ring_y),
+                  SW_SIZE + 6, SW_SIZE + 6, 13, 4, BOT_SCREEN_HEIGHT,
+                  COLOR_WHITE);
+  ui_text(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 22, BOT_SCREEN_HEIGHT,
+          L(STR_A_APPLY_B_BACK), COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_small);
+}
+
+static void accent_bottom(void) {
+  accent_paint();
   screen_present_bottom();
+}
+
+static void accent_draw(int sel) {
+  hm_top_static();
+  accent_top(sel);
+  screen_present_top();
+  sw_ring_x.bounce = sw_ring_y.bounce = 1;
+  anim_jump(&sw_ring_x, sw_x(sel) - 3);
+  anim_jump(&sw_ring_y, sw_y(sel) - 3);
+  accent_bottom();
 }
 
 static void accent_screen(void) {
   int sel = g_accent_idx;
   int rows = (ACCENT_COUNT + SW_COLS - 1) / SW_COLS;
+  u32 frame_at = 0;
   accent_draw(sel);
   while (1) {
     u32 k = get_keys_down();
@@ -489,9 +777,7 @@ static void accent_screen(void) {
     int tx, ty;
     if (touch_tap(&tx, &ty)) {
       for (int i = 0; i < ACCENT_COUNT; i++) {
-        int c = i % SW_COLS, r = i / SW_COLS;
-        int x = SW_X + c * (SW_SIZE + SW_GAP), y = SW_Y + r * (SW_SIZE + SW_GAP);
-        if (touch_in(tx, ty, x, y, SW_SIZE, SW_SIZE)) {
+        if (touch_in(tx, ty, sw_x(i), sw_y(i), SW_SIZE, SW_SIZE)) {
           sel = i;
           apply = 1;
           break;
@@ -499,17 +785,39 @@ static void accent_screen(void) {
       }
     }
 
-    if (sel != prev)
-      accent_draw(sel);
+    if (sel != prev) {
+      anim_to(&sw_ring_x, sw_x(sel) - 3);
+      anim_to(&sw_ring_y, sw_y(sel) - 3);
+      if (!anim_moving(&sw_ring_x) && !anim_moving(&sw_ring_y))
+        accent_bottom();
+      anim_xfade_begin(ANIM_TOP);
+      accent_top(sel);
+      anim_xfade_area(ANIM_TOP, (TOP_SCREEN_WIDTH - 96) / 2, 40, 96, 96);
+      anim_xfade_area(ANIM_TOP, 20, 142, TOP_SCREEN_WIDTH - 40, 44);
+      anim_xfade_start(ANIM_TOP, sel > prev ? 1 : -1);
+      screen_present_top();
+    }
     if ((k & BUTTON_A) || apply) {
       g_accent = accent_presets[sel];
       g_accent_idx = sel;
       ui_bg_invalidate(); /* the accent tints the wallpaper: recompose it */
       ui_bg_build();
+      anim_transition(ANIM_FADE, ANIM_BOTH);
       accent_draw(sel);
     }
     if (k & BUTTON_B)
       return;
+    int ms = anim_frame(&frame_at);
+    if (ms) {
+      int moved = anim_step(&sw_ring_x, ms), show = 0;
+      if (anim_step(&sw_ring_y, ms) | moved) {
+        accent_paint();
+        show |= ANIM_BOT;
+      }
+      if (anim_xfade_frame(ANIM_TOP))
+        show |= ANIM_TOP;
+      anim_present(show);
+    }
     ui_idle();
   }
 }
@@ -1049,7 +1357,7 @@ static void gpu_run_bench(void) {
   u32 t0;
 
   if (!timer_calibrated())
-    return; /* calibrated at boot; re-running it here would reset the ticks */
+    return;
 
   /* 64 tiny blits: what remains is the cost of any GPU request. */
   t0 = timer_ticks();
@@ -1214,16 +1522,103 @@ static void gputest_draw(const GpuShared *g, const char *last, int lastok) {
   screen_present_bottom();
 }
 
+/* Whether the GPU came up with the boot or later, and when. */
+static int gpu_up, gpu_tries;
+static u32 gpu_late_ms;
+
+/* When each step of this boot ended, in timer ticks, for GPU Test. */
+enum {
+  BT_START, BT_CORE, BT_UI, BT_WAIT, BT_GPU, BT_VSYNC, BT_CONFIG, BT_BG,
+  BT_APPS, BT_MENU, BT_COUNT
+};
+static u32 boot_t[BT_COUNT];
+static const char *const boot_names[BT_COUNT] = {
+    "", "core", "ui", "wait", "gpu", "vsync", "config", "bg", "apps", "menu"};
+
+static void boot_mark(int i) { boot_t[i] = timer_ticks(); }
+
+static u32 boot_ms(u32 from, u32 to) {
+  return (u32)(((unsigned long long)(to - from) * 1000u) / timer_hz());
+}
+
+/* Appends lines on how long each step of the boot took and how the ARM11 core
+ * and the GPU started. */
+static void core_status(char *p, char *end) {
+  char line[200], num[12], *q = line;
+  int ms = audio_ready_ms();
+  q = snd_cpy(q, "\nBoot ");
+  snd_u32(num, boot_ms(boot_t[BT_START], boot_t[BT_MENU]));
+  q = snd_cpy(q, num);
+  q = snd_cpy(q, " ms:");
+  for (int i = BT_CORE; i < BT_COUNT; i++) {
+    q = snd_cpy(q, i == BT_VSYNC ? "\n" : (i == BT_CORE ? " " : ", "));
+    q = snd_cpy(q, boot_names[i]);
+    q = snd_cpy(q, " ");
+    snd_u32(num, boot_ms(boot_t[i - 1], boot_t[i]));
+    q = snd_cpy(q, num);
+  }
+  if (ms < 0) {
+    q = snd_cpy(q, "\nCore not answering yet");
+  } else if (ms == 0) {
+    q = snd_cpy(q, "\nCore already running");
+  } else {
+    snd_u32(num, (u32)ms);
+    q = snd_cpy(q, "\nCore answered after ");
+    q = snd_cpy(q, num);
+    q = snd_cpy(q, " ms");
+  }
+  if (!gpu_up) {
+    q = snd_cpy(q, ", GPU off");
+  } else if (!gpu_late_ms) {
+    q = snd_cpy(q, ", GPU at boot");
+  } else {
+    snd_u32(num, gpu_late_ms);
+    q = snd_cpy(q, ", GPU from ");
+    q = snd_cpy(q, num);
+    q = snd_cpy(q, " ms");
+  }
+  for (q = line; *q && p < end - 1;)
+    *p++ = *q++;
+  *p = 0;
+}
+
+static void gputest_top(void) {
+  char st[480], *line = st, *e = st;
+  int y = 124;
+  anim_status(st, (int)sizeof(st));
+  while (*e)
+    e++;
+  core_status(e, st + sizeof(st));
+  hm_top_static();
+  ui_icon(VRAM_TOP_LA, (TOP_SCREEN_WIDTH - 64) / 2, 30, 64, TOP_SCREEN_HEIGHT,
+          ASSET_ICON_MONITOR_64, icon_boot_bits, COLOR_WHITE);
+  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 98, TOP_SCREEN_HEIGHT,
+              L(STR_GPU_TEST), COLOR_WHITE, COLOR_HM_BG_BOT, &ui_title);
+  for (char *p = st;; p++) {
+    if (*p == '\n' || !*p) {
+      char end = *p;
+      *p = 0;
+      ui_text_mid_fit(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, y, TOP_SCREEN_HEIGHT,
+                      line, TOP_SCREEN_WIDTH - 24, COLOR_HM_TEXT2,
+                      COLOR_HM_BG_BOT, &ui_small);
+      y += 16;
+      line = p + 1;
+      if (!end)
+        break;
+    }
+  }
+  screen_present_top();
+}
+
 static void gpu_test_screen(void) {
-  settings_header(ASSET_ICON_MONITOR_64, icon_boot_bits, L(STR_GPU_TEST),
-                  COLOR_WHITE);
+  gputest_top();
   static GpuShared g;
   const char *last = 0;
   int lastok = 0;
   static const u32 fill_colors[] = {0x00301060u, 0x00104030u, 0x00603010u};
   int fill_idx = 0;
 
-  int ok = gpu_init();
+  int ok = gpu_init(); /* keeps the vsync method, so the top shows the boot's */
   gpu_get(&g);
   last = ok ? "init" : "init failed";
   lastok = ok;
@@ -1234,16 +1629,17 @@ static void gpu_test_screen(void) {
 
     if (k & BUTTON_A) {
       lastok = gpu_init();
+      anim_vsync_setup(1); /* measured again, and the present counts restart */
+      gputest_top();
       last = lastok ? "init" : "init failed";
     } else if (k & BUTTON_X) {
       /* Straight to the panel, so it shows without a present. */
-      lastok = gpu_clear_fb((u32)VRAM_TOP_PHYS, TOP_FB_SIZE,
-                            fill_colors[fill_idx]);
+      lastok = gpu_clear_fb(gpu_front(0), TOP_FB_SIZE, fill_colors[fill_idx]);
       fill_idx = (fill_idx + 1) % 3;
       last = lastok ? "PSC fill" : "PSC fill failed";
     } else if (k & BUTTON_Y) {
       gpu_paint_scratch();
-      lastok = gpu_texcopy(GPU_SCRATCH, (u32)VRAM_TOP_PHYS, TOP_FB_SIZE);
+      lastok = gpu_texcopy(GPU_SCRATCH, gpu_front(0), TOP_FB_SIZE);
       last = lastok ? "PPF blit" : "PPF blit failed";
     } else if (k & BUTTON_L) {
       gpu_run_bench();
@@ -1251,8 +1647,7 @@ static void gpu_test_screen(void) {
       lastok = 1;
     } else if (k & BUTTON_R) {
       render_test_screen();
-      settings_header(ASSET_ICON_MONITOR_64, icon_boot_bits, L(STR_GPU_TEST),
-                      COLOR_WHITE);
+      gputest_top();
       last = "render test";
       lastok = 1;
     } else if (k & BUTTON_B) {
@@ -1557,7 +1952,7 @@ static void about_screen(void) {
     if (k & BUTTON_B)
       return;
     if (more) {
-      info_screen();
+      open_screen(info_screen);
       about_top();
       about_bottom(sd);
     }
@@ -1594,6 +1989,7 @@ static void settings_open(void) {
   settings_header(ASSET_ICON_SETTINGS_64, icon_settings_bits,
                   L(STR_SETTINGS), COLOR_WHITE);
   int sel = 0;
+  u32 frame_at = 0;
   settings_draw(sel);
   while (1) {
     u32 k = get_keys_down();
@@ -1607,11 +2003,7 @@ static void settings_open(void) {
 
     int tx, ty;
     if (touch_tap(&tx, &ty)) {
-      int top = sel - SET_VISIBLE / 2;
-      if (top > SET_COUNT - SET_VISIBLE)
-        top = SET_COUNT - SET_VISIBLE;
-      if (top < 0)
-        top = 0;
+      int top = anim_list_top(&set_list, sel);
       for (int r = 0; r < SET_VISIBLE && top + r < SET_COUNT; r++) {
         int y = ROW_Y0 + r * ROW_STEP;
         if (touch_in(tx, ty, ROW_X - 3, y - 3, ROW_W + 6, ROW_H + 6)) {
@@ -1622,29 +2014,36 @@ static void settings_open(void) {
       }
     }
 
-    if (sel != prev)
-      settings_update(prev, sel);
+    if (sel != prev) {
+      anim_list_to(&set_list, sel);
+      if (!anim_list_moving(&set_list))
+        settings_paint();
+    }
     if ((k & BUTTON_A) || activate) {
-      if (sel == SET_WIFI)
-        wifi_screen();
-      else if (sel == SET_ACCENT)
-        accent_screen();
-      else if (sel == SET_TOUCHCAL)
-        touch_cal_screen();
-      else if (sel == SET_WIFITEST)
-        wifi_test_screen();
-      else if (sel == SET_GPUTEST)
-        gpu_test_screen();
-      else if (sel == SET_ABOUT)
-        about_screen();
-      else if (sel == SET_CRASH)
-        crash_force(); /* never returns: shows the crash screen */
-      settings_header(ASSET_ICON_SETTINGS_64, icon_settings_bits,
-                  L(STR_SETTINGS), COLOR_WHITE);
-      settings_draw(sel);
+      void (*sub)(void) = 0;
+      switch (sel) {
+        case SET_WIFI:     sub = wifi_screen; break;
+        case SET_ACCENT:   sub = accent_screen; break;
+        case SET_CLOCK:    sub = clock_screen; break;
+        case SET_TOUCHCAL: sub = touch_cal_screen; break;
+        case SET_WIFITEST: sub = wifi_test_screen; break;
+        case SET_GPUTEST:  sub = gpu_test_screen; break;
+        case SET_ABOUT:    sub = about_screen; break;
+        case SET_CRASH:    crash_force(); break;
+        default:           break;
+      }
+      if (sub) {
+        open_screen(sub);
+        settings_header(ASSET_ICON_SETTINGS_64, icon_settings_bits,
+                        L(STR_SETTINGS), COLOR_WHITE);
+        settings_draw(sel);
+      }
     }
     if (k & BUTTON_B)
       return;
+    int ms = anim_frame(&frame_at);
+    if (ms && anim_list_step(&set_list, ms))
+      settings_paint();
     ui_idle();
   }
 }
@@ -1832,12 +2231,11 @@ static void launch_msg(const char *msg, Color color) {
   screen_present_bottom();
 }
 
+/* After a failed launch; the caller's redraw fades the message away. */
 static void launch_wait_back(void) {
-  while (1) {
-    if (get_keys_down() & BUTTON_B)
-      return;
+  while (!(get_keys_down() & BUTTON_B))
     ui_idle();
-  }
+  anim_transition(ANIM_FADE, ANIM_BOT);
 }
 
 /* Lets HOME restart the Home Menu after an app: OS snapshot, descriptor and
@@ -1919,13 +2317,12 @@ static void os_launch_app(const char *path) {
   f_close(&app_file);
   f_mount(NULL, "", 0);
 
+  gpu_show_a(); /* the app draws to framebuffer A */
   os_install_return();
 
   os_run_stub(AURORA_APP_STAGE_ADDR, hdr.arm9_load_addr, hdr.arm9_size,
               hdr.arm9_entry);
 }
-
-/* Music: .aaf files, mono PCM (see audio/aaf_tool.py). */
 
 #define MUSIC_DIR    "Aurora/Music"
 #define MAX_TRACKS   32
@@ -2026,6 +2423,22 @@ static int load_track(int idx, u32 *rate_out, u32 *depth_out) {
   return (int)(rd / bpp);
 }
 
+#define MUS_NAME_Y 148
+
+/* Does not present. */
+static void music_now(int sel, int playing, Color accent) {
+  const char *np = (mus_count > 0) ? mus_name[sel] : "---";
+  const char *st = playing ? L(STR_PLAYING) : L(STR_STOPPED);
+  ui_wallpaper_rect(VRAM_TOP_LA, 0, MUS_NAME_Y - 4, TOP_SCREEN_WIDTH, 56,
+                    TOP_SCREEN_HEIGHT);
+  ui_text_mid_fit(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, MUS_NAME_Y,
+                  TOP_SCREEN_HEIGHT, np, TOP_SCREEN_WIDTH - 40, COLOR_WHITE,
+                  COLOR_HM_BG, &ui_title);
+  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, MUS_NAME_Y + 28,
+              TOP_SCREEN_HEIGHT, st, playing ? accent : COLOR_HM_TEXT2,
+              COLOR_HM_BG, &ui_font);
+}
+
 static void music_draw_top(int sel, int playing, Color accent) {
   ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT,
                TOP_SCREEN_HEIGHT);
@@ -2033,65 +2446,80 @@ static void music_draw_top(int sel, int playing, Color accent) {
                    COLOR_HM_BAR);
   ui_text(VRAM_TOP_LA, 10, 4, TOP_SCREEN_HEIGHT, L(STR_MUSIC), COLOR_WHITE,
           COLOR_HM_BAR, &ui_bold);
-
   ui_icon(VRAM_TOP_LA, (TOP_SCREEN_WIDTH - 96) / 2, 40, 96, TOP_SCREEN_HEIGHT,
           ASSET_ICON_MUSIC_64, icon_music_bits, accent);
-
-  const char *np = (mus_count > 0) ? mus_name[sel] : "---";
-  const char *st = playing ? L(STR_PLAYING) : L(STR_STOPPED);
-  ui_text_mid_fit(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 148, TOP_SCREEN_HEIGHT, np,
-                  TOP_SCREEN_WIDTH - 40, COLOR_WHITE, COLOR_HM_BG, &ui_title);
-  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 176, TOP_SCREEN_HEIGHT, st,
-              playing ? accent : COLOR_HM_TEXT2, COLOR_HM_BG, &ui_font);
+  music_now(sel, playing, accent);
   screen_present_top();
 }
 
-#define MUS_VISIBLE 6
-#define MUS_ROW_Y0  32
-#define MUS_ROW_H   26
+static void music_fade_top(int sel, int playing, Color accent) {
+  anim_xfade_begin(ANIM_TOP);
+  music_now(sel, playing, accent);
+  anim_xfade_area(ANIM_TOP, 0, MUS_NAME_Y - 4, TOP_SCREEN_WIDTH, 56);
+  anim_xfade_start(ANIM_TOP, 0);
+  screen_present_top();
+}
+
+#define MUS_VISIBLE  6
+#define MUS_ROW_Y0   32
+#define MUS_ROW_H    26
 #define MUS_ROW_STEP 30
+#define MUS_LIST_END (MUS_ROW_Y0 + MUS_VISIBLE * MUS_ROW_STEP)
 
-static void music_draw_bottom(int sel) {
-  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
-  draw_string(VRAM_BOT_A, 12, 12, BOT_SCREEN_HEIGHT, L(STR_MUSIC),
-              COLOR_HM_TEXT2, COLOR_HM_BG);
+static AnimList mus_list = {.visible = MUS_VISIBLE, .step = MUS_ROW_STEP};
 
+/* The list where its animation has it; rows scrolling past either end go under
+ * the title and the key hints. */
+static void music_paint(const char *note, int present) {
+  ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+               BOT_SCREEN_HEIGHT);
   if (mus_count == 0) {
-    draw_string(VRAM_BOT_A, 12, 60, BOT_SCREEN_HEIGHT, L(STR_NO_TRACKS),
-                COLOR_HM_TEXT2, COLOR_HM_BG);
-    draw_string(VRAM_BOT_A, 12, 78, BOT_SCREEN_HEIGHT, "SD:/Aurora/Music",
-                COLOR_HM_TEXT2, COLOR_HM_BG);
+    ui_text(VRAM_BOT_A, 12, 60, BOT_SCREEN_HEIGHT, L(STR_NO_TRACKS),
+            COLOR_HM_TEXT2, COLOR_HM_BG, &ui_font);
+    ui_text(VRAM_BOT_A, 12, 80, BOT_SCREEN_HEIGHT, "SD:/Aurora/Music",
+            COLOR_HM_TEXT2, COLOR_HM_BG, &ui_font);
   } else {
-    int top = sel - MUS_VISIBLE / 2;
-    if (top < 0)
-      top = 0;
-    if (top > mus_count - MUS_VISIBLE)
-      top = mus_count - MUS_VISIBLE;
-    if (top < 0)
-      top = 0;
-    for (int r = 0; r < MUS_VISIBLE && top + r < mus_count; r++) {
-      int i = top + r;
-      int y = MUS_ROW_Y0 + r * MUS_ROW_STEP;
-      int on = (i == sel);
-      draw_filled_round_rect(VRAM_BOT_A, 10, y - 2, BOT_SCREEN_WIDTH - 20,
-                             MUS_ROW_H + 4, 8, BOT_SCREEN_HEIGHT,
-                             on ? g_accent : COLOR_HM_BG);
-      draw_filled_round_rect(VRAM_BOT_A, 12, y, BOT_SCREEN_WIDTH - 24,
-                             MUS_ROW_H, 6, BOT_SCREEN_HEIGHT, COLOR_HM_SLOT);
+    int scroll = anim_px(&mus_list.scroll);
+    for (int i = 0; i < mus_count; i++) {
+      int y = MUS_ROW_Y0 + i * MUS_ROW_STEP - scroll;
+      if (y + MUS_ROW_H <= 0 || y >= BOT_SCREEN_HEIGHT)
+        continue;
+      draw_gradient_round_rect(VRAM_BOT_A, 12, y, BOT_SCREEN_WIDTH - 24,
+                               MUS_ROW_H, 6, BOT_SCREEN_HEIGHT,
+                               COLOR_HM_SLOT_TOP, COLOR_HM_SLOT_BOT);
       ui_text_fit(VRAM_BOT_A, 22, y + (MUS_ROW_H - ui_th(&ui_font)) / 2,
                   BOT_SCREEN_HEIGHT, mus_name[i], BOT_SCREEN_WIDTH - 44,
                   COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
     }
+    draw_round_ring(VRAM_BOT_A, 10,
+                    MUS_ROW_Y0 + anim_px(&mus_list.ring) - scroll - 2,
+                    BOT_SCREEN_WIDTH - 20, MUS_ROW_H + 4, 8, 3,
+                    BOT_SCREEN_HEIGHT, g_accent);
+    ui_wallpaper_rect(VRAM_BOT_A, 0, 0, BOT_SCREEN_WIDTH, MUS_ROW_Y0 - 4,
+                      BOT_SCREEN_HEIGHT);
+    ui_wallpaper_rect(VRAM_BOT_A, 0, MUS_LIST_END, BOT_SCREEN_WIDTH,
+                      BOT_SCREEN_HEIGHT - MUS_LIST_END, BOT_SCREEN_HEIGHT);
   }
-  draw_string(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 18, BOT_SCREEN_HEIGHT,
-              "A: Play   START: Stop   B: Back", COLOR_HM_TEXT2, COLOR_HM_BG);
-  screen_present_bottom();
+  ui_text(VRAM_BOT_A, 12, 8, BOT_SCREEN_HEIGHT, L(STR_MUSIC), COLOR_HM_TEXT2,
+          COLOR_HM_BG, &ui_small);
+  ui_text(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 22, BOT_SCREEN_HEIGHT,
+          note ? note : "A: Play   START: Stop   B: Back",
+          note ? g_accent : COLOR_HM_TEXT2, COLOR_HM_BG, &ui_small);
+  if (present)
+    screen_present_bottom();
+}
+
+static void music_draw_bottom(int sel) {
+  mus_list.count = mus_count;
+  anim_list_jump(&mus_list, sel);
+  music_paint(0, 1);
 }
 
 static void music_player_screen(void) {
   Color accent = g_accent;
   scan_music();
   int sel = 0, playing = 0;
+  u32 frame_at = 0;
   music_draw_top(sel, playing, accent);
   music_draw_bottom(sel);
 
@@ -2106,13 +2534,7 @@ static void music_player_screen(void) {
     int play_now = 0;
     int tx, ty;
     if (touch_tap(&tx, &ty) && mus_count > 0) {
-      int top = sel - MUS_VISIBLE / 2;
-      if (top < 0)
-        top = 0;
-      if (top > mus_count - MUS_VISIBLE)
-        top = mus_count - MUS_VISIBLE;
-      if (top < 0)
-        top = 0;
+      int top = anim_list_top(&mus_list, sel);
       for (int r = 0; r < MUS_VISIBLE && top + r < mus_count; r++) {
         int y = MUS_ROW_Y0 + r * MUS_ROW_STEP;
         if (touch_in(tx, ty, 10, y - 2, BOT_SCREEN_WIDTH - 20, MUS_ROW_H + 4)) {
@@ -2124,15 +2546,16 @@ static void music_player_screen(void) {
     }
 
     if (sel != prev) {
-      music_draw_bottom(sel);
-      music_draw_top(sel, playing, accent);
+      anim_list_to(&mus_list, sel);
+      if (!anim_list_moving(&mus_list))
+        music_paint(0, 1);
+      music_fade_top(sel, playing, accent);
     }
 
     if (((k & BUTTON_A) || play_now) && mus_count > 0) {
       audio_stop(); /* free the buffer before overwriting it */
-      draw_string(VRAM_BOT_A, 12, BOT_SCREEN_HEIGHT - 36, BOT_SCREEN_HEIGHT,
-                  L(STR_LOADING), COLOR_AURORA, COLOR_HM_BG);
-      screen_present_bottom();
+      anim_list_jump(&mus_list, sel);
+      music_paint(L(STR_LOADING), 1);
       u32 rate = 8000, depth = 16;
       int n = load_track(sel, &rate, &depth);
       if (n > 0) {
@@ -2141,34 +2564,87 @@ static void music_player_screen(void) {
       } else {
         playing = 0;
       }
-      music_draw_bottom(sel);
-      music_draw_top(sel, playing, accent);
+      music_paint(0, 1);
+      music_fade_top(sel, playing, accent);
     }
     if (k & BUTTON_START) {
       audio_stop();
       playing = 0;
-      music_draw_top(sel, playing, accent);
+      music_fade_top(sel, playing, accent);
     }
     if (k & BUTTON_B) {
       audio_stop();
       return;
     }
+    int ms = anim_frame(&frame_at);
+    if (ms) {
+      int show = 0;
+      if (anim_list_step(&mus_list, ms)) {
+        music_paint(0, 0);
+        show |= ANIM_BOT;
+      }
+      if (anim_xfade_frame(ANIM_TOP))
+        show |= ANIM_TOP;
+      anim_present(show);
+    }
     ui_idle();
   }
 }
 
+static void power_off_now(void) {
+  anim_transition(ANIM_FADE, ANIM_BOTH);
+  clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_BLACK);
+  screen_present_top();
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_BLACK);
+  screen_present_bottom();
+  power_shutdown();
+}
+
 static void home_activate(int sel) {
+  if (home_apps[sel].action != ACT_NONE)
+    hm_press(sel);
   if (home_apps[sel].action == ACT_POWER) {
-    power_shutdown();
+    power_off_now();
   } else if (home_apps[sel].action == ACT_LAUNCH) {
     os_launch_app(home_apps[sel].path);
     hm_draw_full(sel); /* only reached if the launch failed and returned */
   } else if (home_apps[sel].action == ACT_MUSIC) {
-    music_player_screen();
+    open_screen(music_player_screen);
     hm_draw_full(sel);
   } else if (home_apps[sel].action == ACT_FILES) {
     files_screen(os_launch_app);
     hm_draw_full(sel);
+  }
+}
+
+/* How long the boot waits for a freshly loaded core to take requests. A slower
+ * core gets the GPU later, from the Home Menu loop. */
+#define CORE_WAIT_MS 3000u
+
+/* With the GPU up, draw into cached FCRAM backbuffers and present each screen
+ * with one copy; until then everything draws straight to VRAM, where every
+ * redraw shows as it happens. */
+static int os_gpu_start(void) {
+  if (!gpu_init())
+    return 0;
+  /* Async, so the copy overlaps the next input poll; ui_idle() collects it
+   * before anything draws. */
+  g_screen_blit = gpu_present_async;
+  g_screen_wait = gpu_wait_idle;
+  screen_use_backbuffer(1);
+  gpu_up = 1;
+  return 1;
+}
+
+/* Called between Home Menu frames until the GPU is up: as soon as a slow core
+ * answers, the OS moves to the backbuffers, seeded with what is on screen. */
+static void os_gpu_late(void) {
+  if (gpu_up || gpu_tries >= 3 || !audio_ready())
+    return;
+  gpu_tries++;
+  if (os_gpu_start()) {
+    gpu_late_ms = timer_us_since(boot_t[BT_START]) / 1000u;
+    anim_gpu_start();
   }
 }
 
@@ -2179,6 +2655,11 @@ void os_main(void) {
     os_mpu_enable();
     mpu_on = 1;
   }
+
+  /* Running from here, so the core's start-up and each step of the boot can
+   * be timed. Key repeat and frame pacing read it every pass. */
+  timer_ready();
+  boot_mark(BT_START);
 
   /* First, so any later fault reaches the crash screen. */
   crash_init();
@@ -2198,26 +2679,26 @@ void os_main(void) {
 
   /* Before anything draws, since the ARM11 core owns the touchscreen. */
   AudioBoot core = audio_boot();
-  audio_voices_stop(); /* an app's music must not outlive the app */
+  boot_mark(BT_CORE);
 
-  /* With the GPU up, draw into cached FCRAM backbuffers and present each screen
-   * with one blit; otherwise draw straight to VRAM. */
-  if (gpu_init()) {
-    /* Async, so the copy overlaps the next input poll; ui_idle() collects it
-     * before anything draws. */
-    g_screen_blit = gpu_texcopy_async;
-    g_screen_wait = gpu_wait_idle;
-    screen_use_backbuffer(1);
-  }
-
-  /* Calibrated once, here: it waits out up to two RTC seconds, and key repeat
-   * and frame pacing read it every pass. */
-  timer_ready();
-
+  /* The asset pack needs neither the core nor the GPU, so it loads while a
+   * freshly woken core sets up the codec and touchscreen. */
   ui_init();
+  boot_mark(BT_UI);
+
+  if (audio_wait_ready(CORE_WAIT_MS))
+    audio_voices_stop(); /* an app's music must not outlive the app */
+  boot_mark(BT_WAIT);
+  os_gpu_start();
+  boot_mark(BT_GPU);
+
+  anim_init();
+  anim_vsync_setup(0);
+  boot_mark(BT_VSYNC);
 
   int loaded = user_config_load(&g_cfg);
   if (!loaded || !g_cfg.setup_done) {
+    anim_transition(ANIM_FADE, ANIM_BOTH); /* from whatever the boot left */
     setup_run(&g_cfg);
     user_config_save(&g_cfg);
   }
@@ -2225,30 +2706,38 @@ void os_main(void) {
   g_accent_idx = g_cfg.accent;
   g_accent = aurora_accent_presets[g_cfg.accent];
   g_lang = g_cfg.language;
+  g_rtc_offset = g_cfg.clock_offset;
   if (g_cfg.touch_set && !touch_cal_set(&g_cfg.touch))
     g_cfg.touch_set = 0; /* unusable values: keep the default */
+  boot_mark(BT_CONFIG);
 
   /* Now that the accent is known. */
   ui_bg_build();
+  boot_mark(BT_BG);
 
   scan_apps();
   build_home();
+  boot_mark(BT_APPS);
 
   int sel = 0;
+  anim_transition(ANIM_FADE, ANIM_BOTH); /* from the boot or the setup wizard */
   hm_draw_full(sel);
+  boot_mark(BT_MENU);
 
   /* A core from before AUDIO_PARK_VERSION cannot be swapped while it runs, so
    * this build's core needs a power-off to load. */
   if (core == AUDIO_BOOT_STALE) {
     if (fv_confirm(L(STR_CORE_OLD), L(STR_CORE_OLD_HINT), L(STR_POWER_OFF),
                    L(STR_LATER)))
-      power_shutdown();
+      power_off_now();
     hm_draw_full(sel);
   }
 
   int clock_tick = 0, last_min = -1;
+  u32 frame_at = 0;
 
   while (1) {
+    os_gpu_late();
     u32 kdown = get_keys_down();
     int prev = sel;
     int col = sel % HOME_COLS, row = sel / HOME_COLS;
@@ -2264,13 +2753,13 @@ void os_main(void) {
       sel += HOME_COLS;
 
     if (sel != prev)
-      hm_update(prev, sel);
+      hm_update(sel);
 
     if (kdown & BUTTON_A)
       home_activate(sel);
 
     if (kdown & BUTTON_START) {
-      settings_open();
+      open_screen(settings_open);
       hm_draw_full(sel);
     }
 
@@ -2283,15 +2772,14 @@ void os_main(void) {
     int tx, ty;
     if (touch_tap(&tx, &ty)) {
       if (ty < 40 && tx > BOT_SCREEN_WIDTH - 46) {
-        settings_open();
+        open_screen(settings_open);
         hm_draw_full(sel);
       } else {
         for (int i = 0; i < HOME_COUNT; i++) {
-          int c = i % HOME_COLS, r = i / HOME_COLS;
-          int x = GRID_X + c * SLOT_STEP, y = GRID_Y + r * SLOT_STEP;
-          if (touch_in(tx, ty, x - 3, y - 3, SLOT_SIZE + 6, SLOT_SIZE + 6)) {
+          if (touch_in(tx, ty, slot_x(i) - SLOT_RING, slot_y(i) - SLOT_RING,
+                       SLOT_SIZE + 2 * SLOT_RING, SLOT_SIZE + 2 * SLOT_RING)) {
             if (i != sel) {
-              hm_update(sel, i);
+              hm_update(i);
               sel = i;
             }
             home_activate(sel);
@@ -2313,6 +2801,9 @@ void os_main(void) {
       }
     }
 
+    int ms = anim_frame(&frame_at);
+    if (ms)
+      hm_animate(ms);
     ui_idle();
   }
 }

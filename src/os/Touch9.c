@@ -1,4 +1,3 @@
-/* Turns the ARM11's raw touch ADC values into screen pixels. */
 #include "aurora.h"
 #include "touch.h"
 

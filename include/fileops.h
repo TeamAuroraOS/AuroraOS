@@ -47,7 +47,6 @@ int fo_unique(char *path, int is_dir);
 /* Whether `path` is `folder` or somewhere inside it, ignoring letter case. */
 int fo_within(const char *path, const char *folder);
 
-/* Short text for a result, for a dialog. */
 const char *fo_error(FoResult r);
 
 #endif

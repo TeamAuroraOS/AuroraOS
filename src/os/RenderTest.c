@@ -1,8 +1,5 @@
-/* Each frame repaints the top screen the way the UI does: wallpaper blit,
- * blended cards, icons and type, async present. The bottom screen updates four
- * times a second. The mean is over one-second samples, each normalised by the
- * time it actually spanned. On a New 3DS the 804 MHz switch is tried first and
- * its outcome reported. */
+/* The mean is over one-second samples, each normalised by the time it actually
+ * spanned. */
 #include "rendertest.h"
 #include "assets.h"
 #include "icons.h"

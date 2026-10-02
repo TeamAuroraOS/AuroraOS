@@ -5,6 +5,7 @@
 #include "aurora_logo.h"
 #include "font.h"
 #include "icons.h"
+#include "gpu.h"
 
 static int console_x = 0;
 static int console_y = 0;
@@ -15,16 +16,22 @@ static int console_y = 0;
 static Color console_fg = {0xFF, 0xFF, 0xFF};
 static Color console_bg = {0x10, 0x10, 0x20};
 
-/* Draw targets: the panels themselves until screen_use_backbuffer(1). */
 volatile u8 *g_fb_top = VRAM_TOP_PHYS;
 volatile u8 *g_fb_bot = VRAM_BOT_PHYS;
 
 int (*g_screen_blit)(u32 src, u32 dst, u32 len) = 0;
+int (*g_screen_intercept)(volatile u8 *back) = 0;
 
-/* The backbuffer an async blit is still reading; screen_touch() waits on it.
- * Null when nothing is outstanding. */
 volatile u8 *g_blit_src = 0;
 void (*g_screen_wait)(void) = 0;
+
+int screen_fb_width(volatile u8 *fb) {
+  u32 a = (u32)fb;
+  return (fb == VRAM_TOP_BACK || a == GPU_FB_TOP_A || a == GPU_FB_TOP_B ||
+          a == GPU_FB_TOP_C)
+             ? TOP_SCREEN_WIDTH
+             : BOT_SCREEN_WIDTH;
+}
 
 static void copy_words(volatile u8 *dst, const volatile u8 *src, u32 size) {
   volatile u32 *d = (volatile u32 *)dst;
@@ -44,9 +51,10 @@ void screen_use_backbuffer(int on) {
   g_fb_bot = on ? VRAM_BOT_BACK : VRAM_BOT_PHYS;
 }
 
-/* In direct mode this is a no-op. */
 static void present(volatile u8 *back, volatile u8 *phys, u32 size) {
   if (back == phys)
+    return;
+  if (g_screen_intercept && g_screen_intercept(back))
     return;
   screen_touch(back); /* a previous copy may still be reading this buffer */
   if (g_screen_blit && g_screen_blit((u32)back, (u32)phys, size)) {
@@ -94,7 +102,7 @@ void clear_screen(volatile u8 *fb, u32 fb_size, Color color) {
 
 void draw_pixel(volatile u8 *fb, int x, int y, int screen_height, Color color) {
   screen_touch(fb);
-  if (x < 0 || y < 0 || y >= screen_height)
+  if (x < 0 || y < 0 || y >= screen_height || x >= screen_fb_width(fb))
     return;
 
   u32 offset =
@@ -217,7 +225,8 @@ static void store_run(volatile u8 *d, const u8 *s, u32 n) {
 }
 
 /* One framebuffer column, reused across a fill. */
-static u8 col_buf[TOP_SCREEN_HEIGHT * BYTES_PER_PIXEL + 4];
+static u8 col_buf[TOP_SCREEN_HEIGHT * BYTES_PER_PIXEL + 4]
+    __attribute__((aligned(4)));
 
 /* Every column of a fill starts screen_height*3 bytes after the last, and that
  * stride is a multiple of four, so one skew serves them all. Building the
@@ -246,7 +255,8 @@ void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h,
     col_buf[skew + i * 3 + 2] = color.r;
   }
   u32 run = (u32)h * 3u;
-  for (int px = x; px < x + w; px++) {
+  int wmax = screen_fb_width(fb);
+  for (int px = x; px < x + w && px < wmax; px++) {
     if (px < 0)
       continue;
     store_run(fb + ((u32)px * (u32)screen_height + (u32)(screen_height - y - h)) * 3u,
@@ -254,7 +264,6 @@ void draw_filled_rect(volatile u8 *fb, int x, int y, int w, int h,
   }
 }
 
-/* Alpha is 0..256 like the rest of the blending here. */
 void draw_filled_rect_alpha(volatile u8 *fb, int x, int y, int w, int h,
                             int screen_height, Color color, int alpha) {
   screen_touch(fb);
@@ -305,7 +314,8 @@ static u32 isqrt32(u32 n) {
 void draw_pixel_alpha(volatile u8 *fb, int x, int y, int screen_height,
                       Color color, int alpha) {
   screen_touch(fb);
-  if (alpha <= 0 || x < 0 || y < 0 || y >= screen_height)
+  if (alpha <= 0 || x < 0 || y < 0 || y >= screen_height ||
+      x >= screen_fb_width(fb))
     return;
   if (alpha >= 256) {
     draw_pixel(fb, x, y, screen_height, color);
@@ -316,98 +326,6 @@ void draw_pixel_alpha(volatile u8 *fb, int x, int y, int screen_height,
   fb[o + 0] = (u8)((color.b * alpha + fb[o + 0] * inv) >> 8);
   fb[o + 1] = (u8)((color.g * alpha + fb[o + 1] * inv) >> 8);
   fb[o + 2] = (u8)((color.r * alpha + fb[o + 2] * inv) >> 8);
-}
-
-/* One rounded corner: the r-by-r box at (bx,by) against the arc centred on
- * (cx,cy). Coverage falls off across the single pixel straddling the radius,
- * which is what removes the stair-stepping. */
-/* Corner coverage depends only on the radius, so it is cached per radius. */
-#define CORNER_MAX_R 20
-#define CORNER_SLOTS 4
-static unsigned char corner_cov[CORNER_SLOTS][CORNER_MAX_R * CORNER_MAX_R];
-static int corner_r[CORNER_SLOTS];
-static int corner_slot;
-
-static const unsigned char *corner_table(int r) {
-  unsigned char *t;
-  int s, ex, ey;
-  if (r <= 0 || r > CORNER_MAX_R)
-    return 0;
-  for (s = 0; s < CORNER_SLOTS; s++)
-    if (corner_r[s] == r)
-      return corner_cov[s];
-
-  s = corner_slot;
-  corner_slot = (corner_slot + 1) % CORNER_SLOTS;
-  t = corner_cov[s];
-  for (ey = 1; ey <= r; ey++) {
-    for (ex = 1; ex <= r; ex++) {
-      u32 d = isqrt32(((u32)(ex * ex + ey * ey)) << 16); /* 8.8 fixed point */
-      int a = (int)(((u32)r << 8) + 128u - d);
-      if (a < 0)
-        a = 0;
-      if (a > 255)
-        a = 255;
-      t[(ey - 1) * r + (ex - 1)] = (unsigned char)a;
-    }
-  }
-  corner_r[s] = r;
-  return t;
-}
-
-static void fill_corner(volatile u8 *fb, int bx, int by, int r, int cx0,
-                        int cy0, int screen_height, Color color) {
-  const unsigned char *t = corner_table(r);
-  for (int cy = by; cy < by + r; cy++) {
-    int ey = cy - cy0;
-    if (ey < 0)
-      ey = -ey;
-    for (int cx = bx; cx < bx + r; cx++) {
-      int ex = cx - cx0, a;
-      if (ex < 0)
-        ex = -ex;
-      if (t && ex >= 1 && ex <= r && ey >= 1 && ey <= r) {
-        a = t[(ey - 1) * r + (ex - 1)];
-        if (a >= 255)
-          a = 256; /* the table saturates at 255; 256 is the opaque store */
-      } else {
-        u32 d = isqrt32(((u32)(ex * ex + ey * ey)) << 16);
-        a = (int)(((u32)r << 8) + 128u - d);
-        if (a > 256)
-          a = 256;
-      }
-      if (a <= 0)
-        continue;
-      draw_pixel_alpha(fb, cx, cy, screen_height, color, a);
-    }
-  }
-}
-
-void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h,
-                            int radius, int screen_height, Color color) {
-  screen_touch(fb);
-  if (radius < 0)
-    radius = 0;
-  if (radius > w / 2)
-    radius = w / 2;
-  if (radius > h / 2)
-    radius = h / 2;
-
-  draw_filled_rect(fb, x + radius, y, w - 2 * radius, h, screen_height, color);
-  draw_filled_rect(fb, x, y + radius, radius, h - 2 * radius, screen_height,
-                   color);
-  draw_filled_rect(fb, x + w - radius, y + radius, radius, h - 2 * radius,
-                   screen_height, color);
-
-  if (radius > 0) {
-    fill_corner(fb, x, y, radius, x + radius, y + radius, screen_height, color);
-    fill_corner(fb, x + w - radius, y, radius, x + w - 1 - radius, y + radius,
-                screen_height, color);
-    fill_corner(fb, x, y + h - radius, radius, x + radius, y + h - 1 - radius,
-                screen_height, color);
-    fill_corner(fb, x + w - radius, y + h - radius, radius, x + w - 1 - radius,
-                y + h - 1 - radius, screen_height, color);
-  }
 }
 
 /* The framebuffer runs down a column, so the ramp is walked along that axis and
@@ -447,46 +365,184 @@ void draw_vgradient(volatile u8 *fb, int x, int y, int w, int h,
   }
 }
 
-/* The corners are blended over the gradient body, so the rounding stays smooth
- * over the shading. */
+/* Rounded rectangles are drawn a column at a time, so each pixel is written
+ * once and the body, sides and corners take their shade from one ramp. Every
+ * arc is centred `r` pixels in from the edges, measured between pixels rather
+ * than through their centres, so the curve meets the straight sides without a
+ * step. A corner pixel's coverage comes from the distance between its centre
+ * and the arc. */
+#define ROUND_MAX_R 40
+#define ROUND_SLOTS 12
+
+/* For corner column i and row j, both counted in from the outside corner:
+ * cov[i][j] (0..255) for j < full[i], opaque from full[i] on. */
+typedef struct {
+  int r;
+  u8 full[ROUND_MAX_R];
+  u8 cov[ROUND_MAX_R * ROUND_MAX_R];
+} RoundTab;
+
+static RoundTab round_tabs[ROUND_SLOTS];
+static int round_next;
+
+static const RoundTab *round_tab(int r) {
+  RoundTab *t;
+  int s, i, j;
+
+  for (s = 0; s < ROUND_SLOTS; s++)
+    if (round_tabs[s].r == r)
+      return &round_tabs[s];
+  t = &round_tabs[round_next];
+  round_next = (round_next + 1) % ROUND_SLOTS;
+  for (i = 0; i < r; i++) {
+    for (j = 0; j < r; j++) {
+      /* Twice the offsets from the arc's centre, so they are whole numbers;
+       * the root comes back in 8.8 fixed point. */
+      u32 dx = (u32)(2 * (r - i) - 1), dy = (u32)(2 * (r - j) - 1);
+      int a = ((2 * r + 1) * 256 - (int)isqrt32((dx * dx + dy * dy) << 16)) >> 1;
+      if (a >= 256)
+        break;
+      t->cov[i * ROUND_MAX_R + j] = (u8)(a < 0 ? 0 : a);
+    }
+    t->full[i] = (u8)j;
+  }
+  t->r = r;
+  return t;
+}
+
+static void round_rect(volatile u8 *fb, int x, int y, int w, int h, int r,
+                       int sh, Color top, Color bot) {
+  const RoundTab *t = 0;
+  int wmax = screen_fb_width(fb), r0 = 0, r1 = h, k;
+  u32 skew;
+
+  screen_touch(fb);
+  if (r > w / 2)
+    r = w / 2;
+  if (r > h / 2)
+    r = h / 2;
+  if (r > ROUND_MAX_R)
+    r = ROUND_MAX_R;
+  if (y < 0)
+    r0 = -y;
+  if (y + h > sh)
+    r1 = sh - y;
+  if (w <= 0 || r0 >= r1)
+    return;
+  if (r > 0)
+    t = round_tab(r);
+
+  /* The visible rows' shades, laid out as a framebuffer column: the bottom row
+   * first. */
+  skew = col_skew(0, sh, y, r1);
+  for (k = r0; k < r1; k++) {
+    u8 *c = col_buf + skew + (u32)(r1 - 1 - k) * 3u;
+    if (top.r == bot.r && top.g == bot.g && top.b == bot.b) {
+      c[0] = top.b;
+      c[1] = top.g;
+      c[2] = top.r;
+    } else {
+      int tt = (h > 1) ? (k * 255) / (h - 1) : 0;
+      c[0] = (u8)((top.b * (255 - tt) + bot.b * tt) / 255);
+      c[1] = (u8)((top.g * (255 - tt) + bot.g * tt) / 255);
+      c[2] = (u8)((top.r * (255 - tt) + bot.r * tt) / 255);
+    }
+  }
+
+  for (int col = 0; col < w; col++) {
+    int px = x + col, i = -1, n = 0, f0, f1;
+    volatile u8 *base;
+    if (px < 0)
+      continue;
+    if (px >= wmax)
+      break;
+    if (col < r)
+      i = col;
+    else if (col >= w - r)
+      i = w - 1 - col;
+    if (i >= 0)
+      n = t->full[i];
+
+    base = fb + (u32)px * (u32)sh * 3u;
+    f0 = n > r0 ? n : r0;
+    f1 = h - n < r1 ? h - n : r1;
+    if (f1 > f0)
+      store_run(base + (u32)(sh - y - f1) * 3u,
+                col_buf + skew + (u32)(r1 - f1) * 3u, (u32)(f1 - f0) * 3u);
+
+    for (int j = 0; j < n; j++) {
+      int a = t->cov[i * ROUND_MAX_R + j], inv = 256 - a;
+      if (!a)
+        continue;
+      for (int e = 0; e < 2; e++) {
+        int row = e ? h - 1 - j : j;
+        volatile u8 *p;
+        const u8 *c;
+        if (row < r0 || row >= r1)
+          continue;
+        p = base + (u32)(sh - 1 - (y + row)) * 3u;
+        c = col_buf + skew + (u32)(r1 - 1 - row) * 3u;
+        p[0] = (u8)((c[0] * a + p[0] * inv) >> 8);
+        p[1] = (u8)((c[1] * a + p[1] * inv) >> 8);
+        p[2] = (u8)((c[2] * a + p[2] * inv) >> 8);
+      }
+    }
+  }
+}
+
+void draw_filled_round_rect(volatile u8 *fb, int x, int y, int w, int h,
+                            int radius, int screen_height, Color color) {
+  round_rect(fb, x, y, w, h, radius < 0 ? 0 : radius, screen_height, color,
+             color);
+}
+
 void draw_gradient_round_rect(volatile u8 *fb, int x, int y, int w, int h,
                               int radius, int screen_height, Color top,
                               Color bottom) {
-  if (radius < 0)
-    radius = 0;
-  if (radius > w / 2)
-    radius = w / 2;
-  if (radius > h / 2)
-    radius = h / 2;
+  round_rect(fb, x, y, w, h, radius < 0 ? 0 : radius, screen_height, top,
+             bottom);
+}
 
-  draw_vgradient(fb, x + radius, y, w - 2 * radius, h, screen_height, top,
-                 bottom);
-  draw_vgradient(fb, x, y + radius, radius, h - 2 * radius, screen_height, top,
-                 bottom);
-  draw_vgradient(fb, x + w - radius, y + radius, radius, h - 2 * radius,
-                 screen_height, top, bottom);
+/* The inner edge is the same shape inset by `t`, with radius r - t, so a
+ * corner pixel's coverage is the outer shape's less the inner one's. */
+void draw_round_ring(volatile u8 *fb, int x, int y, int w, int h, int r, int t,
+                     int screen_height, Color color) {
+  const RoundTab *to, *ti = 0;
 
-  if (radius > 0) {
-    /* Corner shade: sample the ramp at the corner's own height so the arc
-     * matches the body it joins. */
-    Color ctop = top, cbot = bottom;
-    if (h > 1) {
-      int t1 = ((radius - 1) * 255) / (h - 1);
-      int t2 = ((h - radius) * 255) / (h - 1);
-      ctop.r = (u8)((top.r * (255 - t1) + bottom.r * t1) / 255);
-      ctop.g = (u8)((top.g * (255 - t1) + bottom.g * t1) / 255);
-      ctop.b = (u8)((top.b * (255 - t1) + bottom.b * t1) / 255);
-      cbot.r = (u8)((top.r * (255 - t2) + bottom.r * t2) / 255);
-      cbot.g = (u8)((top.g * (255 - t2) + bottom.g * t2) / 255);
-      cbot.b = (u8)((top.b * (255 - t2) + bottom.b * t2) / 255);
+  if (r > w / 2)
+    r = w / 2;
+  if (r > h / 2)
+    r = h / 2;
+  if (r > ROUND_MAX_R)
+    r = ROUND_MAX_R;
+  if (t > r)
+    t = r;
+  if (t <= 0 || 2 * t >= w || 2 * t >= h) {
+    round_rect(fb, x, y, w, h, r < 0 ? 0 : r, screen_height, color, color);
+    return;
+  }
+  draw_filled_rect(fb, x + r, y, w - 2 * r, t, screen_height, color);
+  draw_filled_rect(fb, x + r, y + h - t, w - 2 * r, t, screen_height, color);
+  draw_filled_rect(fb, x, y + r, t, h - 2 * r, screen_height, color);
+  draw_filled_rect(fb, x + w - t, y + r, t, h - 2 * r, screen_height, color);
+
+  to = round_tab(r);
+  if (r > t)
+    ti = round_tab(r - t);
+  for (int i = 0; i < r; i++) {
+    for (int j = 0; j < r; j++) {
+      int a = j >= to->full[i] ? 256 : to->cov[i * ROUND_MAX_R + j];
+      int ii = i - t, jj = j - t;
+      if (ii >= 0 && jj >= 0)
+        a -= !ti || jj >= ti->full[ii] ? 256 : ti->cov[ii * ROUND_MAX_R + jj];
+      if (a <= 0)
+        continue;
+      draw_pixel_alpha(fb, x + i, y + j, screen_height, color, a);
+      draw_pixel_alpha(fb, x + w - 1 - i, y + j, screen_height, color, a);
+      draw_pixel_alpha(fb, x + i, y + h - 1 - j, screen_height, color, a);
+      draw_pixel_alpha(fb, x + w - 1 - i, y + h - 1 - j, screen_height, color,
+                       a);
     }
-    fill_corner(fb, x, y, radius, x + radius, y + radius, screen_height, ctop);
-    fill_corner(fb, x + w - radius, y, radius, x + w - 1 - radius, y + radius,
-                screen_height, ctop);
-    fill_corner(fb, x, y + h - radius, radius, x + radius, y + h - 1 - radius,
-                screen_height, cbot);
-    fill_corner(fb, x + w - radius, y + h - radius, radius, x + w - 1 - radius,
-                y + h - 1 - radius, screen_height, cbot);
   }
 }
 
@@ -597,15 +653,10 @@ void draw_string_scaled(volatile u8 *fb, int x, int y, int screen_height,
 /* Pack art is stored at the size it is drawn, so these are straight blits.
  * Coverage 0..255 is widened to 0..256 so an opaque pixel is a plain store. */
 
-static int fb_width(volatile u8 *fb) {
-  return (fb == VRAM_TOP_PHYS || fb == VRAM_TOP_BACK) ? TOP_SCREEN_WIDTH
-                                                      : BOT_SCREEN_WIDTH;
-}
-
 /* One tinted coverage rectangle, walked down framebuffer columns. */
 static void blit_cov(volatile u8 *fb, int x, int y, int screen_height,
                      const u8 *src, int stride, int w, int h, Color c) {
-  int r0 = 0, r1 = h, col, wmax = fb_width(fb);
+  int r0 = 0, r1 = h, col, wmax = screen_fb_width(fb);
   if (y < 0)
     r0 = -y;
   if (y + r1 > screen_height)
@@ -645,7 +696,7 @@ static void blit_cov(volatile u8 *fb, int x, int y, int screen_height,
 
 static void blit_rgba(volatile u8 *fb, int x, int y, int screen_height,
                       const u8 *src, int w, int h) {
-  int r0 = 0, r1 = h, col, wmax = fb_width(fb);
+  int r0 = 0, r1 = h, col, wmax = screen_fb_width(fb);
   if (y < 0)
     r0 = -y;
   if (y + r1 > screen_height)

@@ -16,6 +16,10 @@
  * no calibration. */
 #define USER_DAT_TOUCH    40
 
+/* Offset of the clock offset (Settings > Clock): minutes as a little-endian
+ * int16. Older files have zeros here, which is no offset. */
+#define USER_DAT_CLOCK    49
+
 enum {
   LANG_ENGLISH = 0,
   LANG_ESPANOL = 1,
@@ -30,12 +34,13 @@ typedef struct {
   u8   setup_done;
   u8   language;      /* LANG_* */
   u8   accent;        /* index into aurora_accent_presets[] */
-  u8   birth_day;     /* 1..31 */
+  u8   birth_day;
   u8   birth_month;   /* 1..12 */
-  u16  birth_year;    /* e.g. 2000 */
+  u16  birth_year;    /* full year */
   char name[USER_NAME_MAX];
   u8   touch_set;     /* touch holds a measured calibration */
   TouchCal touch;
+  s16  clock_offset;  /* minutes added to the RTC; see g_rtc_offset */
 } UserConfig;
 
 void user_config_defaults(UserConfig *cfg);

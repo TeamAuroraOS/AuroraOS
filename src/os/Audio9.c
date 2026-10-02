@@ -1,8 +1,6 @@
-/* ARM9 side of the ARM11 core. audio_boot() copies the embedded core binary
- * (build/audio11_blob.h) into place and wakes the ARM11; the rest posts
- * commands to AUDIO_CTRL_ADDR. */
 #include "aurora.h"
 #include "audio.h"
+#include "timer.h"
 #include "audio11_blob.h" /* generated: audio11_bin[], audio11_bin_len */
 
 /* Clean+invalidate the ARM9 caches: pushes writes out for the ARM11 and CSND,
@@ -10,6 +8,17 @@
 extern void os_cache_sync(void);
 
 static AudioCtrl *const ctrl = (AudioCtrl *)AUDIO_CTRL_ADDR;
+
+/* A core sets its magic before it initialises the codec and touchscreen and
+ * only takes requests after, so audio_ready() posts a request and waits for
+ * the answer. */
+static int ready, probing;
+static u32 probe_seq, woken_at, ready_ms;
+
+static void sync_line(const volatile void *p) {
+  __asm__ volatile("mcr p15, 0, %0, c7, c14, 1" ::"r"(p) : "memory");
+  __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
+}
 
 int audio_alive(void) {
   os_cache_sync();
@@ -66,8 +75,10 @@ AudioBoot audio_boot(void) {
   /* FCRAM keeps this block through a reboot that resets the ARM11, so the magic
    * alone does not prove a core is running: it also has to answer. */
   if (ctrl->magic == AUDIO_MAGIC && post_wait(AUDIO_CMD_NONE, 0)) {
-    if (ctrl->version == AUDIO_CORE_VERSION)
+    if (ctrl->version == AUDIO_CORE_VERSION) {
+      ready = 1;
       return AUDIO_BOOT_RUNNING;
+    }
     if (ctrl->version < AUDIO_PARK_VERSION || !post_wait(AUDIO_CMD_PARK, 0))
       return AUDIO_BOOT_STALE;
     /* Once the park is acknowledged the core is leaving its image whatever
@@ -96,6 +107,8 @@ AudioBoot audio_boot(void) {
   /* Wake the ARM11: the firm stub is spinning on this mailbox. */
   *(volatile uint32_t *)AUDIO_ARM11_MAILBOX = AUDIO_CORE_ADDR;
   os_cache_sync();
+  woken_at = timer_ticks();
+  ready = probing = 0;
 
   for (int t = 0; t < 200; t++) {
     os_cache_sync();
@@ -112,6 +125,40 @@ static void post(uint32_t cmd, uint32_t arg0) {
   ctrl->arg0 = arg0;
   ctrl->cmd_seq = ctrl->cmd_seq + 1;
   os_cache_sync();
+}
+
+int audio_ready(void) {
+  if (ready)
+    return 1;
+  sync_line(&ctrl->magic);
+  sync_line(&ctrl->ack_seq);
+  if (ctrl->magic != AUDIO_MAGIC)
+    return 0;
+  if (!probing) {
+    post(AUDIO_CMD_NONE, 0);
+    probe_seq = ctrl->cmd_seq;
+    probing = 1;
+    return 0;
+  }
+  if ((int32_t)(ctrl->ack_seq - probe_seq) < 0)
+    return 0;
+  ready = 1;
+  ready_ms = timer_us_since(woken_at) / 1000u;
+  return 1;
+}
+
+int audio_wait_ready(uint32_t ms) {
+  u32 t0 = timer_ticks();
+  while (!audio_ready())
+    if (timer_us_since(t0) >= ms * 1000u)
+      return 0;
+  return 1;
+}
+
+int audio_ready_ms(void) {
+  if (!ready)
+    return -1;
+  return (int)ready_ms;
 }
 
 void audio_play_tone(uint32_t freq_hz) { post(AUDIO_CMD_TONE, freq_hz); }

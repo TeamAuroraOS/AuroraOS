@@ -8,6 +8,7 @@
 #include "lang.h"
 #include "statusbar.h"
 #include "ui.h"
+#include "anim.h"
 
 #define CAL_MARGIN      40
 #define CAL_SAMPLES     64 /* averaged per target; later readings are ignored */
@@ -115,6 +116,7 @@ static int cal_check(void) {
   volatile u8 *fb = VRAM_BOT_A;
   int last_x = -1, last_y = -1;
 
+  anim_transition(ANIM_FADE, ANIM_BOTH);
   cal_top(L(STR_CAL_CHECK), L(STR_CAL_CHECK_HINT), 0);
   draw_filled_rect(fb, 0, 0, BOT_SCREEN_WIDTH, BSH, BSH, COLOR_HM_BG);
   for (int i = 0; i < 4; i++)
@@ -163,7 +165,7 @@ int touch_calibrate(TouchCal *result) {
   int rx[4], ry[4];
 
   touch_cal_get(&old);
-  for (;;) {
+  for (int pass = 0;; pass++) {
     int measured = 1;
 
     for (int i = 0; i < 4 && measured; i++) {
@@ -181,6 +183,9 @@ int touch_calibrate(TouchCal *result) {
       step[n++] = ' ';
       step[n++] = '4';
       step[n] = 0;
+      /* The first target arrives with the screen's own slide. */
+      if (i || pass)
+        anim_transition(ANIM_FADE, ANIM_BOTH);
       cal_top(L(STR_CAL_TAP), L(STR_CAL_HINT), step);
       cal_target(i);
       measured = cal_sample(&rx[i], &ry[i]);

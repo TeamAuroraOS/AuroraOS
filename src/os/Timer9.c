@@ -1,7 +1,6 @@
-/* ARM9 hardware timer, calibrated against one MCU RTC second so readings are
- * real microseconds. */
+/* ARM9 hardware timer for real microseconds: timer 0 divides the 67.027964 MHz
+ * bus clock by 1024 and timer 1 counts its overflows. */
 #include "aurora.h"
-#include "power.h"
 #include "timer.h"
 
 #define TMR_BASE  0x10003000u
@@ -10,9 +9,13 @@
 #define TMR1_VAL  (*(volatile u16 *)(TMR_BASE + 0x04))
 #define TMR1_CNT  (*(volatile u16 *)(TMR_BASE + 0x06))
 
+#define TIMER_HZ 65457u /* 67027964 / 1024 */
+
 static u32 ticks_per_s = 0;
+static int started;
 
 void timer_start(void) {
+  started = 1;
   TMR0_CNT = 0;
   TMR1_CNT = 0;
   TMR0_VAL = 0;
@@ -30,27 +33,11 @@ u32 timer_ticks(void) {
   return (hi << 16) | lo;
 }
 
-/* Ticks counted across one whole RTC second. */
-static u32 calibrate(void) {
-  RtcTime t;
-  int s0;
-  u32 a;
-  if (!rtc_read(&t))
-    return 0;
-  s0 = t.sec;
-  while (rtc_read(&t) && t.sec == s0)
-    ;
-  a = timer_ticks();
-  s0 = t.sec;
-  while (rtc_read(&t) && t.sec == s0)
-    ;
-  return timer_ticks() - a;
-}
-
 int timer_ready(void) {
-  timer_start();
-  ticks_per_s = calibrate();
-  return ticks_per_s != 0;
+  if (!started)
+    timer_start();
+  ticks_per_s = TIMER_HZ;
+  return 1;
 }
 
 int timer_calibrated(void) { return ticks_per_s != 0; }

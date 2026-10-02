@@ -1,6 +1,3 @@
-/* ARM11 core entry and command loop. The ARM9 copies this core to
- * AUDIO_CORE_ADDR and wakes it through the firm's mailbox; each request goes to
- * the module that owns it. */
 #include "core11.h"
 #include "touch.h"
 #include "wifi.h"
@@ -34,6 +31,58 @@ static void crash11_init(void) {
   __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0)); /* DSB            */
 }
 
+/* This core's MPCore private timer, used one-shot. Clock11.c borrows it and
+ * puts it back. */
+#define PTIMER_LOAD  0x17E00600u
+#define PTIMER_COUNT 0x17E00604u
+#define PTIMER_CNT   0x17E00608u
+#define PTIMER_STAT  0x17E0060Cu
+#define PTIMER_EN    (1u << 0)
+#define PTIMER_EVENT (1u << 0)
+
+/* The timer counts at half the CPU clock. Taking the New 3DS's 804 MHz keeps a
+ * wait from ever being short; at 268 MHz it lasts three times as long, which
+ * the codec settle delays allow. */
+#define PTIMER_PER_MS (804000000u / 2u / 1000u)
+
+static int ptimer_state; /* 0 unchecked, 1 counts, -1 does not */
+
+static int ptimer_counts(void) {
+  uint32_t a, b;
+  MMIO32(PTIMER_CNT) = 0;
+  MMIO32(PTIMER_LOAD) = 0xFFFFFFFFu;
+  MMIO32(PTIMER_CNT) = PTIMER_EN;
+  a = MMIO32(PTIMER_COUNT);
+  spin(200);
+  b = MMIO32(PTIMER_COUNT);
+  MMIO32(PTIMER_CNT) = 0;
+  return b < a;
+}
+
+/* Timed rather than counted: this core runs uncached, where how long a nop
+ * loop takes is anyone's guess (docs/audio.md "A core's start-up"). */
+void sleep_ms(uint32_t ms) {
+  if (!ptimer_state)
+    ptimer_state = ptimer_counts() ? 1 : -1;
+  if (ptimer_state < 0) {
+    spin(ms * 300000u);
+    return;
+  }
+  while (ms) {
+    uint32_t part = ms > 1000u ? 1000u : ms;
+    ms -= part;
+    MMIO32(PTIMER_CNT) = 0;
+    MMIO32(PTIMER_STAT) = PTIMER_EVENT;
+    MMIO32(PTIMER_LOAD) = part * PTIMER_PER_MS;
+    MMIO32(PTIMER_CNT) = PTIMER_EN;
+    /* One-shot: it stops at zero and flags the event. */
+    while (!(MMIO32(PTIMER_STAT) & PTIMER_EVENT) && MMIO32(PTIMER_COUNT))
+      ;
+    MMIO32(PTIMER_CNT) = 0;
+    MMIO32(PTIMER_STAT) = PTIMER_EVENT;
+  }
+}
+
 /* The mailbox wait in audio11_start.s, position-independent. */
 extern const uint8_t core11_park_stub[];
 extern const uint8_t core11_park_stub_end[];
@@ -47,6 +96,7 @@ static void core11_park(AudioCtrl *ct) {
   uint32_t n = (uint32_t)(core11_park_stub_end - core11_park_stub);
 
   audio11_stop_all();
+  gpu11_show_a(); /* the next core's OS draws to framebuffer A */
   for (uint32_t i = 0; i < n; i++)
     d[i] = s[i];
   MMIO32(AUDIO_ARM11_MAILBOX) = 0;

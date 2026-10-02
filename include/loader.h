@@ -5,7 +5,7 @@
 
 #define AOS_MAGIC "AOS1" /* first 4 bytes of the file, not NUL-terminated */
 #define AOS_ARM9_LOAD_ADDR  0x22000000u /* FCRAM, 32 MB clear of ARM11 slot */
-#define AOS_ARM11_LOAD_ADDR 0x24000000u /* FCRAM */
+#define AOS_ARM11_LOAD_ADDR 0x24000000u
 #define AOS_ARM11_MAILBOX   0x27000000u
 #define AURORA_APP_STAGE_ADDR       0x24000000u /* staged app ARM9 payload   */
 #define AURORA_APP_TRAMPOLINE_ADDR  0x25000000u /* relocated copy+jump stub  */

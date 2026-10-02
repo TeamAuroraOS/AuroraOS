@@ -2,6 +2,7 @@
  * image viewer's FCRAM buffers (include/image.h), which are free while no
  * picture is open. */
 #include "fileview.h"
+#include "anim.h"
 #include "assets.h"
 #include "ff.h"
 #include "image.h"
@@ -69,6 +70,7 @@ static void fv_bar(const char *name, const char *right) {
             COLOR_HM_TEXT2, COLOR_HM_BAR, &ui_small);
 }
 
+/* Dialogs pop up, and arm a fade back for whatever the caller draws next. */
 static void fv_message(const char *title, const char *detail) {
   ui_dialog(VRAM_BOT_A, BOT_SCREEN_WIDTH, BSH, BSH, title, detail, g_accent, 1);
   screen_present_bottom();
@@ -76,12 +78,12 @@ static void fv_message(const char *title, const char *detail) {
     u32 k = get_keys_down();
     int tx, ty;
     if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty))
-      return;
+      break;
     ui_idle();
   }
+  anim_transition(ANIM_FADE, ANIM_BOT);
 }
 
-/* A key badge on the left, the label centred in the rest. */
 static void fv_button(int x, int y, int w, int h, const char *label,
                       const char *key, int primary) {
   volatile u8 *fb = VRAM_BOT_A;
@@ -115,12 +117,13 @@ static void fv_button(int x, int y, int w, int h, const char *label,
 #define CF_YES_X (CF_X + 14)
 #define CF_NO_X  (CF_X + CF_W - 14 - CF_BTN_W)
 
-int fv_confirm(const char *title, const char *subtitle, const char *yes,
-               const char *no) {
+static int fv_confirm_run(const char *title, const char *subtitle,
+                          const char *yes, const char *no) {
   static const Color scrim = {0x00, 0x00, 0x00};
   volatile u8 *fb = VRAM_BOT_A;
 
   draw_filled_rect_alpha(fb, 0, 0, BOT_SCREEN_WIDTH, BSH, BSH, scrim, 150);
+  anim_popup_behind();
   draw_gradient_round_rect(fb, CF_X, CF_Y, CF_W, CF_H, 14, BSH,
                            COLOR_PANEL_TOP, COLOR_PANEL_BOT);
   ui_text_mid_fit(fb, BOT_SCREEN_WIDTH / 2, CF_Y + 16, BSH, title, CF_W - 24,
@@ -147,6 +150,15 @@ int fv_confirm(const char *title, const char *subtitle, const char *yes,
     }
     ui_idle();
   }
+}
+
+int fv_confirm(const char *title, const char *subtitle, const char *yes,
+               const char *no) {
+  int answer;
+  anim_popup(CF_X, CF_Y, CF_W, CF_H);
+  answer = fv_confirm_run(title, subtitle, yes, no);
+  anim_transition(ANIM_FADE, ANIM_BOT);
+  return answer;
 }
 
 /* The file is read whole, cleaned into drawable UTF-8 and wrapped once into an
@@ -429,7 +441,8 @@ static void tv_draw_bottom(const char *name, u32 size, int is_log,
   screen_present_bottom();
 }
 
-void text_view(const char *path, const char *name, u32 size) {
+/* 0 when the file could not be shown. */
+static int text_view_run(const char *path, const char *name, u32 size) {
   static FIL f;
   UINT br = 0;
   u32 want, top = 0;
@@ -447,7 +460,7 @@ void text_view(const char *path, const char *name, u32 size) {
 
   if (f_open(&f, path, FA_READ) != FR_OK) {
     fv_message(name, "Could not open the file");
-    return;
+    return 0;
   }
   want = (u32)f_size(&f);
   if (want > TV_MAX) {
@@ -457,13 +470,14 @@ void text_view(const char *path, const char *name, u32 size) {
   if (f_read(&f, (void *)TV_FILE, want, &br) != FR_OK) {
     f_close(&f);
     fv_message(name, "Could not read the file");
-    return;
+    return 0;
   }
   f_close(&f);
 
   tv_metrics();
   tv_clean(TV_FILE, br);
   tv_wrap();
+  anim_transition(ANIM_PUSH, ANIM_BOTH);
   tv_draw_bottom(name, size, is_log, truncated);
   tv_draw_top(name, top);
 
@@ -495,9 +509,17 @@ void text_view(const char *path, const char *name, u32 size) {
     if (top != prev)
       tv_draw_top(name, top);
     if (k & BUTTON_B)
-      return;
+      return 1;
     ui_idle();
   }
+}
+
+/* Slides in over the list and back out; a file that cannot be shown leaves
+ * only its message, which fades. */
+void text_view(const char *path, const char *name, u32 size) {
+  anim_transition(ANIM_PUSH, ANIM_BOTH);
+  anim_transition(text_view_run(path, name, size) ? ANIM_POP : ANIM_FADE,
+                  ANIM_BOTH);
 }
 
 /* Only the 96 visible bytes are read, on each page change. Changes are kept as
@@ -861,18 +883,17 @@ static void hx_count_text(char *s, const char *lead, const char *tail) {
   *p = 0;
 }
 
-void hex_edit(const char *path, const char *name, u32 size) {
-  (void)size; /* the open file's own size is used, in case the list is stale */
-
+/* 0 when the file could not be shown. */
+static int hex_edit_run(const char *path, const char *name) {
   if (f_open(&hx_file, path, FA_READ) != FR_OK) {
     fv_message(name, "Could not open the file");
-    return;
+    return 0;
   }
   hx_size = (u32)f_size(&hx_file);
   if (!hx_size) {
     f_close(&hx_file);
     fv_message(name, "The file is empty");
-    return;
+    return 0;
   }
   hx_top = hx_cur = 0;
   hx_nib = hx_editing = 0;
@@ -978,8 +999,14 @@ void hex_edit(const char *path, const char *name, u32 size) {
         }
       }
       f_close(&hx_file);
-      return;
+      return 1;
     }
     ui_idle();
   }
+}
+
+void hex_edit(const char *path, const char *name, u32 size) {
+  (void)size; /* the open file's own size is used, in case the list is stale */
+  anim_transition(ANIM_PUSH, ANIM_BOTH);
+  anim_transition(hex_edit_run(path, name) ? ANIM_POP : ANIM_FADE, ANIM_BOTH);
 }

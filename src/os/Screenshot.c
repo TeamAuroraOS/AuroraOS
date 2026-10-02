@@ -179,7 +179,7 @@ static int save(void) {
 /* Drawn straight onto the panel and taken off again from the copy, so the
  * frame the running screen drew is left untouched. */
 static void notice(int ok) {
-  volatile u8 *fb = VRAM_TOP_PHYS;
+  volatile u8 *fb = (volatile u8 *)gpu_front(0);
   const int sh = TOP_SCREEN_HEIGHT;
   const u8 *copy = (const u8 *)SHOT_TOP_ADDR;
   u32 t0 = timer_ticks();
@@ -204,10 +204,11 @@ static void notice(int ok) {
 }
 
 void screenshot_take(void) {
-  /* A present still in flight would leave half a frame on the panel. */
-  gpu_wait_idle();
-  copy_words((volatile u8 *)SHOT_TOP_ADDR, VRAM_TOP_PHYS, TOP_FB_SIZE);
-  copy_words((volatile u8 *)SHOT_BOT_ADDR, VRAM_BOT_PHYS, BOT_FB_SIZE);
+  /* After any present in flight: gpu_front() waits for it. */
+  copy_words((volatile u8 *)SHOT_TOP_ADDR, (volatile u8 *)gpu_front(0),
+             TOP_FB_SIZE);
+  copy_words((volatile u8 *)SHOT_BOT_ADDR, (volatile u8 *)gpu_front(1),
+             BOT_FB_SIZE);
   build_bmp();
   notice(save());
 }
