@@ -50,6 +50,8 @@ MASKS = [
     ('FILE_MEDIA',   'Media-File-Icon.png'),
     ('FILE_AURORA',  'Aurora-Bin-File.png'),
     ('FILE_BIN',     'Unknown-Bin-File.png'),
+    ('CUBE',         'Cube.png'),
+    ('FOLDER',       'folder-icon-without-text.png'),
 ]
 
 # Full-colour art, kept as RGBA and drawn untinted: game card.png has grey
@@ -63,10 +65,12 @@ COLOR = [
     ('APP_FILES',  'files.png',       32, True),
     ('APP_FILES',  'files.png',       48, True),
     ('APP_FILES',  'files.png',       24, True),
+    ('APP_FILES',  'files.png',       16, True),
     ('APP_PREFS',  'preferences.png', 64, True),
     ('APP_STORE',  'store.png',       64, True),
     ('ICON_GAMECARD', 'game card.png', 64, False),
     ('ICON_GAMECARD', 'game card.png', 32, False),
+    ('ICON_GAMECARD', 'game card.png', 16, False),
 ]
 
 # Faces for the About page's More Info credits, cut to a circle rather than to
