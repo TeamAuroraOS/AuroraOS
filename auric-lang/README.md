@@ -80,9 +80,10 @@ are zero (Auric apps are ARM9-only).
 
 There are two ways to run an app, both now supported by AuroraOS:
 
-**1. From the Home Menu (recommended).** The updated AuroraOS Home Menu scans
-`SD:\Aurora\Apps` for app containers, lists them alphabetically, and launches
-the selected one (see [`../docs/apps.md`](../docs/apps.md)):
+**1. From the Home Menu (recommended).** The AuroraOS Home Menu scans
+`SD:\Aurora\Apps` for app containers, adds new ones at the end of Home in name
+order (they can then be moved into pages and folders), and launches the
+selected one (see [`../docs/apps.md`](../docs/apps.md)):
 
 ```
 python -m compiler.aurc build examples/hello.aur -o HELLO.BIN
