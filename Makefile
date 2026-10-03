@@ -152,12 +152,16 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_wav.o $(BUILD_DIR)/os_wavload.o \
            $(BUILD_DIR)/os_model.o \
            $(BUILD_DIR)/os_rendertest.o \
+           $(BUILD_DIR)/os_soft3d.o $(BUILD_DIR)/os_model3d.o \
+           $(BUILD_DIR)/os_p3d9.o $(BUILD_DIR)/os_stereo9.o \
+           $(BUILD_DIR)/os_json.o $(BUILD_DIR)/os_glb.o \
+           $(BUILD_DIR)/os_homemenu.o $(BUILD_DIR)/os_homelayout.o \
            $(BUILD_DIR)/os_statusbar.o $(BUILD_DIR)/os_fileview.o \
            $(BUILD_DIR)/os_fileops.o $(BUILD_DIR)/os_screenshot.o \
            $(BUILD_DIR)/os_touchcal.o $(BUILD_DIR)/os_terminal.o \
            $(BUILD_DIR)/os_termcmds.o $(BUILD_DIR)/os_anim.o
 
-CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o
+CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o $(BUILD_DIR)/Stereo11.o $(BUILD_DIR)/P3d11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
 AUDIO11_BLOB := $(BUILD_DIR)/audio11_blob.h
 
@@ -246,6 +250,47 @@ $(BUILD_DIR)/os_model.o: $(SRC_DIR)/model.c $(wildcard $(INC_DIR)/*.h) | dirs
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_rendertest.o: $(OS_DIR)/RenderTest.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_soft3d.o: $(OS_DIR)/Soft3D.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+# Vertex shaders: picasso (devkitPro's PICA200 assembler) makes the binary,
+# tools/shbin2c.py turns it into a header for the screen that draws with it.
+PICASSO ?= $(if $(DEVKITPRO),$(DEVKITPRO)/tools/bin/picasso,picasso)
+
+$(BUILD_DIR)/model_shbin.h: $(OS_DIR)/model.v.pica tools/shbin2c.py | dirs
+	@echo [PICA] Assembling $<
+	$(PICASSO) -o $(BUILD_DIR)/model.shbin $<
+	python tools/shbin2c.py $(BUILD_DIR)/model.shbin model_shader > $@
+
+$(BUILD_DIR)/os_model3d.o: $(OS_DIR)/Model3D.c $(wildcard $(INC_DIR)/*.h) $(BUILD_DIR)/model_shbin.h | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -I$(BUILD_DIR) -c $< -o $@
+
+$(BUILD_DIR)/os_json.o: $(OS_DIR)/Json.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_glb.o: $(OS_DIR)/Glb.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_homemenu.o: $(OS_DIR)/HomeMenu.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_homelayout.o: $(OS_DIR)/HomeLayout.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_p3d9.o: $(OS_DIR)/P3d9.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_stereo9.o: $(OS_DIR)/Stereo9.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
