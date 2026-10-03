@@ -108,6 +108,12 @@ void gpu11_run(void);
 /* Leaves framebuffer A on screen, for whatever runs on the panels next. */
 void gpu11_show_a(void);
 
+/* Keeps the New 3DS barrier's polarity alternating while it is in use; call
+ * it often (Stereo11.c times it). */
+void stereo11_tick(void);
+/* 2D, barrier off and mask clear, for a core about to be parked. */
+void stereo11_off(void);
+
 /* AUDIO_CMD_N3DS: ask for New 3DS clock mode `mode` and report the outcome in
  * ct->n3ds_before, n3ds_after and n3ds_status. */
 void clock11_set(AudioCtrl *ct, uint32_t mode);

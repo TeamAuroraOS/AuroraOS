@@ -1,7 +1,8 @@
-/* BMP and PNG decoding (JPEG is in jpeg.c) to RGB888 at IMAGE_RGB_ADDR. Alpha
- * is composited onto the panel colour, since the framebuffer has none. Every
- * length is checked against the buffer caps, so a malformed file fails instead
- * of overrunning. */
+/* BMP and PNG decoding (JPEG is in jpeg.c): for the image viewer, to RGB888 at
+ * IMAGE_RGB_ADDR with alpha composited onto the panel colour, since the
+ * framebuffer has none; for textures, to RGBA at a smaller size
+ * (image_decode_fit). Every length is checked against the buffer caps, so a
+ * malformed file fails instead of overrunning. */
 
 #include "image.h"
 #include "ff.h"
@@ -178,12 +179,40 @@ static const u8 dist_extra[30] = {0, 0, 0,  0,  1,  1,  2,  2,  3,  3,
                                   4, 4, 5,  5,  6,  6,  7,  7,  8,  8,
                                   9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
 
-/* Back-references read from the output buffer itself, so no sliding window is
- * needed: the whole decompressed stream is resident. */
-static u32 inflate(const u8 *src, u32 len, u8 *dst, u32 dst_max, int *err) {
+/* Where a streaming inflate sends its output: a 32 KB ring holds the window
+ * back-references read from, and `sink` gets each stretch as it fills. */
+typedef struct {
+  u8 *win; /* 32 KB */
+  u32 flushed;
+  void (*sink)(void *ctx, const u8 *p, u32 n);
+  void *ctx;
+} Ring;
+
+#define RING_MASK 0x7FFFu
+
+static void ring_flush(Ring *r, u32 out) {
+  while (r->flushed < out) {
+    u32 at = r->flushed & RING_MASK, n = out - r->flushed;
+    if (n > RING_MASK + 1u - at)
+      n = RING_MASK + 1u - at;
+    r->sink(r->ctx, r->win + at, n);
+    r->flushed += n;
+  }
+}
+
+/* Without a ring, back-references read from the output buffer itself: the
+ * whole decompressed stream is resident. With one, `dst` is its window and
+ * the stream may be any length. */
+static u32 inflate_to(const u8 *src, u32 len, u8 *dst, u32 dst_max, Ring *ring,
+                      int *err) {
   BitIn b;
   Huff lit, dist;
-  u32 out = 0;
+  u32 out = 0, mask = ring ? RING_MASK : 0xFFFFFFFFu;
+  if (ring) {
+    dst = ring->win;
+    dst_max = 0xFFFFFFFFu;
+    ring->flushed = 0;
+  }
   b.src = src;
   b.len = len;
   b.pos = 0;
@@ -211,8 +240,12 @@ static u32 inflate(const u8 *src, u32 len, u8 *dst, u32 dst_max, int *err) {
         b.err = 1;
         break;
       }
-      for (u32 i = 0; i < n; i++)
-        dst[out++] = b.src[b.pos++];
+      for (u32 i = 0; i < n; i++) {
+        dst[out & mask] = b.src[b.pos++];
+        out++;
+        if (ring && out - ring->flushed >= 0x4000u)
+          ring_flush(ring, out);
+      }
     } else if (type == 1 || type == 2) {
       u8 lens[320];
       int nlit, ndist;
@@ -279,7 +312,8 @@ static u32 inflate(const u8 *src, u32 len, u8 *dst, u32 dst_max, int *err) {
             b.err = 1;
             break;
           }
-          dst[out++] = (u8)s;
+          dst[out & mask] = (u8)s;
+          out++;
         } else if (s == 256) {
           break;
         } else {
@@ -300,9 +334,15 @@ static u32 inflate(const u8 *src, u32 len, u8 *dst, u32 dst_max, int *err) {
             break;
           }
           u32 from = out - dd;
-          while (l--)
-            dst[out++] = dst[from++];
+          while (l--) {
+            dst[out & mask] = dst[from & mask];
+            out++;
+            from++;
+          }
         }
+        /* At most 258 bytes went in; the ring has room for far more. */
+        if (ring && out - ring->flushed >= 0x4000u)
+          ring_flush(ring, out);
       }
       if (b.err)
         break;
@@ -313,8 +353,14 @@ static u32 inflate(const u8 *src, u32 len, u8 *dst, u32 dst_max, int *err) {
     if (final)
       break;
   }
+  if (ring)
+    ring_flush(ring, out);
   *err = b.err;
   return out;
+}
+
+static u32 inflate(const u8 *src, u32 len, u8 *dst, u32 dst_max, int *err) {
+  return inflate_to(src, len, dst, dst_max, 0, err);
 }
 
 static int paeth(int a, int b, int c) {
@@ -337,7 +383,10 @@ static u32 sample(const u8 *row, int depth, int idx) {
   }
 }
 
-static ImageResult decode_png(const u8 *d, u32 len, int *ow, int *oh) {
+/* To `dst` as RGB888, alpha composited onto the panel colour, or with `rgba`
+ * set as RGBA8888 with its alpha kept. */
+static ImageResult decode_png(const u8 *d, u32 len, u8 *dst, u32 dst_max,
+                              int rgba, int *ow, int *oh) {
   if (len < 8)
     return IMG_ERR_DATA;
 
@@ -391,6 +440,8 @@ static ImageResult decode_png(const u8 *d, u32 len, int *ow, int *oh) {
 
   if (!w || !idat_len)
     return IMG_ERR_DATA;
+  if ((u32)w * (u32)h > dst_max / (rgba ? 4u : 3u))
+    return IMG_ERR_TOO_BIG;
   if (depth != 1 && depth != 2 && depth != 4 && depth != 8 && depth != 16)
     return IMG_ERR_UNSUPPORTED;
   if (ctype != 0 && ctype != 2 && ctype != 3 && ctype != 4 && ctype != 6)
@@ -442,7 +493,7 @@ static ImageResult decode_png(const u8 *d, u32 len, int *ow, int *oh) {
   u32 maxv = (depth >= 8) ? 255u : ((1u << depth) - 1u);
   for (int y = 0; y < h; y++) {
     const u8 *row = scan + (u32)y * (bpl + 1u) + 1;
-    u8 *out = rgb_buf + (u32)y * (u32)w * 3u;
+    u8 *out = dst + (u32)y * (u32)w * (rgba ? 4u : 3u);
     for (int x = 0; x < w; x++) {
       u32 r, g, b, a = 255;
       if (ctype == 3) {
@@ -467,6 +518,13 @@ static ImageResult decode_png(const u8 *d, u32 len, int *ow, int *oh) {
         b = sample(row, depth, x * chans + 2);
         if (ctype == 6)
           a = sample(row, depth, x * chans + 3);
+      }
+      if (rgba) {
+        *out++ = (u8)r;
+        *out++ = (u8)g;
+        *out++ = (u8)b;
+        *out++ = (u8)a;
+        continue;
       }
       if (a != 255) { /* the framebuffer has no alpha; composite now */
         r = (r * a + BG_R * (255u - a)) / 255u;
@@ -509,7 +567,7 @@ ImageResult image_load(const char *path, Image *out) {
     r = decode_bmp(file_buf, len, &w, &h);
   else if (file_buf[0] == 0x89 && file_buf[1] == 'P' && file_buf[2] == 'N' &&
            file_buf[3] == 'G')
-    r = decode_png(file_buf, len, &w, &h);
+    r = decode_png(file_buf, len, rgb_buf, IMAGE_RGB_MAX, 0, &w, &h);
   else if (file_buf[0] == 0xFF && file_buf[1] == 0xD8)
     r = jpeg_decode(file_buf, len, rgb_buf, IMAGE_RGB_MAX, &w, &h);
   else
@@ -520,6 +578,326 @@ ImageResult image_load(const char *path, Image *out) {
   out->w = w;
   out->h = h;
   out->rgb = rgb_buf;
+  return IMG_OK;
+}
+
+/* Box-filters rows of RGBA pixels down to tw x th as they arrive, colour
+ * weighted by alpha + 1: clear pixels do not darken their neighbours, and an
+ * all-clear area keeps its colour, so the GPU's filtering has no dark fringe
+ * at cut-out edges. Each output pixel covers at least one source pixel:
+ * tw <= sw and th <= sh. */
+typedef struct {
+  int sw, sh, tw, th, oy;
+  u8 *out;
+  u32 *acc;  /* r*w, g*w, b*w, w, n for each output pixel of the row */
+  u16 *xmap; /* source column -> output column */
+} Fit;
+
+static void fit_flush(Fit *f) {
+  u8 *o = f->out + (u32)f->oy * (u32)f->tw * 4u;
+  for (int x = 0; x < f->tw; x++) {
+    u32 *a = f->acc + x * 5;
+    u32 n = a[4] ? a[4] : 1u;
+    o[0] = (u8)(a[3] ? a[0] / a[3] : 0);
+    o[1] = (u8)(a[3] ? a[1] / a[3] : 0);
+    o[2] = (u8)(a[3] ? a[2] / a[3] : 0);
+    o[3] = (u8)((a[3] - a[4]) / n);
+    o += 4;
+    a[0] = a[1] = a[2] = a[3] = a[4] = 0;
+  }
+}
+
+static void fit_row(Fit *f, int sy, const u8 *rgba) {
+  int oy = (int)((u32)sy * (u32)f->th / (u32)f->sh);
+  if (oy != f->oy) {
+    if (f->oy >= 0)
+      fit_flush(f);
+    f->oy = oy;
+  }
+  for (int x = 0; x < f->sw; x++, rgba += 4) {
+    u32 *a = f->acc + f->xmap[x] * 5u, w = rgba[3] + 1u;
+    a[0] += rgba[0] * w;
+    a[1] += rgba[1] * w;
+    a[2] += rgba[2] * w;
+    a[3] += w;
+    a[4]++;
+  }
+}
+
+/* Scratch: xmap, accumulators, then whatever the decoder needs. */
+static u8 *fit_init(Fit *f, int sw, int sh, int tw, int th, u8 *out,
+                    u8 *scratch) {
+  f->sw = sw;
+  f->sh = sh;
+  f->tw = tw;
+  f->th = th;
+  f->oy = -1;
+  f->out = out;
+  f->xmap = (u16 *)scratch;
+  f->acc = (u32 *)(scratch + ((u32)sw * 2u + 15u) / 16u * 16u);
+  for (int x = 0; x < sw; x++)
+    f->xmap[x] = (u16)((u32)x * (u32)tw / (u32)sw);
+  for (int i = 0; i < tw * 5; i++)
+    f->acc[i] = 0;
+  return (u8 *)(f->acc + tw * 5);
+}
+
+typedef struct {
+  int w, h, depth, ctype, chans, fbpp;
+  u32 bpl, fill;
+  const u8 *plte, *trns;
+  u32 plte_n, trns_n;
+  u8 *cur, *prev, *row;
+  int y;
+  Fit fit;
+} PngStream;
+
+static void png_pixel(const PngStream *p, const u8 *line, int x, u8 *o) {
+  u32 r, g, b, a = 255;
+  u32 maxv = (p->depth >= 8) ? 255u : ((1u << p->depth) - 1u);
+  if (p->ctype == 3) {
+    u32 i = sample(line, p->depth, x);
+    if (i >= p->plte_n)
+      i = 0;
+    r = p->plte[i * 3 + 0];
+    g = p->plte[i * 3 + 1];
+    b = p->plte[i * 3 + 2];
+    if (p->trns && i < p->trns_n)
+      a = p->trns[i];
+  } else if (p->ctype == 0 || p->ctype == 4) {
+    u32 v = sample(line, p->depth, x * p->chans);
+    if (p->depth < 8)
+      v = v * 255u / maxv;
+    r = g = b = v;
+    if (p->ctype == 4)
+      a = sample(line, p->depth, x * p->chans + 1);
+  } else {
+    r = sample(line, p->depth, x * p->chans + 0);
+    g = sample(line, p->depth, x * p->chans + 1);
+    b = sample(line, p->depth, x * p->chans + 2);
+    if (p->ctype == 6)
+      a = sample(line, p->depth, x * p->chans + 3);
+  }
+  o[0] = (u8)r;
+  o[1] = (u8)g;
+  o[2] = (u8)b;
+  o[3] = (u8)a;
+}
+
+/* Gets the decompressed stream a piece at a time and turns each finished
+ * scanline into pixels for the box filter. */
+static void png_sink(void *ctx, const u8 *src, u32 n) {
+  PngStream *p = (PngStream *)ctx;
+  while (n && p->y < p->h) {
+    u32 take = p->bpl + 1u - p->fill;
+    if (take > n)
+      take = n;
+    for (u32 i = 0; i < take; i++)
+      p->cur[p->fill + i] = src[i];
+    p->fill += take;
+    src += take;
+    n -= take;
+    if (p->fill < p->bpl + 1u)
+      break;
+
+    u8 *cur = p->cur + 1;
+    const u8 *prev = p->y ? p->prev + 1 : 0;
+    int ft = p->cur[0];
+    for (u32 i = 0; i < p->bpl; i++) {
+      int a = (i >= (u32)p->fbpp) ? cur[i - p->fbpp] : 0;
+      int b = prev ? prev[i] : 0;
+      int c = (prev && i >= (u32)p->fbpp) ? prev[i - p->fbpp] : 0;
+      int x = cur[i];
+      switch (ft) {
+        case 1: x += a; break;
+        case 2: x += b; break;
+        case 3: x += (a + b) / 2; break;
+        case 4: x += paeth(a, b, c); break;
+        default: break;
+      }
+      cur[i] = (u8)x;
+    }
+    for (int x = 0; x < p->w; x++)
+      png_pixel(p, cur, x, p->row + x * 4);
+    fit_row(&p->fit, p->y, p->row);
+
+    u8 *t = p->prev;
+    p->prev = p->cur;
+    p->cur = t;
+    p->fill = 0;
+    p->y++;
+  }
+}
+
+static ImageResult png_stream(const u8 *d, u32 len, u8 *out, int tw, int th,
+                              u8 *scratch, u32 scratch_len) {
+  PngStream p;
+  u32 pos = 8, idat_len = 0;
+  u8 *idat = raw_buf;
+  Ring ring;
+  int err = 0;
+
+  p.w = p.h = p.depth = p.ctype = 0;
+  p.plte = p.trns = 0;
+  p.plte_n = p.trns_n = 0;
+  while (pos + 8 <= len) {
+    u32 clen = rd32be(d + pos);
+    const u8 *tag = d + pos + 4, *body = d + pos + 8;
+    if (clen > len || pos + 12 + clen > len)
+      return IMG_ERR_DATA;
+    if (tag[0] == 'I' && tag[1] == 'H' && tag[2] == 'D' && tag[3] == 'R') {
+      if (clen < 13)
+        return IMG_ERR_DATA;
+      p.w = (int)rd32be(body);
+      p.h = (int)rd32be(body + 4);
+      p.depth = body[8];
+      p.ctype = body[9];
+      if (body[12])
+        return IMG_ERR_UNSUPPORTED; /* interlaced */
+    } else if (tag[0] == 'P' && tag[1] == 'L' && tag[2] == 'T' && tag[3] == 'E') {
+      p.plte = body;
+      p.plte_n = clen / 3;
+    } else if (tag[0] == 't' && tag[1] == 'R' && tag[2] == 'N' && tag[3] == 'S') {
+      p.trns = body;
+      p.trns_n = clen;
+    } else if (tag[0] == 'I' && tag[1] == 'D' && tag[2] == 'A' && tag[3] == 'T') {
+      if (idat_len + clen > IMAGE_RAW_MAX)
+        return IMG_ERR_TOO_BIG;
+      for (u32 i = 0; i < clen; i++)
+        idat[idat_len + i] = body[i];
+      idat_len += clen;
+    } else if (tag[0] == 'I' && tag[1] == 'E' && tag[2] == 'N' && tag[3] == 'D') {
+      break;
+    }
+    pos += 12 + clen;
+  }
+  if (p.w <= 0 || p.h <= 0 || p.w > IMAGE_MAX_DIM || p.h > IMAGE_MAX_DIM ||
+      idat_len < 3 || tw > p.w || th > p.h)
+    return IMG_ERR_DATA;
+  if (p.depth != 1 && p.depth != 2 && p.depth != 4 && p.depth != 8 &&
+      p.depth != 16)
+    return IMG_ERR_UNSUPPORTED;
+  if (p.ctype != 0 && p.ctype != 2 && p.ctype != 3 && p.ctype != 4 &&
+      p.ctype != 6)
+    return IMG_ERR_UNSUPPORTED;
+  if (p.ctype == 3 && !p.plte)
+    return IMG_ERR_DATA;
+  p.chans = (p.ctype == 2) ? 3 : (p.ctype == 4) ? 2 : (p.ctype == 6) ? 4 : 1;
+  p.bpl = ((u32)p.w * (u32)p.chans * (u32)p.depth + 7u) / 8u;
+  p.fbpp = (p.chans * p.depth + 7) / 8;
+
+  {
+    u8 *at = fit_init(&p.fit, p.w, p.h, tw, th, out, scratch);
+    u32 line = (p.bpl + 1u + 15u) & ~15u;
+    ring.win = at;
+    p.cur = at + RING_MASK + 1u;
+    p.prev = p.cur + line;
+    p.row = p.prev + line;
+    if ((u32)(p.row + (u32)p.w * 4u - scratch) > scratch_len)
+      return IMG_ERR_TOO_BIG;
+  }
+  p.fill = 0;
+  p.y = 0;
+  ring.sink = png_sink;
+  ring.ctx = &p;
+  /* Skip the 2-byte zlib header; the adler32 trailer is not checked. */
+  inflate_to(idat + 2, idat_len - 2, 0, 0, &ring, &err);
+  if (p.y < p.h)
+    return IMG_ERR_DATA;
+  fit_flush(&p.fit);
+  return IMG_OK;
+}
+
+static ImageResult jpeg_dims(const u8 *d, u32 len, int *w, int *h) {
+  u32 pos = 2;
+  while (pos + 9 < len) {
+    u32 seg;
+    if (d[pos] != 0xFF) {
+      pos++;
+      continue;
+    }
+    if (d[pos + 1] >= 0xC0 && d[pos + 1] <= 0xCF && d[pos + 1] != 0xC4 &&
+        d[pos + 1] != 0xC8 && d[pos + 1] != 0xCC) {
+      *h = (d[pos + 5] << 8) | d[pos + 6];
+      *w = (d[pos + 7] << 8) | d[pos + 8];
+      return IMG_OK;
+    }
+    seg = ((u32)d[pos + 2] << 8) | d[pos + 3];
+    pos += 2 + seg;
+  }
+  return IMG_ERR_DATA;
+}
+
+ImageResult image_probe(const u8 *d, u32 len, int *w, int *h) {
+  if (len >= 24 && d[0] == 0x89 && d[1] == 'P' && d[2] == 'N' && d[3] == 'G') {
+    *w = (int)rd32be(d + 16);
+    *h = (int)rd32be(d + 20);
+    return (*w > 0 && *h > 0) ? IMG_OK : IMG_ERR_DATA;
+  }
+  if (len >= 4 && d[0] == 0xFF && d[1] == 0xD8)
+    return jpeg_dims(d, len, w, h);
+  return IMG_ERR_FORMAT;
+}
+
+/* Nearest neighbour from an RGB or RGBA image, for the rare target larger
+ * than its source. */
+static void fit_nearest(const u8 *src, int sw, int sh, int bpp, u8 *out,
+                        int tw, int th) {
+  for (int y = 0; y < th; y++)
+    for (int x = 0; x < tw; x++) {
+      const u8 *s = src + ((u32)(y * sh / th) * (u32)sw + (u32)(x * sw / tw)) *
+                              (u32)bpp;
+      u8 *o = out + ((u32)y * (u32)tw + (u32)x) * 4u;
+      o[0] = s[0];
+      o[1] = s[1];
+      o[2] = s[2];
+      o[3] = bpp == 4 ? s[3] : 0xFF;
+    }
+}
+
+ImageResult image_decode_fit(const u8 *d, u32 len, u8 *out, int tw, int th,
+                             u8 *scratch, u32 scratch_len) {
+  int w = 0, h = 0;
+  ImageResult r = image_probe(d, len, &w, &h);
+  if (r != IMG_OK)
+    return r;
+
+  if (d[0] == 0x89) {
+    if (tw <= w && th <= h)
+      return png_stream(d, len, out, tw, th, scratch, scratch_len);
+    r = decode_png(d, len, rgb_buf, IMAGE_RGB_MAX, 1, &w, &h);
+    if (r == IMG_OK)
+      fit_nearest(rgb_buf, w, h, 4, out, tw, th);
+    return r;
+  }
+
+  /* JPEG: whole if it fits, else from each 8x8 block's average alone. */
+  r = jpeg_decode_scaled(d, len, rgb_buf, IMAGE_RGB_MAX, 0, &w, &h);
+  if (r == IMG_ERR_TOO_BIG)
+    r = jpeg_decode_scaled(d, len, rgb_buf, IMAGE_RGB_MAX, 3, &w, &h);
+  if (r != IMG_OK)
+    return r;
+  if (tw > w || th > h) {
+    fit_nearest(rgb_buf, w, h, 3, out, tw, th);
+    return IMG_OK;
+  }
+  {
+    Fit f;
+    u8 *row = fit_init(&f, w, h, tw, th, out, scratch);
+    if ((u32)(row + (u32)w * 4u - scratch) > scratch_len)
+      return IMG_ERR_TOO_BIG;
+    for (int y = 0; y < h; y++) {
+      const u8 *s = rgb_buf + (u32)y * (u32)w * 3u;
+      for (int x = 0; x < w; x++) {
+        row[x * 4 + 0] = s[x * 3 + 0];
+        row[x * 4 + 1] = s[x * 3 + 1];
+        row[x * 4 + 2] = s[x * 3 + 2];
+        row[x * 4 + 3] = 0xFF;
+      }
+      fit_row(&f, y, row);
+    }
+    fit_flush(&f);
+  }
   return IMG_OK;
 }
 

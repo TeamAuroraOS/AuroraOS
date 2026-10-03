@@ -2,6 +2,7 @@
 #include "assets.h"
 #include "ui.h"
 #include "anim.h"
+#include "model3d.h"
 #include "files.h"
 #include "fileview.h"
 #include "model.h"
@@ -17,6 +18,7 @@
 #include "crash.h"
 #include "font.h"
 #include "gpu.h"
+#include "homemenu.h"
 #include "i2c.h"
 #include "icons.h"
 #include "lang.h"
@@ -84,33 +86,11 @@ static int g_accent_idx = 0;
 static UserConfig g_cfg;
 
 
-typedef enum {
-  ACT_NONE = 0,
-  ACT_POWER,
-  ACT_LAUNCH,
-  ACT_MUSIC,
-  ACT_FILES
-} HomeAction;
-
-typedef struct {
-  const char *name; /* NULL => empty placeholder slot */
-  const char *dev;
-  const unsigned char *icon; /* built-in 32x32 bits, or NULL */
-  u32 asset_lg, asset_sm;    /* pack icon at 64 / 32, or UI_NO_ASSET */
-  Color tint;
-  HomeAction action;
-  const char *path;          /* ACT_LAUNCH: container path on the SD card */
-} HomeApp;
-
-#define HOME_COLS  5
-#define HOME_ROWS  3
-#define HOME_COUNT (HOME_COLS * HOME_ROWS)
-
-static HomeApp home_apps[HOME_COUNT];
+enum { ACT_LAUNCH, ACT_MUSIC, ACT_FILES, ACT_CUBE };
 
 /* A long name is cut for display, but the path always holds all of it. */
 #define APPS_DIR     "Aurora/Apps"
-#define MAX_APPS     HOME_COUNT
+#define MAX_APPS     160
 #define APP_NAME_MAX 64
 #define APP_PATH_MAX (sizeof(APPS_DIR) + FF_LFN_BUF + 1)
 static char app_name[MAX_APPS][APP_NAME_MAX]; /* file name minus ".bin"  */
@@ -118,6 +98,10 @@ static char app_path[MAX_APPS][APP_PATH_MAX]; /* "Aurora/Apps/Name.bin"  */
 static unsigned char app_icon[MAX_APPS][ICON_SIZE * ICON_ROW_BYTES];
 static int  app_has_icon[MAX_APPS];
 static int  app_count;
+
+/* The SD apps, then the built-in screens. */
+static HomeApp home_apps[MAX_APPS + 3];
+static int home_count;
 
 /* Relocatable app hand-off + return stubs (src/os/os_launch.s), and the end of
  * the OS's loadable image (src/os/os.ld) for the return snapshot. */
@@ -136,185 +120,6 @@ static void hm_top_static(void) {
   ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT,
                TOP_SCREEN_HEIGHT);
   hm_status_bar();
-}
-
-#define PV_BOX   96
-#define PV_BOX_X ((TOP_SCREEN_WIDTH - PV_BOX) / 2)
-#define PV_BOX_Y 34
-#define PV_CARD_X 40
-#define PV_CARD_Y 148
-#define PV_CARD_W (TOP_SCREEN_WIDTH - 2 * PV_CARD_X)
-#define PV_CARD_H 62
-
-/* Erases what was there first, so a redraw matches a fresh one. Does not
- * present. */
-static void hm_top_item(int selected) {
-  const HomeApp *app = &home_apps[selected];
-  Color tint = app->name ? app->tint : COLOR_HM_EMPTY_TOP;
-  Color tint_dark;
-  tint_dark.r = (u8)((tint.r * 5) / 9);
-  tint_dark.g = (u8)((tint.g * 5) / 9);
-  tint_dark.b = (u8)((tint.b * 5) / 9);
-
-  ui_wallpaper_rect(VRAM_TOP_LA, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX,
-                    TOP_SCREEN_HEIGHT);
-  ui_wallpaper_rect(VRAM_TOP_LA, PV_CARD_X, PV_CARD_Y, PV_CARD_W, PV_CARD_H,
-                    TOP_SCREEN_HEIGHT);
-  draw_gradient_round_rect(VRAM_TOP_LA, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX, 16,
-                           TOP_SCREEN_HEIGHT, tint, tint_dark);
-  if (app->icon || app->asset_lg != UI_NO_ASSET)
-    ui_icon(VRAM_TOP_LA, PV_BOX_X, PV_BOX_Y, PV_BOX, TOP_SCREEN_HEIGHT,
-            app->asset_lg, app->icon, COLOR_WHITE);
-
-  draw_gradient_round_rect(VRAM_TOP_LA, PV_CARD_X, PV_CARD_Y, PV_CARD_W,
-                           PV_CARD_H, 11, TOP_SCREEN_HEIGHT, COLOR_PANEL_TOP,
-                           COLOR_PANEL_BOT);
-  const char *name = app->name ? app->name : L(STR_EMPTY_SLOT);
-  const char *dev = app->dev ? app->dev : "";
-  ui_text_mid_fit(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, PV_CARD_Y + 7,
-                  TOP_SCREEN_HEIGHT, name, PV_CARD_W - 24, COLOR_WHITE,
-                  COLOR_PANEL_TOP, &ui_title);
-  ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, PV_CARD_Y + 31,
-              TOP_SCREEN_HEIGHT, dev, COLOR_HM_TEXT2, COLOR_PANEL_BOT,
-              &ui_font);
-}
-
-/* Cross-fades the top screen to another app, the new one sliding in from the
- * side the selection moved towards. */
-static void hm_preview(int sel, int dir) {
-  anim_xfade_begin(ANIM_TOP);
-  hm_top_item(sel);
-  anim_xfade_area(ANIM_TOP, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX);
-  anim_xfade_area(ANIM_TOP, PV_CARD_X, PV_CARD_Y, PV_CARD_W, PV_CARD_H);
-  anim_xfade_start(ANIM_TOP, dir);
-  screen_present_top();
-}
-
-#define SLOT_SIZE 46
-#define SLOT_GAP  12
-#define SLOT_STEP (SLOT_SIZE + SLOT_GAP)
-#define SLOT_RING 3
-#define SLOT_LIFT 3 /* how far the selected tile grows on each side */
-#define GRID_W    (HOME_COLS * SLOT_SIZE + (HOME_COLS - 1) * SLOT_GAP)
-#define GRID_X    ((BOT_SCREEN_WIDTH - GRID_W) / 2)
-#define GRID_Y    52
-
-static int slot_x(int i) { return GRID_X + (i % HOME_COLS) * SLOT_STEP; }
-static int slot_y(int i) { return GRID_Y + (i / HOME_COLS) * SLOT_STEP; }
-
-/* Where the selection ring is, and how far each tile stands out from its slot:
- * the selected one grows, and dips when pressed. */
-static AnimVal hm_ring_x, hm_ring_y, hm_lift[HOME_COUNT];
-static int hm_sel;
-
-static void hm_bar(void) {
-  draw_filled_round_rect(VRAM_BOT_A, 8, 8, BOT_SCREEN_WIDTH - 16, 30, 10,
-                         BOT_SCREEN_HEIGHT, COLOR_HM_BAR);
-  int sx = BOT_SCREEN_WIDTH - 62, sy = 16;
-  draw_filled_round_rect(VRAM_BOT_A, sx, sy, 11, 11, 5, BOT_SCREEN_HEIGHT,
-                         COLOR_HM_TEXT2);
-  draw_filled_round_rect(VRAM_BOT_A, sx + 2, sy + 2, 7, 7, 3, BOT_SCREEN_HEIGHT,
-                         COLOR_HM_BAR);
-  draw_filled_rect(VRAM_BOT_A, sx + 10, sy + 10, 4, 2, BOT_SCREEN_HEIGHT,
-                   COLOR_HM_TEXT2);
-  int gx = BOT_SCREEN_WIDTH - 34, gy = 18;
-  draw_filled_round_rect(VRAM_BOT_A, gx, gy, 16, 4, 2, BOT_SCREEN_HEIGHT,
-                         COLOR_HM_TEXT2);
-  draw_filled_round_rect(VRAM_BOT_A, gx + 9, gy - 2, 5, 8, 2, BOT_SCREEN_HEIGHT,
-                         COLOR_WHITE);
-  draw_filled_round_rect(VRAM_BOT_A, gx, gy + 8, 16, 4, 2, BOT_SCREEN_HEIGHT,
-                         COLOR_HM_TEXT2);
-  draw_filled_round_rect(VRAM_BOT_A, gx + 2, gy + 6, 5, 8, 2, BOT_SCREEN_HEIGHT,
-                         COLOR_WHITE);
-}
-
-static void hm_tile(int i) {
-  const HomeApp *app = &home_apps[i];
-  int l = anim_px(&hm_lift[i]);
-  int x = slot_x(i) - l, y = slot_y(i) - l, size = SLOT_SIZE + 2 * l;
-
-  draw_gradient_round_rect(VRAM_BOT_A, x, y, size, size, 10 + l / 2,
-                           BOT_SCREEN_HEIGHT,
-                           app->name ? COLOR_HM_SLOT_TOP : COLOR_HM_EMPTY_TOP,
-                           app->name ? COLOR_HM_SLOT_BOT : COLOR_HM_EMPTY_BOT);
-  if (app->icon || app->asset_sm != UI_NO_ASSET)
-    ui_icon(VRAM_BOT_A, x, y, size, BOT_SCREEN_HEIGHT, app->asset_sm,
-            app->icon, COLOR_WHITE);
-}
-
-/* The whole bottom screen, as its animations have it now. Does not present. */
-static void hm_bottom(void) {
-  const int out = SLOT_RING + SLOT_LIFT;
-  ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
-               BOT_SCREEN_HEIGHT);
-  hm_bar();
-  for (int i = 0; i < HOME_COUNT; i++)
-    hm_tile(i);
-  /* Over the tiles, so all of it shows as it moves; one pixel thicker than the
-   * gap, so it also covers the lifted tile's softened edge. */
-  draw_round_ring(VRAM_BOT_A, anim_px(&hm_ring_x), anim_px(&hm_ring_y),
-                  SLOT_SIZE + 2 * out, SLOT_SIZE + 2 * out,
-                  10 + SLOT_LIFT / 2 + SLOT_RING, SLOT_RING + 1,
-                  BOT_SCREEN_HEIGHT, g_accent);
-}
-
-/* Points the ring and the lifts at `sel`; `jump` skips the animation. */
-static void hm_target(int sel, int jump) {
-  void (*set)(AnimVal *, int) = jump ? anim_jump : anim_to;
-  const int out = SLOT_RING + SLOT_LIFT;
-  hm_ring_x.bounce = hm_ring_y.bounce = 1;
-  set(&hm_ring_x, slot_x(sel) - out);
-  set(&hm_ring_y, slot_y(sel) - out);
-  for (int i = 0; i < HOME_COUNT; i++) {
-    hm_lift[i].bounce = 1;
-    set(&hm_lift[i], i == sel ? SLOT_LIFT : 0);
-  }
-  hm_sel = sel;
-}
-
-static void hm_draw_full(int sel) {
-  hm_top_static();
-  hm_top_item(sel);
-  screen_present_top();
-  hm_target(sel, 1);
-  hm_bottom();
-  screen_present_bottom();
-}
-
-static void hm_update(int new_sel) {
-  int dir = new_sel > hm_sel ? 1 : -1;
-  hm_target(new_sel, 0);
-  if (!anim_moving(&hm_ring_x) && !anim_moving(&hm_ring_y)) {
-    hm_bottom(); /* no animation to carry it */
-    screen_present_bottom();
-  }
-  hm_preview(new_sel, dir);
-}
-
-static void hm_animate(int ms) {
-  int moved = anim_step(&hm_ring_x, ms), show = 0;
-  moved |= anim_step(&hm_ring_y, ms);
-  for (int i = 0; i < HOME_COUNT; i++)
-    moved |= anim_step(&hm_lift[i], ms);
-  if (moved) {
-    hm_bottom();
-    show |= ANIM_BOT;
-  }
-  if (anim_xfade_frame(ANIM_TOP))
-    show |= ANIM_TOP;
-  anim_present(show);
-}
-
-/* The tile dips under the press before its screen opens. */
-static void hm_press(int sel) {
-  u32 t0 = anim_now(), frame_at = 0;
-  anim_to(&hm_lift[sel], -2);
-  while (anim_ms(t0) < 110) {
-    int ms = anim_frame(&frame_at);
-    if (ms)
-      hm_animate(ms);
-    ui_idle();
-  }
 }
 
 /* Slides a screen in, and slides back to the caller, which then redraws. */
@@ -2171,56 +1976,37 @@ static int scan_apps(void) {
 
 static void build_home(void) {
   static const Color app_tint = {0x2C, 0x50, 0x74};
-  for (int i = 0; i < HOME_COUNT; i++) {
-    home_apps[i] = (HomeApp){0};
-    home_apps[i].asset_lg = UI_NO_ASSET;
-    home_apps[i].asset_sm = UI_NO_ASSET;
-  }
+  static const Color music_tint = {0x2C, 0x5C, 0x40};
+  static const Color files_tint = {0x74, 0x52, 0x1C};
+  static const Color cube_tint = {0x3C, 0x4C, 0x8C};
+  HomeApp *h = home_apps;
 
-  int slot = 0;
-  for (int i = 0; i < app_count && slot < HOME_COUNT; i++, slot++) {
-    home_apps[slot].name = app_name[i];
-    home_apps[slot].dev = "SD App";
-    home_apps[slot].icon = app_has_icon[i] ? app_icon[i] : icon_boot_bits;
+  for (int i = 0; i < app_count; i++, h++) {
+    *h = (HomeApp){0};
+    h->name = app_name[i];
+    h->dev = "SD App";
+    h->key = app_path[i] + sizeof(APPS_DIR); /* the file name */
+    h->icon = app_has_icon[i] ? app_icon[i] : icon_boot_bits;
+    h->asset_lg = h->asset_sm = h->asset_xs = UI_NO_ASSET;
     if (!app_has_icon[i]) {
-      home_apps[slot].asset_lg = ASSET_ICON_GAMECARD_64;
-      home_apps[slot].asset_sm = ASSET_ICON_GAMECARD_32;
+      h->asset_lg = ASSET_ICON_GAMECARD_64;
+      h->asset_sm = ASSET_ICON_GAMECARD_32;
+      h->asset_xs = ASSET_ICON_GAMECARD_16;
     }
-    home_apps[slot].tint = app_tint;
-    home_apps[slot].action = ACT_LAUNCH;
-    home_apps[slot].path = app_path[i];
+    h->tint = app_tint;
+    h->action = ACT_LAUNCH;
+    h->path = app_path[i];
   }
-  if (slot < HOME_COUNT) {
-    static const Color music_tint = {0x2C, 0x5C, 0x40};
-    home_apps[slot].name = L(STR_MUSIC);
-    home_apps[slot].dev = "Aurora";
-    home_apps[slot].icon = icon_music_bits;
-    home_apps[slot].asset_lg = ASSET_ICON_MUSIC_64;
-    home_apps[slot].asset_sm = ASSET_ICON_MUSIC_32;
-    home_apps[slot].tint = music_tint;
-    home_apps[slot].action = ACT_MUSIC;
-    slot++;
-  }
-  if (slot < HOME_COUNT) {
-    static const Color files_tint = {0x74, 0x52, 0x1C};
-    home_apps[slot].name = "Files";
-    home_apps[slot].dev = L(STR_SYSTEM);
-    home_apps[slot].icon = icon_boot_bits;
-    home_apps[slot].asset_lg = ASSET_APP_FILES_64;
-    home_apps[slot].asset_sm = ASSET_APP_FILES_32;
-    home_apps[slot].tint = files_tint;
-    home_apps[slot].action = ACT_FILES;
-    slot++;
-  }
-  if (slot < HOME_COUNT) {
-    home_apps[slot].name = L(STR_POWER_OFF);
-    home_apps[slot].dev = L(STR_SYSTEM);
-    home_apps[slot].icon = icon_power_bits;
-    home_apps[slot].asset_lg = ASSET_ICON_POWER_64;
-    home_apps[slot].asset_sm = ASSET_ICON_POWER_32;
-    home_apps[slot].tint = COLOR_DARK_RED;
-    home_apps[slot].action = ACT_POWER;
-  }
+  *h++ = (HomeApp){L(STR_MUSIC), "Aurora", "@music", icon_music_bits,
+                   ASSET_ICON_MUSIC_64, ASSET_ICON_MUSIC_32,
+                   ASSET_ICON_MUSIC_16, music_tint, ACT_MUSIC, 0};
+  *h++ = (HomeApp){"Files", L(STR_SYSTEM), "@files", icon_boot_bits,
+                   ASSET_APP_FILES_64, ASSET_APP_FILES_32, ASSET_APP_FILES_16,
+                   files_tint, ACT_FILES, 0};
+  *h++ = (HomeApp){"3D Model", "Aurora", "@model", icon_cube_bits,
+                   ASSET_ICON_CUBE_64, ASSET_ICON_CUBE_32, ASSET_ICON_CUBE_16,
+                   cube_tint, ACT_CUBE, 0};
+  home_count = (int)(h - home_apps);
 }
 
 static void launch_msg(const char *msg, Color color) {
@@ -2600,22 +2386,25 @@ static void power_off_now(void) {
   power_shutdown();
 }
 
-static void home_activate(int sel) {
-  if (home_apps[sel].action != ACT_NONE)
-    hm_press(sel);
-  if (home_apps[sel].action == ACT_POWER) {
-    power_off_now();
-  } else if (home_apps[sel].action == ACT_LAUNCH) {
-    os_launch_app(home_apps[sel].path);
-    hm_draw_full(sel); /* only reached if the launch failed and returned */
-  } else if (home_apps[sel].action == ACT_MUSIC) {
+static void home_open(const HomeApp *app) {
+  if (app->action == ACT_LAUNCH)
+    os_launch_app(app->path); /* returns only if the launch failed */
+  else if (app->action == ACT_MUSIC)
     open_screen(music_player_screen);
-    hm_draw_full(sel);
-  } else if (home_apps[sel].action == ACT_FILES) {
+  else if (app->action == ACT_FILES)
     files_screen(os_launch_app);
-    hm_draw_full(sel);
-  }
+  else if (app->action == ACT_CUBE)
+    open_screen(model_screen);
 }
+
+static void home_settings(void) { open_screen(settings_open); }
+
+static void home_terminal(void) { terminal_screen(g_cfg.name, os_launch_app); }
+
+static void os_gpu_late(void);
+
+static const HomeHooks home_hooks = {home_open, home_settings, home_terminal,
+                                     power_off_now, os_gpu_late};
 
 /* How long the boot waits for a freshly loaded core to take requests. A slower
  * core gets the GPU later, from the Home Menu loop. */
@@ -2719,9 +2508,9 @@ void os_main(void) {
   build_home();
   boot_mark(BT_APPS);
 
-  int sel = 0;
+  home_init(home_apps, home_count, &home_hooks);
   anim_transition(ANIM_FADE, ANIM_BOTH); /* from the boot or the setup wizard */
-  hm_draw_full(sel);
+  home_draw();
   boot_mark(BT_MENU);
 
   /* A core from before AUDIO_PARK_VERSION cannot be swapped while it runs, so
@@ -2730,80 +2519,8 @@ void os_main(void) {
     if (fv_confirm(L(STR_CORE_OLD), L(STR_CORE_OLD_HINT), L(STR_POWER_OFF),
                    L(STR_LATER)))
       power_off_now();
-    hm_draw_full(sel);
+    home_draw();
   }
 
-  int clock_tick = 0, last_min = -1;
-  u32 frame_at = 0;
-
-  while (1) {
-    os_gpu_late();
-    u32 kdown = get_keys_down();
-    int prev = sel;
-    int col = sel % HOME_COLS, row = sel / HOME_COLS;
-
-    if ((kdown & BUTTON_DLEFT) && col > 0)
-      sel--;
-    if ((kdown & BUTTON_DRIGHT) && col < HOME_COLS - 1 && sel + 1 < HOME_COUNT)
-      sel++;
-    if ((kdown & BUTTON_DUP) && row > 0)
-      sel -= HOME_COLS;
-    if ((kdown & BUTTON_DDOWN) && row < HOME_ROWS - 1 &&
-        sel + HOME_COLS < HOME_COUNT)
-      sel += HOME_COLS;
-
-    if (sel != prev)
-      hm_update(sel);
-
-    if (kdown & BUTTON_A)
-      home_activate(sel);
-
-    if (kdown & BUTTON_START) {
-      open_screen(settings_open);
-      hm_draw_full(sel);
-    }
-
-    if (kdown & BUTTON_X) {
-      terminal_screen(g_cfg.name, os_launch_app);
-      hm_draw_full(sel);
-    }
-
-    /* the settings icon in the top bar, or an app tile */
-    int tx, ty;
-    if (touch_tap(&tx, &ty)) {
-      if (ty < 40 && tx > BOT_SCREEN_WIDTH - 46) {
-        open_screen(settings_open);
-        hm_draw_full(sel);
-      } else {
-        for (int i = 0; i < HOME_COUNT; i++) {
-          if (touch_in(tx, ty, slot_x(i) - SLOT_RING, slot_y(i) - SLOT_RING,
-                       SLOT_SIZE + 2 * SLOT_RING, SLOT_SIZE + 2 * SLOT_RING)) {
-            if (i != sel) {
-              hm_update(i);
-              sel = i;
-            }
-            home_activate(sel);
-            break;
-          }
-        }
-      }
-    }
-
-    /* The MCU is on a slow I2C bus: sample it every 96 passes and repaint only
-     * when the minute changes. */
-    if (++clock_tick >= 96) {
-      clock_tick = 0;
-      RtcTime now;
-      if (rtc_read(&now) && now.min != last_min) {
-        last_min = now.min;
-        hm_status_bar();
-        screen_present_top();
-      }
-    }
-
-    int ms = anim_frame(&frame_at);
-    if (ms)
-      hm_animate(ms);
-    ui_idle();
-  }
+  home_run();
 }

@@ -195,6 +195,11 @@ static void idct_block(const int *in, u8 *out, int stride) {
 
 ImageResult jpeg_decode(const u8 *d, u32 len, u8 *rgb, u32 rgb_max, int *ow,
                         int *oh) {
+  return jpeg_decode_scaled(d, len, rgb, rgb_max, 0, ow, oh);
+}
+
+ImageResult jpeg_decode_scaled(const u8 *d, u32 len, u8 *rgb, u32 rgb_max,
+                               int shift, int *ow, int *oh) {
   static u16 qt[4][64];
   static Huff hdc[4], hac[4];
   Comp comp[MAXCOMP];
@@ -244,7 +249,8 @@ ImageResult jpeg_decode(const u8 *d, u32 len, u8 *rgb, u32 rgb_max, int *ow,
       if (width <= 0 || height <= 0 || width > IMAGE_MAX_DIM ||
           height > IMAGE_MAX_DIM)
         return IMG_ERR_TOO_BIG;
-      if ((u32)width * (u32)height * 3u > rgb_max)
+      if ((u32)((width + (1 << shift) - 1) >> shift) *
+              (u32)((height + (1 << shift) - 1) >> shift) * 3u > rgb_max)
         return IMG_ERR_TOO_BIG;
       for (int i = 0; i < ncomp; i++) {
         comp[i].id = p[6 + i * 3];
@@ -329,8 +335,8 @@ ImageResult jpeg_decode(const u8 *d, u32 len, u8 *rgb, u32 rgb_max, int *ow,
       int mcuy = (height + 8 * vmax - 1) / (8 * vmax);
 
       for (int i = 0; i < ncomp; i++) {
-        comp[i].pw = mcux * comp[i].h * 8;
-        comp[i].ph = mcuy * comp[i].v * 8;
+        comp[i].pw = (mcux * comp[i].h * 8) >> shift;
+        comp[i].ph = (mcuy * comp[i].v * 8) >> shift;
         u32 need = (u32)comp[i].pw * (u32)comp[i].ph;
         if (need > IMAGE_RAW_MAX || plane_used > IMAGE_RAW_MAX - need)
           return IMG_ERR_TOO_BIG;
@@ -406,11 +412,16 @@ ImageResult jpeg_decode(const u8 *d, u32 len, u8 *rgb, u32 rgb_max, int *ow,
                   mx = mcux;
                 }
 
-                int px = (mx * comp[c].h + bx) * 8;
-                int py = (my * comp[c].v + by) * 8;
-                if (px + 8 <= comp[c].pw && py + 8 <= comp[c].ph)
+                int px = (mx * comp[c].h + bx) * (8 >> shift);
+                int py = (my * comp[c].v + by) * (8 >> shift);
+                if (shift) {
+                  /* A block's mean is its dequantised DC term over 8. */
+                  int m = blk[0] >= 0 ? (blk[0] + 4) / 8 : -((4 - blk[0]) / 8);
+                  comp[c].plane[(u32)py * (u32)comp[c].pw + px] = clamp8(m + 128);
+                } else if (px + 8 <= comp[c].pw && py + 8 <= comp[c].ph) {
                   idct_block(blk, comp[c].plane + (u32)py * (u32)comp[c].pw + px,
                              comp[c].pw);
+                }
               }
             }
           }
@@ -419,9 +430,12 @@ ImageResult jpeg_decode(const u8 *d, u32 len, u8 *rgb, u32 rgb_max, int *ow,
         }
       }
 
-      for (int y = 0; y < height; y++) {
-        u8 *out = rgb + (u32)y * (u32)width * 3u;
-        for (int x = 0; x < width; x++) {
+      /* The output size; width and height stay the coded size above. */
+      int out_w = (width + (1 << shift) - 1) >> shift;
+      int out_h = (height + (1 << shift) - 1) >> shift;
+      for (int y = 0; y < out_h; y++) {
+        u8 *out = rgb + (u32)y * (u32)out_w * 3u;
+        for (int x = 0; x < out_w; x++) {
           if (ncomp == 1) {
             const Comp *c = &comp[0];
             u8 v = c->plane[(u32)y * (u32)c->pw + x];
@@ -444,8 +458,8 @@ ImageResult jpeg_decode(const u8 *d, u32 len, u8 *rgb, u32 rgb_max, int *ow,
           }
         }
       }
-      *ow = width;
-      *oh = height;
+      *ow = out_w;
+      *oh = out_h;
       return IMG_OK;
     } else if (m == 0xDE || m == 0xDF) {
       return IMG_ERR_UNSUPPORTED; /* hierarchical */

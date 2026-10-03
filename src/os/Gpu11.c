@@ -8,6 +8,12 @@
 #include "gpu.h"
 
 void sleep_ms(uint32_t ms);
+void stereo11_tick(void);
+void stereo11_mode(int on);
+int stereo11_is3d(void);
+void stereo11_blank(int on);
+void stereo11_barrier(GpuShared *g, uint32_t flags, uint32_t pattern);
+void p3d11_run(GpuShared *g);
 
 typedef volatile uint32_t vu32;
 #define GREG(off) (*(vu32 *)(GPU_REG_BASE + (off)))
@@ -177,10 +183,9 @@ static void gpu_ppf_start_wait(GpuShared *g) {
 
 /* PPF display transfer. The destination rectangle may be smaller than the
  * source (the engine downscales in that case) but never larger. */
-static void gpu_op_transfer(GpuShared *g) {
-  uint32_t sw = g->xf_src_w, sh = g->xf_src_h;
-  uint32_t dw = g->xf_dst_w, dh = g->xf_dst_h;
-  uint32_t sfmt = g->xf_src_fmt, dfmt = g->xf_dst_fmt;
+static void ppf_transfer(GpuShared *g, uint32_t src, uint32_t dst, uint32_t sw,
+                         uint32_t sh, uint32_t dw, uint32_t dh, uint32_t sfmt,
+                         uint32_t dfmt, uint32_t flags) {
   uint32_t sbpp, dbpp, align_s, align_d;
 
   if (sfmt > GPU_FMT_RGBA4 || dfmt > GPU_FMT_RGBA4) {
@@ -193,27 +198,27 @@ static void gpu_op_transfer(GpuShared *g) {
   align_s = (sfmt == GPU_FMT_RGB8) ? 15u : 7u;
   align_d = (dfmt == GPU_FMT_RGB8) ? 15u : 7u;
 
-  if ((g->xf_src & 7u) || (g->xf_dst & 7u) || sw < 64u || sh < 16u ||
+  if ((src & 7u) || (dst & 7u) || sw < 64u || sh < 16u ||
       dw < 64u || dh < 16u || dw > sw || dh > sh ||
       ((sw * sbpp) & align_s) || ((dw * dbpp) & align_d)) {
     g->err = GPU_ERR_BADARG;
     return;
   }
-  if ((g->xf_flags & GPU_XF_BLOCK32) && ((sw | sh | dw | dh) & 31u)) {
+  if ((flags & GPU_XF_BLOCK32) && ((sw | sh | dw | dh) & 31u)) {
     g->err = GPU_ERR_BADARG;
     return;
   }
 
   uint32_t hwflags = (sfmt << 8) | (dfmt << 12);
-  if (g->xf_flags & GPU_XF_FLIP_VERT)
+  if (flags & GPU_XF_FLIP_VERT)
     hwflags |= (1u << 0);
-  if (g->xf_flags & GPU_XF_BLOCK32)
+  if (flags & GPU_XF_BLOCK32)
     hwflags |= (1u << 16);
 
   g->busy_before = GREG(R_BUSY);
   GREG(R_PPF_CNT) = GREG(R_PPF_CNT) & ~0x0000FF00u; /* clear a stale done bit */
-  GREG(R_PPF_INPUT) = g->xf_src >> 3;
-  GREG(R_PPF_OUTPUT) = g->xf_dst >> 3;
+  GREG(R_PPF_INPUT) = src >> 3;
+  GREG(R_PPF_OUTPUT) = dst >> 3;
   GREG(R_PPF_DST_DIM) = dw | (dh << 16);
   GREG(R_PPF_SRC_DIM) = sw | (sh << 16);
   GREG(R_PPF_FLAGS) = hwflags;
@@ -222,6 +227,18 @@ static void gpu_op_transfer(GpuShared *g) {
   g->step = GPU_STEP_ARMED;
 
   gpu_ppf_start_wait(g);
+}
+
+static void gpu_op_transfer(GpuShared *g) {
+  ppf_transfer(g, g->xf_src, g->xf_dst, g->xf_src_w, g->xf_src_h, g->xf_dst_w,
+               g->xf_dst_h, g->xf_src_fmt, g->xf_dst_fmt, g->xf_flags);
+}
+
+/* The P3D render target, de-tiled into a top-screen frame for P3d11.c. */
+int gpu11_display_transfer(GpuShared *g, uint32_t src, uint32_t dst) {
+  ppf_transfer(g, src, dst, GPU_P3D_W, GPU_P3D_H, GPU_P3D_W, GPU_P3D_H,
+               GPU_FMT_RGBA8, GPU_FMT_RGB8, 0);
+  return !g->err;
 }
 
 /* PPF texture copy: a raw linear -> linear blit with no tiling or format
@@ -302,6 +319,12 @@ static const Panel panels[2] = {
 
 static uint32_t mode[2];              /* GPU_VSYNC_* */
 static int shown[2], before[2];       /* framebuffers, 0 A to 2 C */
+
+/* The top panel's right eye for each of A/B/C: the left framebuffer itself
+ * for a 2D frame, its GPU_FB_TOP_R* twin for a stereo one. */
+static const uint32_t top_right[3] = {GPU_FB_TOP_RA, GPU_FB_TOP_RB,
+                                      GPU_FB_TOP_RC};
+static int stereo_fb[3];
 static uint32_t presents[2], missed[2]; /* for the GPU Test screen */
 
 static vu32 *pdc_reg(const Panel *p, uint32_t off) {
@@ -328,9 +351,12 @@ static int blank_seen(int i, uint32_t m) {
 
 static int blank_wait(int i, uint32_t m) {
   blank_arm(i, m);
-  for (uint32_t w = 0; w < BLANK_POLLS; w++)
+  for (uint32_t w = 0; w < BLANK_POLLS; w++) {
     if (blank_seen(i, m))
       return 1;
+    if (!(w & 0x3FFu))
+      stereo11_tick();
+  }
   return 0;
 }
 
@@ -348,8 +374,9 @@ static void show(int i, int f) {
   *pdc_reg(p, PDC_FB_A) = addr;
   *pdc_reg(p, PDC_FB_B) = addr;
   if (p->pdc == PDC_TOP) {
-    *pdc_reg(p, PDC_FB_A_R) = addr;
-    *pdc_reg(p, PDC_FB_B_R) = addr;
+    uint32_t right = stereo_fb[f] ? top_right[f] : addr;
+    *pdc_reg(p, PDC_FB_A_R) = right;
+    *pdc_reg(p, PDC_FB_B_R) = right;
   }
   *swap = ((*swap & SWAP_SEL) ^ SWAP_SEL) | SWAP_ACK;
   dsb();
@@ -376,6 +403,10 @@ static void panel_to_a(GpuShared *g, int i) {
     if (mode[i] != GPU_VSYNC_OFF)
       blank_wait(i, mode[i]);
     ppf_copy(g, p->fb[shown[i]], p->fb[0], p->len);
+    if (i == 0 && stereo_fb[shown[i]])
+      ppf_copy(g, top_right[shown[i]], top_right[0], p->len);
+    if (i == 0)
+      stereo_fb[0] = stereo_fb[shown[i]];
   }
   show(i, 0);
   set_front(g, i);
@@ -421,9 +452,15 @@ static void present_one(GpuShared *g, int i, uint32_t src, uint32_t len) {
   const Panel *p = &panels[i];
   if (mode[i] == GPU_VSYNC_OFF) {
     ppf_copy(g, src, p->fb[0], len);
+    if (i == 0 && stereo_fb[0]) {
+      stereo_fb[0] = 0;
+      show(0, 0);
+    }
     return;
   }
   int f = next_fb(i);
+  if (i == 0)
+    stereo_fb[f] = 0;
   ppf_copy(g, src, p->fb[f], len);
   if (g->err)
     return;
@@ -442,28 +479,39 @@ static void gpu_op_present(GpuShared *g) {
     present_one(g, i, g->xf_src, g->xf_len);
 }
 
-/* Both panels, xf_src the top's frame and xf_src2 the bottom's. Both frames
- * are copied first and the blanks watched together, so two panels cost one
- * frame rather than two. */
-static void gpu_op_present2(GpuShared *g) {
-  const uint32_t src[2] = {g->xf_src, g->xf_src2};
+/* Each panel with a frame in src: copied into a hidden framebuffer first, then
+ * the blanks watched together, so two panels cost one frame rather than two.
+ * `right` is the top's right-eye frame, or 0 for a 2D one. */
+static void present_set(GpuShared *g, uint32_t top, uint32_t right,
+                        uint32_t bot) {
+  const uint32_t src[2] = {top, bot};
   int f[2] = {0, 0}, left = 0;
 
   for (int i = 0; i < 2; i++) {
-    if (mode[i] == GPU_VSYNC_OFF) {
-      ppf_copy(g, src[i], panels[i].fb[0], panels[i].len);
+    if (!src[i])
       continue;
+    int k = mode[i] == GPU_VSYNC_OFF ? 0 : next_fb(i);
+    int was = stereo_fb[k];
+    ppf_copy(g, src[i], panels[i].fb[k], panels[i].len);
+    if (i == 0) {
+      stereo_fb[k] = right != 0;
+      if (right && !g->err)
+        ppf_copy(g, right, top_right[k], panels[0].len);
     }
-    f[i] = next_fb(i);
-    ppf_copy(g, src[i], panels[i].fb[f[i]], panels[i].len);
     if (g->err)
       return;
+    if (mode[i] == GPU_VSYNC_OFF) {
+      if (i == 0 && was != stereo_fb[0])
+        show(0, 0);
+      continue;
+    }
+    f[i] = k;
     left |= 1 << i;
   }
   for (int i = 0; i < 2; i++)
     if (left & (1 << i))
       blank_arm(i, mode[i]);
-  for (uint32_t w = 0; left && w < BLANK_POLLS; w++)
+  for (uint32_t w = 0; left && w < BLANK_POLLS; w++) {
     for (int i = 0; i < 2; i++)
       if ((left & (1 << i)) && blank_seen(i, mode[i])) {
         show(i, f[i]);
@@ -471,6 +519,9 @@ static void gpu_op_present2(GpuShared *g) {
         set_front(g, i);
         left &= ~(1 << i);
       }
+    if (!(w & 0x3FFu))
+      stereo11_tick();
+  }
   for (int i = 0; i < 2; i++) /* a panel that stopped answering */
     if (left & (1 << i)) {
       show(i, f[i]);
@@ -478,6 +529,32 @@ static void gpu_op_present2(GpuShared *g) {
       missed[i]++;
       set_front(g, i);
     }
+}
+
+/* xf_flags GPU_STEREO_*, xf_src_w the New 3DS mask pattern. The panel is held
+ * black while its timing changes, and the barrier only covers a 3D picture. */
+static void gpu_op_stereo(GpuShared *g) {
+  uint32_t flags = g->xf_flags;
+  int on = (flags & GPU_STEREO_ON) != 0;
+
+  if (!on)
+    stereo11_barrier(g, 0, 0);
+  if (on != stereo11_is3d()) {
+    stereo11_blank(1);
+    if (mode[0] != GPU_VSYNC_OFF)
+      blank_wait(0, mode[0]);
+    stereo11_mode(on);
+    if (mode[0] != GPU_VSYNC_OFF) {
+      blank_wait(0, mode[0]);
+      blank_wait(0, mode[0]);
+    } else {
+      sleep_ms(34);
+    }
+    stereo11_blank(0);
+  }
+  if (on)
+    stereo11_barrier(g, flags, g->xf_src_w);
+  g->stereo = (g->stereo & 0x100u) | (on ? flags : 0);
 }
 
 void gpu11_show_a(void) {
@@ -512,7 +589,13 @@ void gpu11_run(void) {
   } else if (op == GPU_OP_PRESENT) {
     gpu_op_present(g);
   } else if (op == GPU_OP_PRESENT2) {
-    gpu_op_present2(g);
+    present_set(g, g->xf_src, 0, g->xf_src2);
+  } else if (op == GPU_OP_PRESENT_ST) {
+    present_set(g, g->xf_src, g->xf_src2, g->xf_src3);
+  } else if (op == GPU_OP_STEREO) {
+    gpu_op_stereo(g);
+  } else if (op == GPU_OP_P3D) {
+    p3d11_run(g);
   } else if (op == GPU_OP_SHOW_A) {
     panels_to_a(g);
   } else if (op == GPU_OP_VSYNC_TEST) {

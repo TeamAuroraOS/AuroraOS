@@ -1,0 +1,21 @@
+; The model viewer's vertex shader, assembled by picasso at build time.
+; Clip position = mvp * position; texture coordinate and colour pass through.
+.fvec mvp[4]
+
+.out outpos position
+.out outtc0 texcoord0
+.out outclr color
+
+.alias inpos v0
+.alias intc v1
+.alias inclr v2
+
+.proc main
+	dp4 outpos.x, mvp[0], inpos
+	dp4 outpos.y, mvp[1], inpos
+	dp4 outpos.z, mvp[2], inpos
+	dp4 outpos.w, mvp[3], inpos
+	mov outtc0, intc
+	mov outclr, inclr
+	end
+.end

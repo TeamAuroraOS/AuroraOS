@@ -31,7 +31,8 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
      "para usar funciones como la Aurora Store.",
      "pour les fonctions en ligne (Aurora Store)."},
     /* STR_WIFI_UNAVAIL */
-    {"Wi-Fi is not available yet.", "El Wi-Fi a\u00FAn no est\u00E1 disponible.",
+    {"Wi-Fi is not available yet.",
+     "El Wi-Fi a\u00FAn no est\u00E1 disponible.",
      "Le Wi-Fi n'est pas encore disponible."},
     /* STR_SKIP         */ {"Skip", "Omitir", "Passer"},
     /* STR_NET_HINT     */
@@ -155,6 +156,56 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
      "Haut/Bas: changer  A: OK  X: Effacer  B: Retour"},
     /* STR_HOUR         */ {"Hour", "Hora", "Heure"},
     /* STR_MINUTE       */ {"Minute", "Minuto", "Minute"},
+    /* STR_FOLDER       */ {"Folder", "Carpeta", "Dossier"},
+    /* STR_HOME         */ {"Home", "Inicio", "Accueil"},
+    /* STR_ITEM         */ {"item", "elemento", "\u00E9l\u00E9ment"},
+    /* STR_ITEMS        */ {"items", "elementos", "\u00E9l\u00E9ments"},
+    /* STR_MOVE         */ {"Move", "Mover", "D\u00E9placer"},
+    /* STR_MOVE_TO      */
+    {"Move to...", "Mover a...",
+     "D\u00E9placer vers..."},
+    /* STR_NEW_FOLDER   */ {"New Folder", "Nueva carpeta", "Nouveau dossier"},
+    /* STR_RENAME       */ {"Rename", "Renombrar", "Renommer"},
+    /* STR_REMOVE_FOLDER */
+    {"Remove Folder", "Quitar carpeta",
+     "Retirer le dossier"},
+    /* STR_CANCEL       */ {"Cancel", "Cancelar", "Annuler"},
+    /* STR_POWER_ASK    */
+    {"Turn off the console?", "\u00BFApagar la consola?",
+     "\u00C9teindre la console ?"},
+    /* STR_REMOVE_ASK   */
+    {"Remove this folder?", "\u00BFQuitar esta carpeta?",
+     "Retirer ce dossier ?"},
+    /* STR_REMOVE_HINT  */
+    {"What is in it moves out.", "Su contenido saldr\u00E1 de ella.",
+     "Son contenu en sortira."},
+    /* STR_FOLDER_NAME  */
+    {"Folder name", "Nombre de la carpeta",
+     "Nom du dossier"},
+    /* STR_MOVE_KEYS    */
+    {"D-pad: Move   A: Place   B: Cancel",
+     "Cruceta: mover   A: colocar   B: cancelar",
+     "Croix : d\u00E9placer   A : poser   B : annuler"},
+    /* STR_MOVE_TOUCH   */
+    {"Drop it on a folder to put it inside",
+     "Su\u00E9ltalo sobre una carpeta para guardarlo",
+     "D\u00E9posez-le sur un dossier pour l'y ranger"},
+    /* STR_CANT_MOVE    */
+    {"Can't put that there", "No se puede colocar ah\u00ED",
+     "Impossible de le placer ici"},
+    /* STR_ERR_FULL     */
+    {"There is no room there", "No queda espacio ah\u00ED",
+     "Il n'y a plus de place"},
+    /* STR_ERR_DEEP     */
+    {"Folders only go two deep", "Solo se permiten dos niveles de carpetas",
+     "Deux niveaux de dossiers au maximum"},
+    /* STR_ERR_FOLDERS  */
+    {"No more folders can be made", "No se pueden crear m\u00E1s carpetas",
+     "Impossible de cr\u00E9er d'autres dossiers"},
+    /* STR_ERR_INSIDE   */
+    {"A folder can't go inside itself",
+     "Una carpeta no puede ir dentro de s\u00ED misma",
+     "Un dossier ne peut pas aller en lui-m\u00EAme"},
 };
 
 const char *L(StringId id) {

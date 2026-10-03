@@ -96,6 +96,7 @@ static void core11_park(AudioCtrl *ct) {
   uint32_t n = (uint32_t)(core11_park_stub_end - core11_park_stub);
 
   audio11_stop_all();
+  stereo11_off();
   gpu11_show_a(); /* the next core's OS draws to framebuffer A */
   for (uint32_t i = 0; i < n; i++)
     d[i] = s[i];
@@ -120,8 +121,8 @@ void audio11_main(void) {
   ct->magic = AUDIO_MAGIC;
   dcache_clean();
 
-  /* Disabled: writing the ARM11 vector page is unverified and was the prime
-   * suspect for the core hanging before its main loop. */
+  /* Not called: writing the ARM11 vector page is unverified, and can hang the
+   * core before its main loop. */
   (void)crash11_init;
 
   codec11_bus_init();
@@ -156,6 +157,7 @@ void audio11_main(void) {
       poll_tick = 0;
       touch11_poll();
     }
+    stereo11_tick();
     spin(1200);
   }
 }

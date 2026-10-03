@@ -1,4 +1,5 @@
 #include "aurora.h"
+#include "audio.h"
 #include "touch.h"
 
 /* Used until Settings > Touch Calibration saves a measured one. A first guess,
@@ -85,4 +86,28 @@ int touch_tap(int *x, int *y) {
       *y = sy;
   }
   return tapped;
+}
+
+#define CPAD_REST 2048
+
+int cpad_read(int *x, int *y, int *rawx, int *rawy) {
+  static int have = -1;
+  volatile TouchShared *ts = (volatile TouchShared *)TOUCH_SHARED_ADDR;
+  int rx, ry;
+
+  if (have < 0) /* audio_version() syncs both caches, so it is asked once */
+    have = audio_alive() && audio_version() >= AUDIO_CPAD_VERSION;
+  *x = *y = 0;
+  if (!have)
+    return 0;
+  __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(&ts->cpad_x) : "memory");
+  rx = (int)ts->cpad_x;
+  ry = (int)ts->cpad_y;
+  if (rawx)
+    *rawx = rx;
+  if (rawy)
+    *rawy = ry;
+  *x = CPAD_REST - rx; /* the ADC's X axis runs right to left */
+  *y = ry - CPAD_REST;
+  return 1;
 }

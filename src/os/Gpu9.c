@@ -207,6 +207,53 @@ uint32_t gpu_vsynced(void) {
   return ((v & 3u) ? 1u : 0u) | ((v & 0xCu) ? 2u : 0u);
 }
 
+int gpu_stereo(uint32_t flags, uint32_t pattern) {
+  if (!gpu_alive())
+    return 0;
+  gpu_collect();
+  gs->op = GPU_OP_STEREO;
+  gs->xf_flags = flags;
+  gs->xf_src_w = pattern;
+  return gpu_run();
+}
+
+int gpu_present_st_async(uint32_t left, uint32_t right, uint32_t bot) {
+  if (!gpu_alive())
+    return 0;
+  gpu_collect();
+  gs->op = GPU_OP_PRESENT_ST;
+  gs->xf_src = left;
+  gs->xf_src2 = right;
+  gs->xf_src3 = bot;
+  gpu_post();
+  return 1;
+}
+
+int gpu_p3d(uint32_t list, uint32_t bytes, uint32_t dst, uint32_t clear_rgba) {
+  if (!gpu_alive())
+    return 0;
+  gpu_collect();
+  gs->op = GPU_OP_P3D;
+  gs->xf_src = list;
+  gs->xf_len = bytes;
+  gs->xf_dst = dst;
+  gs->fill_value = clear_rgba;
+  return gpu_run();
+}
+
+void gpu_3d_info(uint32_t *stereo, uint32_t *exp_writes, uint32_t *p3d_state,
+                 uint32_t *p3d_runs, uint32_t *p3d_waits, uint32_t *p3d_stat) {
+  gpu_collect();
+  inval_line(&gs->stereo);
+  inval_line(&gs->p3d_stat);
+  *stereo = gs->stereo;
+  *exp_writes = gs->exp_writes;
+  *p3d_state = gs->p3d_state;
+  *p3d_runs = gs->p3d_runs;
+  *p3d_waits = gs->p3d_waits;
+  *p3d_stat = gs->p3d_stat;
+}
+
 int gpu_show_a(void) {
   if (!gpu_alive())
     return 0;

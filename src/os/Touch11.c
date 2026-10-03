@@ -47,6 +47,9 @@ void touch11_poll(void) {
   } else {
     ts->pressed = 0;
   }
+  /* Big-endian samples; X at 0x24, Y at 0x14. */
+  ts->cpad_x = (uint32_t)(((buf[0x24] << 8) | buf[0x25]) & 0xFFF);
+  ts->cpad_y = (uint32_t)(((buf[0x14] << 8) | buf[0x15]) & 0xFFF);
   ts->seq = ++g_touch_seq;
   dcache_clean();
 }
