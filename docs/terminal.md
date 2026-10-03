@@ -538,7 +538,7 @@ Units can be named with or without their suffix (`audio` or `audio.service`):
 ```
 Nick@n3ds:/$ systemctl
 UNIT            ACTIVE   DESCRIPTION
-core11.service  active   core v101
+core11.service  active   core v102
 audio.service   active   idle
 touch.service   active   custom calibration
 gpu.service     active   ready, 1234 jobs done

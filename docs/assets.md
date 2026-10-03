@@ -35,7 +35,7 @@ recomputed per pixel, and produced a softer result for the trouble.
 
 ## What the art actually is
 
-All 28 UI icons are **white with an 8-bit alpha channel**: anti-aliased coverage
+All 30 UI icons are **white with an 8-bit alpha channel**: anti-aliased coverage
 masks, not pictures. So they are stored as coverage alone, one byte per pixel,
 and tinted when drawn, which is why a single copy serves every accent colour.
 
@@ -62,7 +62,8 @@ any size. `ui_dialog()` in `src/ui.c` is that panel.
 ## Sizes
 
 Masks are stored at 64, 48, 32, 24 and 16 pixels: 24 is the File Explorer's list
-rows and 16 the status bar. The long side is fitted so non-square art keeps its
+rows, and 16 the status bar, the Home Menu's bar and the small icons inside a
+folder's tile (for which `files` and `game card` are also stored at 16). The long side is fitted so non-square art keeps its
 aspect. The colour art is stored only at the sizes listed beside it in `COLOR`.
 Fonts are baked at four sizes.
 
@@ -70,6 +71,10 @@ The app tiles (`files.png`, `preferences.png`, `store.png`) are square in the
 source art, so `COLOR` marks them `rounded` and the builder cuts their corners to
 a curve 22% of the icon's size, sampled 4x4 per pixel. Drawn square, they
 clashed with the rounded cards around them. The game card is left as drawn.
+
+`Folder.png` was drawn for the Home Menu's folders in the same stroke style as
+the rest (80x80, a 7-pixel line); `folder-icon-without-text.png`, a filled
+colour folder, is not in the pack.
 
 The text-file icon has no PNG of its own: `text_page()` takes
 `Unkonwn File.png`, clears its question mark and rules four lines into the page,

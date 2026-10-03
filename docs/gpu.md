@@ -564,17 +564,22 @@ multiply per column instead of one per pixel, and no per-pixel call or bounds
 test. `draw_icon_scaled` now fast-paths scale 1 to `draw_icon_32` instead of
 issuing 1024 one-pixel rectangle fills.
 
-## Not implemented: P3D
+## P3D, the 3D pipeline
 
-Actual 3D rendering needs a lot more: command-list assembly, vertex buffers,
-shader binaries, and render-target setup, plus the extra initialisation the
-reference driver performs (registers `0x1080`, `0x10C0`, `0x10D0`, `0x1914`,
-`0x0050`, `0x0054`). None of that is here. AuroraOS deliberately programs only
-the two DMA engines, which need no pipeline state and are the parts that make the
-existing 2D UI faster.
+Aurora drives P3D through command lists the ARM9 builds and the ARM11 runs
+(`GPU_OP_P3D`): a render target in VRAM, a vertex shader assembled by picasso
+at build time, vertex buffers with 16-bit index lists (or vertices sent in
+immediate mode), tiled RGBA8 textures with mipmaps, and the result de-tiled
+into a top-screen frame by the display-transfer path above. The 3D Model
+screen is its user, in 2D and in stereoscopic 3D. How it works, where each fact
+comes from and what is still unverified on hardware:
+[`stereo3d.md`](stereo3d.md) and [`glb.md`](glb.md).
 
-If P3D is added later, the display-transfer path already implemented is what
-presents its output.
+The extra initialisation the reference driver performs (registers `0x1080`,
+`0x10C0`, `0x10D0`, `0x1914`) is P3D's interrupt compare, mask and autostop,
+and the configuration-mode bit; `P3d11.c` sets those on its first list.
+`0x0050` and `0x0054` are DMA priorities, left as the firm set them.
+Hardware lighting and the geometry shader are not used yet.
 
 ## Render test
 

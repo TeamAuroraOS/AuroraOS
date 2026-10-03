@@ -1,7 +1,9 @@
 # AuroraOS app loader
 
-The AuroraOS Home Menu (`src/os/os_main.c`) discovers and launches app
-containers from the SD card, in addition to the built-in Power Off tile. The
+The AuroraOS Home Menu (`src/os/os_main.c`, `src/os/HomeMenu.c`) discovers
+and launches app containers from the SD card, alongside the built-in Music,
+Files and 3D Model, and lets them be arranged in pages and folders
+([`home.md`](home.md)). The
 File Explorer and the [terminal](terminal.md) (`./Tetris.bin`, or `Tetris` for
 an app in `Aurora\Apps`) start apps the same way.
 
@@ -17,13 +19,14 @@ SD:\Aurora\Apps\*.bin
   example `SD:\Aurora\Apps\Snake.bin` shows as **Snake**. Long names work, and
   the extension matches in any letter case; a name too long for the Home Menu's
   card is cut with "...".
-* Apps are **sorted alphabetically** before being placed in the home grid.
+* Up to 160 apps are read, **sorted alphabetically**. Where each one sits,
+  and in which folder, is kept in `SD:\Aurora\HomeMenu.txt`; an app it does
+  not mention yet goes at the end of Home ([`home.md`](home.md)).
 * Each app carries **its own icon**, embedded in the binary; the Home Menu reads
   and displays it (see *Per-app icons* below). Apps without one get a generic
   icon.
-* The scan fills the grid slots first, then appends a permanent **Power Off**
-  tile; remaining slots stay empty. If there is no SD card or no `Aurora\Apps`
-  folder, the menu simply shows Power Off.
+* The built-in Music, Files and 3D Model are arranged the same way. If there is
+  no SD card or no `Aurora\Apps` folder, the menu shows just those.
 
 Building an app and putting it in place:
 

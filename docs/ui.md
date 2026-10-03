@@ -105,7 +105,8 @@ anim_popup_behind();
 
 | Where | Kind |
 |-------|------|
-| Home Menu to Settings, Music, Files, the terminal, and back | slide |
+| Home Menu to Settings, Music, Files, 3D Model, the terminal, and back | slide |
+| Home Menu into a folder, and out | slide |
 | Settings to each of its pages, About to More Info, and back | slide |
 | File Explorer into a folder, and up | slide |
 | File Explorer to the text viewer, hex editor or keyboard, and back | slide |
@@ -114,7 +115,7 @@ anim_popup_behind();
 | Image viewer (top screen), touch calibration targets | fade |
 | Applying an accent colour, which re-tints the wallpaper | fade |
 | Start-up, and the end of the setup wizard | fade in from what the boot left |
-| Power Off on the Home Menu | fade to black |
+| Power Off from the Home Menu's bar | fade to black |
 
 ### Cross-fades in place
 
@@ -156,7 +157,11 @@ ends of the File Explorer and music lists go under the bars above and below
 them.
 
 On the Home Menu the selected tile also lifts, growing 3 pixels on each side,
-and dips under a press for about 110 ms before its screen opens.
+and dips under a press for about 110 ms before its screen opens. Every tile's
+position is a spring too, across all the pages laid side by side, with one
+more spring scrolling the strip: turning a page, tiles moving aside for a
+carried one and a dropped tile settling all come from those. See
+[`home.md`](home.md).
 
 A screen that animates repaints all of itself each frame rather than patching:
 the wallpaper comes back as one GPU copy, then the rows or tiles and the ring

@@ -1,9 +1,10 @@
-# Touch calibration and screenshots
+# Touch, circle pad and screenshots
 
 | Piece | File |
 |-------|------|
 | Touch reading, on the ARM11 | `src/os/Touch11.c` |
 | Readings to pixels, calibration values | `src/os/Touch9.c`, `include/touch.h` |
+| Circle pad | `src/os/Touch11.c` (reading), `src/os/Touch9.c` (`cpad_read`) |
 | Calibration screen | `src/os/TouchCal.c`, `include/touchcal.h` |
 | Screenshots | `src/os/Screenshot.c`, `include/screenshot.h` |
 
@@ -25,6 +26,25 @@ y = (raw_y - y_min) * 240 / (y_max - y_min);
 and `y_max` at the top and bottom, held in a `TouchCal`. A reversed pair makes
 that axis run the other way. Until a calibration is saved, the first-guess
 values in `Touch9.c` are used.
+
+## Circle pad
+
+The circle pad's ADC is in the same codec, and the same 52-byte read of page
+`0xFB` that carries the touch samples carries it too: eight big-endian 12-bit
+samples of Y from byte `0x14` and eight of X from byte `0x24` (GodMode9's
+layout). The core publishes the first sample of each, touched or not, as
+`cpad_x` / `cpad_y` in `TouchShared`, from core 102 (`AUDIO_CPAD_VERSION`).
+
+`cpad_read()` returns the pad relative to its rest point of 2048, with +x right
+and +y up; the ADC's X runs right to left, so it is flipped. It returns 0, and
+zeros, under an older core. The core is only asked its version once, because
+`audio_version()` syncs both caches.
+
+No dead zone or range is applied there. The 3D Model screen uses a dead zone
+of 150 and full deflection at 1000 raw units; see [`soft3d.md`](soft3d.md).
+
+Works on a New 3DS (orbiting the cube, 2026-10-02); the pad's full range has
+not been measured.
 
 ## Calibration
 
