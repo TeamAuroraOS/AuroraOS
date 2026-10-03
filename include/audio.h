@@ -14,7 +14,7 @@
 
 /* audio_boot() replaces a running core whose version differs, so bump this on
  * any core change. */
-#define AUDIO_CORE_VERSION 101
+#define AUDIO_CORE_VERSION 103
 
 /* The first core that understands AUDIO_CMD_PARK. An older one can only be
  * replaced by powering the console off. */
@@ -122,6 +122,9 @@ typedef enum {
 #define AUDIO_VOICE_PCM16   (1u << 9)
 #define AUDIO_VOICE_VOL(v)  (((v) & 0xFFFFu) << 16)
 #define AUDIO_VOICE_VERSION 82 /* the first core that understands voices */
+
+/* The first core that publishes the circle pad in TouchShared. */
+#define AUDIO_CPAD_VERSION 102
 
 typedef enum {
   AUDIO_BOOT_LOADED = 0, /* this build's core was loaded and answered       */

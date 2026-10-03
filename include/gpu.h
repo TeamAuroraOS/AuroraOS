@@ -28,6 +28,19 @@
 #define GPU_FB_BOT_B 0x18446500u
 #define GPU_FB_BOT_C 0x18546500u
 
+/* The top panel's right-eye framebuffers, used while it is in stereo mode
+ * (GPU_OP_STEREO). Below the left-eye ones, in VRAM nothing else uses. */
+#define GPU_FB_TOP_RA 0x18200000u
+#define GPU_FB_TOP_RB 0x18250000u
+#define GPU_FB_TOP_RC 0x182A0000u /* -> 0x182E6500 */
+
+/* PICA200 render target for GPU_OP_P3D: 240x400 (the top screen on its side),
+ * RGBA8 colour and 24-bit depth + 8-bit stencil, 384,000 bytes each. */
+#define GPU_P3D_COLOR 0x18100000u
+#define GPU_P3D_DEPTH 0x18180000u
+#define GPU_P3D_W     240u
+#define GPU_P3D_H     400u
+
 /* Pixel formats, as encoded in the PPF flags field (bits 8-11 in, 12-15 out). */
 enum {
   GPU_FMT_RGBA8  = 0,
@@ -60,7 +73,20 @@ enum {
   GPU_OP_PRESENT2 = 7, /* both panels at once: xf_src top, xf_src2 bottom   */
   GPU_OP_VSYNC_TEST = 8, /* wait xf_len blanks of panel xf_flags by method  */
   GPU_OP_VSYNC_SET  = 9, /* sync panel xf_flags by method xf_src_w from now */
+  GPU_OP_STEREO     = 10, /* top panel 2D or 3D: xf_flags GPU_STEREO_*,    */
+                          /* xf_src_w the New 3DS barrier pattern          */
+  GPU_OP_PRESENT_ST = 11, /* top left xf_src, top right xf_src2, and the   */
+                          /* bottom xf_src3 unless it is 0                 */
+  GPU_OP_P3D        = 12, /* clear the render target to fill_value, run the */
+                          /* command list xf_src (xf_len bytes), then copy */
+                          /* the result to xf_dst as a top-screen frame    */
 };
+
+/* GPU_OP_STEREO flags. The barrier is the Old 3DS one (LCD registers) on every
+ * model with a 3D screen; the New 3DS adds its I2C-driven mask. */
+#define GPU_STEREO_ON       0x01u
+#define GPU_STEREO_BARRIER  0x02u /* the LCD parallax registers            */
+#define GPU_STEREO_EXPANDER 0x04u /* New 3DS: the mask expander as well    */
 
 /* How a panel's presents are synchronised with its vertical blank; see
  * Gpu11.c. */
@@ -124,7 +150,8 @@ typedef struct {
   volatile uint32_t xf_len;     /* texture-copy length in bytes (16-aligned)  */
 
   volatile uint32_t xf_src2;    /* GPU_OP_PRESENT2: the bottom panel's frame  */
-  volatile uint32_t pad[5];
+  volatile uint32_t xf_src3;    /* GPU_OP_PRESENT_ST: the bottom panel's frame */
+  volatile uint32_t pad[4];
 
   /* Written only by the ARM11, in a cache line of their own: an ARM9 clean of
    * the parameters above must not write stale copies back over them. */
@@ -134,7 +161,21 @@ typedef struct {
   volatile uint32_t vs_cnt[2];  /* last test found them */
   volatile uint32_t vs_presents[2]; /* presents since the method was set, and */
   volatile uint32_t vs_missed[2];   /* how many found no blank to wait for    */
+  volatile uint32_t stereo;     /* GPU_STEREO_* in force, bit 8: expander answered */
+  volatile uint32_t exp_writes; /* New 3DS barrier pattern writes (it alternates) */
+  volatile uint32_t p3d_state;  /* GPU_P3D_* */
+  volatile uint32_t p3d_runs;   /* command lists that finished                 */
+  volatile uint32_t p3d_waits;  /* polls the last one took                     */
+  volatile uint32_t p3d_stat;   /* 0x10400034 when the last one ended          */
 } GpuShared;
+
+enum {
+  GPU_P3D_NONE = 0, /* never run                                   */
+  GPU_P3D_OK,
+  GPU_P3D_CLEAR_TIMEOUT,
+  GPU_P3D_LIST_TIMEOUT, /* the list never raised its finalize interrupt */
+  GPU_P3D_COPY_TIMEOUT,
+};
 
 /* ARM9 API (src/os/Gpu9.c). Each call blocks (bounded) until the ARM11 answers
  * and returns 1 on success. Needs the ARM11 core running (audio_boot()). */
@@ -197,6 +238,22 @@ int gpu_show_a(void);
 
 /* Bit 0 top, bit 1 bottom: panels whose presents wait for the display. */
 uint32_t gpu_vsynced(void);
+
+/* GPU_OP_STEREO: `flags` GPU_STEREO_*, `pattern` the New 3DS barrier mask
+ * (bits 0-11, leftmost unit in bit 11). */
+int gpu_stereo(uint32_t flags, uint32_t pattern);
+
+/* Both eyes of the top panel and, unless `bot` is 0, the bottom panel, shown
+ * together. Returns without waiting, like gpu_present_async(). */
+int gpu_present_st_async(uint32_t left, uint32_t right, uint32_t bot);
+
+/* Runs a PICA200 command list on a cleared render target and copies the frame
+ * to `dst` (400x240 RGB8, the framebuffer layout). Blocks. */
+int gpu_p3d(uint32_t list, uint32_t bytes, uint32_t dst, uint32_t clear_rgba);
+
+/* The ARM11's view of stereo and P3D, for diagnostics. */
+void gpu_3d_info(uint32_t *stereo, uint32_t *exp_writes, uint32_t *p3d_state,
+                 uint32_t *p3d_runs, uint32_t *p3d_waits, uint32_t *p3d_stat);
 
 /* Why the last operation that failed did: a GPU_ERR_* code, or
  * GPU_FAIL_NO_ANSWER when the core did not answer in time. */

@@ -15,6 +15,10 @@ typedef struct {
   volatile uint32_t d_b1;  /* buf[1]  (X low)  */
   volatile uint32_t d_b10; /* buf[10] (Y high) */
   volatile uint32_t d_b11; /* buf[11] (Y low)  */
+  /* Circle pad ADC (12-bit, about 2048 at rest), sampled whether or not the
+   * screen is touched. From core AUDIO_CPAD_VERSION. */
+  volatile uint32_t cpad_x;
+  volatile uint32_t cpad_y;
 } TouchShared;
 
 /* The raw ADC readings at the screen's edges: x_min at pixel column 0, x_max at
@@ -39,6 +43,11 @@ int touch_read(int *sx, int *sy, int *rawx, int *rawy);
 /* Returns 1 once, when a new touch begins. Call once per input-loop pass, like
  * get_keys_down(). */
 int touch_tap(int *x, int *y);
+
+/* The circle pad with its rest point at 0, +x right and +y up, in raw ADC
+ * units. Returns 0 with both at 0 when the running core does not publish it.
+ * Raw readings go through rawx/rawy when non-NULL. */
+int cpad_read(int *x, int *y, int *rawx, int *rawy);
 
 static inline int touch_in(int tx, int ty, int x, int y, int w, int h) {
   return tx >= x && tx < x + w && ty >= y && ty < y + h;

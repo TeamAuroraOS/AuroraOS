@@ -42,4 +42,20 @@ void image_draw_fit(volatile u8 *fb, int bx, int by, int bw, int bh,
 ImageResult jpeg_decode(const u8 *data, u32 len, u8 *rgb, u32 rgb_max, int *w,
                         int *h);
 
+/* As jpeg_decode, at full size (shift 0) or an eighth of it (shift 3, each
+ * 8x8 block its average alone), which needs a sixty-fourth of the memory. */
+ImageResult jpeg_decode_scaled(const u8 *data, u32 len, u8 *rgb, u32 rgb_max,
+                               int shift, int *w, int *h);
+
+/* The size of a PNG or JPEG in memory. */
+ImageResult image_probe(const u8 *data, u32 len, int *w, int *h);
+
+/* A PNG or JPEG in memory to `tw` x `th` RGBA8888 (R first), alpha kept,
+ * each pixel the average of what it covers. A PNG streams through, so its
+ * full size never has to fit; a JPEG too large to decode whole is decoded at
+ * an eighth. Uses IMAGE_RAW_ADDR and IMAGE_RGB_ADDR, plus `scratch` (a few
+ * hundred KB) for working rows. */
+ImageResult image_decode_fit(const u8 *data, u32 len, u8 *out, int tw, int th,
+                             u8 *scratch, u32 scratch_len);
+
 #endif
