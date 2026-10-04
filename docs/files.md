@@ -198,7 +198,8 @@ the aliasing that sampling would give on hard edges.
 Working memory sits between the app-return stubs and the ARM11 mailbox, clear
 of the return descriptor at `0x25008000`, the OS snapshot at `0x26000000` (about
 100KB) and the mailbox at `0x27000000`. It is live only while the viewer is
-open.
+open; the 3D Model loader, aShop and the Wi-Fi firmware copy borrow the same
+buffers while they run.
 
 | Buffer | Address | Size |
 |--------|---------|------|

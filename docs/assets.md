@@ -35,7 +35,7 @@ recomputed per pixel, and produced a softer result for the trouble.
 
 ## What the art actually is
 
-All 30 UI icons are **white with an 8-bit alpha channel**: anti-aliased coverage
+All 32 UI icons are **white with an 8-bit alpha channel**: anti-aliased coverage
 masks, not pictures. So they are stored as coverage alone, one byte per pixel,
 and tinted when drawn, which is why a single copy serves every accent colour.
 
@@ -43,8 +43,10 @@ and tinted when drawn, which is why a single copy serves every accent colour.
 faint pattern of rounded cards meant to sit over a coloured ground. It is drawn
 tinted with the accent colour, which is what gives the home screen its texture.
 
-Four pieces are genuinely full-colour and are stored as RGBA and drawn
-untinted: `files`, `preferences`, `store` and `game card`. The last one is easy
+Five pieces are genuinely full-colour and are stored as RGBA and drawn
+untinted: `files`, `preferences`, `store`, `game card` and the auroraShop logo
+(`store-logo.png`, 191x152, cut from the aShop mock-up; it is not square, so it
+is in its own list, `ART`, at its own size). The last one is easy
 to get wrong, because its alpha channel is a solid card silhouette; reduced to
 coverage it flattens to a plain white block, and only its 30 grey tones carry
 the artwork. If a new icon comes out as a featureless shape, that is why.
@@ -63,7 +65,7 @@ any size. `ui_dialog()` in `src/ui.c` is that panel.
 
 Masks are stored at 64, 48, 32, 24 and 16 pixels: 24 is the File Explorer's list
 rows, and 16 the status bar, the Home Menu's bar and the small icons inside a
-folder's tile (for which `files` and `game card` are also stored at 16). The long side is fitted so non-square art keeps its
+folder's tile (for which `files`, `store` and `game card` are also stored at 16). The long side is fitted so non-square art keeps its
 aspect. The colour art is stored only at the sizes listed beside it in `COLOR`.
 Fonts are baked at four sizes.
 
@@ -75,6 +77,11 @@ clashed with the rounded cards around them. The game card is left as drawn.
 `Folder.png` was drawn for the Home Menu's folders in the same stroke style as
 the rest (80x80, a 7-pixel line); `folder-icon-without-text.png`, a filled
 colour folder, is not in the pack.
+
+`Search.png` and `Wrench.png` were drawn for aShop's buttons in the same
+style (80x80, a 7-pixel rounded stroke). aShop's banners and welcome art are
+not in the pack: they are content, read from `SD:/Aurora/Store` when the store
+opens (see `docs/store.md`), and the pack's arena has little room left.
 
 The text-file icon has no PNG of its own: `text_page()` takes
 `Unkonwn File.png`, clears its question mark and rules four lines into the page,
@@ -122,7 +129,7 @@ degrades rather than corrupts.
 
 The arena is at `0x23F40000`, in the 768KB gap between the bottom backbuffer
 (which ends by `0x23F38400`) and the app-launch staging area at `0x24000000`.
-The current pack decodes to 529,248 bytes. `ASSET_ARENA_NEEDED` is emitted into
+The current pack decodes to 717,568 bytes, 91% of the gap. `ASSET_ARENA_NEEDED` is emitted into
 `asset_ids.h` and checked against `ASSETS_ARENA_MAX` at compile time, so a pack
 that outgrew the gap fails the build rather than the console.
 

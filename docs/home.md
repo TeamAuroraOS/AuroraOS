@@ -20,12 +20,17 @@ The bottom screen has a bar along the top and a grid of 5 x 3 tiles under it.
 | Power icon, left of the bar | asks "Turn off the console?", then powers off |
 | `< Name`, inside a folder | back to where the folder is |
 | Settings icon, right of the bar | opens Settings, as START does |
-| Grid | SD apps (from `SD:/Aurora/Apps`), Music, Files, 3D Model and folders |
+| Grid | SD apps (from `SD:/Aurora/Apps`), Music, Files, 3D Model, aShop and folders |
 | Dots under the grid | one per page, the current one wider; shown once there are two |
 
 Power Off is no longer a tile. The top screen describes whatever has the focus:
 an app, a folder (its first four icons, and how many things are in it), an empty
-slot, or the bar button.
+slot, or the bar button. An app with its own art (`HomeApp.asset_art`) shows
+that alone instead of the icon and name card: aShop shows the auroraShop logo.
+
+When aShop installs an app, the Home Menu rescans `SD:/Aurora/Apps` as aShop
+closes and re-reads the layout file (`home_reload`), so the new app is there at
+once, at the end of Home, and the folder and page shown stay as they were.
 
 ### Pages
 
@@ -124,14 +129,15 @@ E
 A @music
 A @files
 A @model
+A @store
 ```
 
-`A` names an app: its file name in `SD:/Aurora/Apps`, or `@music`, `@files`
-and `@model` for the built-in screens. `F name` starts a folder and `E` ends
+`A` names an app: its file name in `SD:/Aurora/Apps`, or `@music`, `@files`,
+`@model` and `@store` for the built-in screens. `F name` starts a folder and `E` ends
 it. Lines that name an app no longer on the card are dropped; apps the file
 does not mention (new ones) go at the end of Home, in name order. A folder that would be a third level is dropped
 and what it holds stays in the folder around it. Without the file, Home holds
-the SD apps in name order, then Music, Files and 3D Model, as before. Deleting
+the SD apps in name order, then Music, Files, 3D Model and aShop. Deleting
 the file resets the arrangement.
 
 The Home Menu reads up to 160 SD apps.

@@ -2,7 +2,7 @@
 
 The AuroraOS Home Menu (`src/os/os_main.c`, `src/os/HomeMenu.c`) discovers
 and launches app containers from the SD card, alongside the built-in Music,
-Files and 3D Model, and lets them be arranged in pages and folders
+Files, 3D Model and aShop, and lets them be arranged in pages and folders
 ([`home.md`](home.md)). The
 File Explorer and the [terminal](terminal.md) (`./Tetris.bin`, or `Tetris` for
 an app in `Aurora\Apps`) start apps the same way.
@@ -25,8 +25,10 @@ SD:\Aurora\Apps\*.bin
 * Each app carries **its own icon**, embedded in the binary; the Home Menu reads
   and displays it (see *Per-app icons* below). Apps without one get a generic
   icon.
-* The built-in Music, Files and 3D Model are arranged the same way. If there is
-  no SD card or no `Aurora\Apps` folder, the menu shows just those.
+* The built-in Music, Files, 3D Model and aShop are arranged the same way. If
+  there is no SD card or no `Aurora\Apps` folder, the menu shows just those.
+* **aShop** ([`store.md`](store.md)) installs apps here too, and the Home Menu
+  shows a new one as soon as aShop closes, without a restart.
 
 Building an app and putting it in place:
 

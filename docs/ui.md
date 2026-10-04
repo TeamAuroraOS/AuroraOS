@@ -105,13 +105,14 @@ anim_popup_behind();
 
 | Where | Kind |
 |-------|------|
-| Home Menu to Settings, Music, Files, 3D Model, the terminal, and back | slide |
+| Home Menu to Settings, Music, Files, 3D Model, aShop, the terminal, and back | slide |
+| aShop to a section, a page, a download or search, and back | slide |
 | Home Menu into a folder, and out | slide |
 | Settings to each of its pages, About to More Info, and back | slide |
 | File Explorer into a folder, and up | slide |
 | File Explorer to the text viewer, hex editor or keyboard, and back | slide |
 | Setup wizard pages, and its keyboard | slide |
-| Messages, questions, the File Explorer menu and progress card, launch messages | pop-up in, fade out |
+| Messages, questions, the File Explorer menu and progress card, aShop's Options, launch messages | pop-up in, fade out |
 | Image viewer (top screen), touch calibration targets | fade |
 | Applying an accent colour, which re-tints the wallpaper | fade |
 | Start-up, and the end of the setup wizard | fade in from what the boot left |

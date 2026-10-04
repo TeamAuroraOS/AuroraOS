@@ -174,6 +174,7 @@ NAME
 | [`ls`](#ls) | list a folder |
 | [`mkdir`](#mkdir) | make folders |
 | [`mv`](#mv) | move or rename |
+| [`ping`](#ping) | send echo requests to a host over Wi-Fi |
 | [`poweroff`](#poweroff) | turn the console off |
 | [`pwd`](#pwd) | print the working folder |
 | [`reboot`](#reboot) | restart the console |
@@ -430,6 +431,51 @@ mv notes.txt old-notes.txt
 mv *.png Pictures
 ```
 
+### ping
+
+```
+ping [-c COUNT] [-W SECONDS] HOST
+```
+
+| Option | Means |
+|--------|-------|
+| `-c COUNT` | stop after COUNT echo requests; without it ping runs until SELECT |
+| `-W SECONDS` | how long to wait for each reply, 1 to 10 (2 by default) |
+
+* HOST is a name (`google.com`) or an address (`8.8.8.8`). A name is looked
+  up with the DNS server the network's DHCP gave.
+* If the console is not on a network yet, ping first joins the one saved in
+  Settings > Wi-Fi, showing `Joining NAME... N s` while it does (about half a
+  minute), then `Joined NAME, address A.B.C.D`. Open and WPA2 networks can
+  be joined, a WPA2 one with the password saved with it. The console stays joined afterwards, so the next ping
+  starts at once, until something else restarts the Wi-Fi chip (a search in
+  Settings > Wi-Fi, or the Wi-Fi Test). The status bar's Wi-Fi icon is white
+  while joined.
+* One echo request a second, with 56 bytes of data like Linux's ping, and a
+  line for each reply. A request with no reply in time prints `no answer yet
+  for icmp_seq=N`, as Linux's `ping -O` does. SELECT stops, like Ctrl+C, and
+  the statistics follow.
+* The times include the console's own polling of the Wi-Fi chip (every 10
+  ms) and reading the reply a byte at a time, so they read a few tens of
+  milliseconds high.
+* Errors use Linux's wording: `ping: HOST: Name or service not known` for a
+  name that does not exist, `Temporary failure in name resolution` when the
+  DNS server does not answer, `From A.B.C.D icmp_seq=N Destination Host
+  Unreachable` for a host that is not there.
+
+```
+Nick@n3ds:/$ ping -c 3 google.com
+Joining DisLoPik... 24 s
+Joined DisLoPik, address 10.48.199.94
+PING google.com (142.250.72.14) 56(84) bytes of data.
+64 bytes from 142.250.72.14: icmp_seq=1 ttl=117 time=45.2 ms
+64 bytes from 142.250.72.14: icmp_seq=2 ttl=117 time=38.9 ms
+64 bytes from 142.250.72.14: icmp_seq=3 ttl=117 time=41.0 ms
+--- google.com ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2104ms
+rtt min/avg/max/mdev = 38.900/41.700/45.200/2.620 ms
+```
+
 ### poweroff
 
 ```
@@ -521,7 +567,7 @@ Units can be named with or without their suffix (`audio` or `audio.service`):
 | `audio.service` | the core answers and is not parked | playing or idle |
 | `touch.service` | the core answers | default or custom calibration |
 | `gpu.service` | the GPU driver is up | jobs done |
-| `wifi.service` | never, while Wi-Fi is paused | why |
+| `wifi.service` | the console is joined to a network | its address |
 | `sdcard.mount` | a card is mounted | free and total space |
 | `power.service` | the MCU answers | battery level, and whether it is charging |
 
@@ -542,8 +588,8 @@ core11.service  active   core v102
 audio.service   active   idle
 touch.service   active   custom calibration
 gpu.service     active   ready, 1234 jobs done
-wifi.service    inactive paused: stops at the HTC
-                         connect
+wifi.service    active   joined, address
+                         10.48.199.94
 sdcard.mount    active   12.2 of 30.5 GB free
 power.service   active   battery 87%, charging
 
@@ -569,7 +615,7 @@ uname [-a] [-s] [-n] [-r] [-m] [-o]
 |--------|--------|
 | `-s` | `AuroraOS` (the default) |
 | `-n` | the host, `n3ds` or `o3ds` |
-| `-r` | the version, for example `Beta v0.1.2` |
+| `-r` | the version, for example `Beta v0.1.3` |
 | `-m` | `armv5tel`, the ARM9 |
 | `-o` | `AuroraOS` |
 | `-a` | all of the above, in that order |
