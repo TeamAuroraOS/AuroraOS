@@ -6,6 +6,7 @@
 enum {
   KB_NAME = 0,     /* letters, digits and space */
   KB_FILENAME = 1, /* adds - _ and . */
+  KB_PASSWORD = 2, /* Caps cycles abc, ABC and a layer of every ASCII symbol */
 };
 
 /* Edits `buf`, a `size`-byte buffer including the NUL, in place on the bottom

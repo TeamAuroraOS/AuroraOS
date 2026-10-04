@@ -429,6 +429,11 @@ static void place(int jump) {
 #define PV_CARD_W (TOP_SCREEN_WIDTH - 2 * PV_CARD_X)
 #define PV_CARD_H 62
 #define PV_HINT_Y (PV_CARD_Y + PV_CARD_H + 8)
+#define PV_ALL_H  (PV_CARD_Y + PV_CARD_H - PV_BOX_Y)
+
+/* Set while the top shows an app's own art, which spans the box, the card and
+ * the gap between them. */
+static int art_shown;
 
 /* What the top screen describes: the carried entry, the bar button, or the
  * selected slot. */
@@ -438,13 +443,31 @@ static void top_item(void) {
   const char *name, *dev = "";
   Color tint, dark;
   int e = HL_NONE, folder = 0;
-  u32 asset = UI_NO_ASSET;
+  u32 asset = UI_NO_ASSET, art = UI_NO_ASSET;
   const unsigned char *bits = 0;
 
   if (held != HL_NONE)
     e = held;
   else if (bar < 0)
     e = entry_at(cur());
+
+  if (e >= 0 && asset_get(apps[e].asset_art))
+    art = apps[e].asset_art;
+  if (art_shown || art != UI_NO_ASSET)
+    ui_wallpaper_rect(fb, PV_CARD_X, PV_BOX_Y, PV_CARD_W, PV_ALL_H, TSH);
+  art_shown = art != UI_NO_ASSET;
+  if (art_shown) {
+    const Asset *a = asset_get(art);
+    ui_wallpaper_rect(fb, 0, PV_HINT_Y, TOP_SCREEN_WIDTH, TSH - PV_HINT_Y,
+                      TSH);
+    draw_asset(fb, (TOP_SCREEN_WIDTH - a->w) / 2,
+               PV_BOX_Y + (PV_ALL_H - a->h) / 2, TSH, a, COLOR_WHITE);
+    if (held != HL_NONE)
+      ui_text_mid(fb, TOP_SCREEN_WIDTH / 2, PV_HINT_Y, TSH,
+                  L(by_touch ? STR_MOVE_TOUCH : STR_MOVE_KEYS),
+                  COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_small);
+    return;
+  }
 
   if (held == HL_NONE && bar == BTN_POWER) {
     name = L(STR_POWER_OFF);
@@ -527,7 +550,7 @@ static void top_note(void) {
 
 /* Cross-fades the top screen if what it describes changed. */
 static void top_update(void) {
-  int e = held != HL_NONE ? held : entry_at(cur()), dir;
+  int e = held != HL_NONE ? held : entry_at(cur()), dir, art_was = art_shown;
   if (top_view == view && top_held == held && top_bar == bar && top_e == e &&
       top_k == cur() && top_touch == by_touch)
     return;
@@ -535,8 +558,12 @@ static void top_update(void) {
   top_note();
   anim_xfade_begin(ANIM_TOP);
   top_item();
-  anim_xfade_area(ANIM_TOP, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX);
-  anim_xfade_area(ANIM_TOP, PV_CARD_X, PV_CARD_Y, PV_CARD_W, PV_CARD_H);
+  if (art_was || art_shown) {
+    anim_xfade_area(ANIM_TOP, PV_CARD_X, PV_BOX_Y, PV_CARD_W, PV_ALL_H);
+  } else {
+    anim_xfade_area(ANIM_TOP, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX);
+    anim_xfade_area(ANIM_TOP, PV_CARD_X, PV_CARD_Y, PV_CARD_W, PV_CARD_H);
+  }
   anim_xfade_area(ANIM_TOP, 0, PV_HINT_Y, TOP_SCREEN_WIDTH, TSH - PV_HINT_Y);
   anim_xfade_start(ANIM_TOP, dir);
   screen_present_top();
@@ -1422,6 +1449,17 @@ void home_init(const HomeApp *a, int n, const HomeHooks *hooks) {
   hl_load(keys, napps);
   view = HOME_ROOT;
   page = sel = 0;
+  bar = -1;
+  held = HL_NONE;
+  rebuild();
+}
+
+void home_reload(const HomeApp *a, int n) {
+  apps = a;
+  napps = n > HOME_ITEMS ? HOME_ITEMS : n;
+  for (int i = 0; i < napps; i++)
+    keys[i] = apps[i].key;
+  hl_load(keys, napps);
   bar = -1;
   held = HL_NONE;
   rebuild();

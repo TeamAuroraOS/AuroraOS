@@ -14,7 +14,7 @@
 
 /* audio_boot() replaces a running core whose version differs, so bump this on
  * any core change. */
-#define AUDIO_CORE_VERSION 103
+#define AUDIO_CORE_VERSION 113
 
 /* The first core that understands AUDIO_CMD_PARK. An older one can only be
  * replaced by powering the console off. */
@@ -51,6 +51,8 @@ enum {
                            /* arg2 = bytes, arg3 = rate; see AUDIO_VOICE_*    */
   AUDIO_CMD_VOICE_STOP = 10, /* arg0 = bit mask of the voices to stop       */
   AUDIO_CMD_PARK = 11,       /* silence, then wait on the mailbox for a core  */
+  AUDIO_CMD_WIFI_NET = 12,   /* arg0 = WIFI_NETOP_*, on the joined network;   */
+                             /* in and out through WifiNetIo (wifi.h)         */
 };
 
 enum {

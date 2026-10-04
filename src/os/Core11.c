@@ -118,6 +118,7 @@ void audio11_main(void) {
   ct->diag0 = ct->diag1 = ct->diag2 = ct->diag3 = 0;
   ct->diag4 = ct->diag5 = ct->diag6 = ct->diag7 = 0;
   ct->socinfo = *(volatile uint32_t *)0x10140FFC; /* CFG11_SOCINFO */
+  wifi11_init();
   ct->magic = AUDIO_MAGIC;
   dcache_clean();
 
@@ -142,6 +143,8 @@ void audio11_main(void) {
           wifi11_probe();
         else if (cmd == AUDIO_CMD_WIFI_BOOT)
           wifi11_boot(arg0);
+        else if (cmd == AUDIO_CMD_WIFI_NET)
+          wifi11_net(arg0);
         else if (cmd == AUDIO_CMD_GPU)
           gpu11_run();
         else if (cmd == AUDIO_CMD_N3DS)

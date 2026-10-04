@@ -318,6 +318,7 @@ u32 sdmmc_sdcard_size(void) {
 static mmcdevice handleNAND;
 static u32 nand_cid[4];
 static int nand_cid_state; /* 0 not tried, 1 read, -1 no answer */
+static int nand_ready;     /* sdmmc_nand_init() finished */
 
 static void nand_read_cid(void) {
     int t;
@@ -368,6 +369,104 @@ int sdmmc_nand_cid(u8 *out) {
     for (int i = 0; i < 16; i++)
         out[i] = (u8)(nand_cid[i >> 2] >> (8 * (i & 3)));
     return 1;
+}
+
+/* The whole of GodMode9's Nand_Init(): identification, then the eMMC selected
+ * on a 4-bit bus at high speed. The power-up wait is bounded here. The eMMC is
+ * at most 2 GB, so it stays byte-addressed (isSDHC 0), as in GodMode9. */
+int sdmmc_nand_init(void) {
+    int t;
+
+    nand_ready = 0;
+    handleNAND.isSDHC = 0;
+    handleNAND.SDOPT = 0;
+    handleNAND.initarg = 1;
+    handleNAND.clk = 0x80;
+    handleNAND.devicenumber = 1;
+    handleNAND.rData = NULL;
+    handleNAND.tData = NULL;
+    handleNAND.size = 0;
+
+    set_target(&handleNAND);
+    sdmmc_send_command(&handleNAND, 0, 0);                /* CMD0 GO_IDLE_STATE */
+    for (t = 0; t < NAND_CID_TRIES; t++) {                /* until powered up   */
+        sdmmc_send_command(&handleNAND, 0x10701, 0x100000); /* CMD1 SEND_OP_COND */
+        if ((handleNAND.error & 1) && (handleNAND.ret[0] & 0x80000000))
+            break;
+        sdmmc_wait_ms(1);
+    }
+    if (t == NAND_CID_TRIES)
+        goto fail;
+
+    sdmmc_send_command(&handleNAND, 0x10602, 0);          /* CMD2 ALL_SEND_CID */
+    if (handleNAND.error & 0x4)
+        goto fail;
+    for (int i = 0; i < 4; i++)
+        nand_cid[i] = handleNAND.ret[i];
+    nand_cid_state = 1;
+
+    sdmmc_send_command(&handleNAND, 0x10403, handleNAND.initarg << 0x10); /* CMD3 */
+    if (handleNAND.error & 0x4)
+        goto fail;
+    sdmmc_send_command(&handleNAND, 0x10609, handleNAND.initarg << 0x10); /* CMD9 CSD */
+    if (handleNAND.error & 0x4)
+        goto fail;
+    handleNAND.total_size = sdmmc_calc_size((u8 *)&handleNAND.ret[0], 0);
+    handleNAND.clk = 0x201; /* ~16.7 MHz */
+    setckl(0x201);
+
+    sdmmc_send_command(&handleNAND, 0x10407, handleNAND.initarg << 0x10); /* CMD7 SELECT */
+    if (handleNAND.error & 0x4)
+        goto fail;
+
+    handleNAND.SDOPT = 1;
+    sdmmc_send_command(&handleNAND, 0x10506, 0x3B70100);  /* CMD6: 4-bit bus */
+    if (handleNAND.error & 0x4)
+        goto fail;
+    sdmmc_mask16(REG_SDOPT, 0x8000, 0);
+
+    sdmmc_send_command(&handleNAND, 0x10506, 0x3B90100);  /* CMD6: high speed */
+    if (handleNAND.error & 0x4)
+        goto fail;
+    handleNAND.clk = 0x200; /* ~33.5 MHz */
+    setckl(0x200);
+
+    sdmmc_send_command(&handleNAND, 0x1040D, handleNAND.initarg << 0x10); /* CMD13 */
+    if (handleNAND.error & 0x4)
+        goto fail;
+    sdmmc_send_command(&handleNAND, 0x10410, 0x200);      /* CMD16 SET_BLOCKLEN */
+    if (handleNAND.error & 0x4)
+        goto fail;
+
+    nand_ready = 1;
+    set_target(&handleSD);
+    return 0;
+
+fail:
+    set_target(&handleSD);
+    return -1;
+}
+
+int sdmmc_nand_readsectors(u32 sector_no, u32 numsectors, u8 *out) {
+    if (!nand_ready || numsectors == 0 || numsectors > 0xFFFF)
+        return -1;
+    if (handleNAND.isSDHC == 0)
+        sector_no <<= 9;
+    set_target(&handleNAND);
+    sdmmc_write16(REG_SDSTOP, 0x100);
+    sdmmc_write16(REG_SDBLKCOUNT32, (u16)numsectors);
+    sdmmc_write16(REG_SDBLKLEN32, 0x200);
+    sdmmc_write16(REG_SDBLKCOUNT, (u16)numsectors);
+    handleNAND.rData = out;
+    handleNAND.tData = NULL;
+    handleNAND.size = numsectors << 9;
+    sdmmc_send_command(&handleNAND, 0x33C12, sector_no); /* CMD18 READ_MULTIPLE_BLOCK */
+    set_target(&handleSD);
+    return get_error(&handleNAND);
+}
+
+u32 sdmmc_nand_size(void) {
+    return handleNAND.total_size;
 }
 
 int sdmmc_sdcard_init(void) {

@@ -102,6 +102,24 @@ u32 sdmmc_sdcard_size(void);
  * return the same bytes. */
 int sdmmc_nand_cid(u8 *out);
 
+/* The eMMC brought up for reading: identification, then selected on a 4-bit
+ * bus at high speed. 0 on success. Afterwards the controller is pointed back
+ * at the SD card, which keeps working. */
+int sdmmc_nand_init(void);
+
+/* Raw eMMC sectors, after sdmmc_nand_init(): up to 0xFFFF at a time. 0 on
+ * success. There is deliberately no way to write the eMMC. */
+int sdmmc_nand_readsectors(u32 sector_no, u32 numsectors, u8 *out);
+
+/* In 512-byte sectors, from the eMMC's CSD; 0 before sdmmc_nand_init(). */
+u32 sdmmc_nand_size(void);
+
+/* FatFs drive 1 ("1:"), the decrypted CTRNAND, read only. The OS sets these
+ * once its keys check out (src/os/Nand.c); while the read hook is NULL, as in
+ * the firm, the drive is absent. */
+extern int (*g_nand_read)(u32 sector, u32 count, u8 *out);
+extern u32 g_nand_sectors;
+
 static inline u16 sdmmc_read16(u16 reg) {
     return *(volatile u16 *)(SDMMC_BASE + reg);
 }

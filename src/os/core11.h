@@ -99,10 +99,13 @@ void audio11_stop_all(void);
 void touch11_init(void);
 void touch11_poll(void);
 
+void wifi11_init(void);
 void wifi11_probe(void);
 
 /* `opts` is a WIFI_OPT_* mask (include/wifi.h). */
 void wifi11_boot(uint32_t opts);
+/* `op` is a WIFI_NETOP_*, on the session a WIFI_OPT_STAY boot left up. */
+void wifi11_net(uint32_t op);
 
 void gpu11_run(void);
 /* Leaves framebuffer A on screen, for whatever runs on the panels next. */

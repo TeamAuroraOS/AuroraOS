@@ -9,7 +9,10 @@
 #include "loader.h"
 #include "model.h"
 #include "power.h"
+#include "timer.h"
 #include "touch.h"
+#include "ui.h"
+#include "wifi.h"
 #include <string.h>
 
 #define APPS_DIR  "0:/Aurora/Apps"
@@ -40,6 +43,17 @@ static char *t_hex(char *p, u32 v) {
   *p++ = 'x';
   for (int s = 28; s >= 0; s -= 4)
     *p++ = "0123456789ABCDEF"[(v >> s) & 15u];
+  *p = 0;
+  return p;
+}
+
+/* a.b.c.d */
+static char *t_ip(char *p, u32 ip) {
+  for (int i = 3; i >= 0; i--) {
+    p = t_num(p, (ip >> (i * 8)) & 0xFFu);
+    if (i)
+      *p++ = '.';
+  }
   *p = 0;
   return p;
 }
@@ -1292,9 +1306,18 @@ static int unit_state(int u, const char **sub, char *note) {
       t_cpy(p, " jobs done");
       return 1;
     }
-    case U_WIFI:
-      t_cpy(p, "paused: stops at the HTC connect");
-      return 0;
+    case U_WIFI: {
+      static WifiShared w;
+      if (!wifi_online()) {
+        t_cpy(p, "not joined; ping joins the network saved in Settings");
+        return 0;
+      }
+      wifi_get(&w);
+      *sub = "running";
+      p = t_cpy(p, "joined, address ");
+      t_ip(p, w.ip);
+      return 1;
+    }
     case U_SD: {
       DWORD fre;
       FATFS *fs;
@@ -1480,6 +1503,304 @@ static void cmd_systemctl(int argc, char **argv) {
   m_end();
 }
 
+/* ping: echo requests over the network the core keeps joined (WiFi9.c). */
+static char net_ssid[33];
+static u32 net_shown;
+
+static void net_tick(u32 ms) {
+  static char line[64];
+  if (ms / 1000u == net_shown)
+    return;
+  net_shown = ms / 1000u;
+  char *p = t_cpy(line, "Joining ");
+  p = t_cpy(p, net_ssid[0] ? net_ssid : "the saved network");
+  p = t_cpy(p, "... ");
+  p = t_num(p, net_shown);
+  t_cpy(p, " s");
+  t_busy(line);
+}
+
+/* The network the core keeps up, joined first if it is not. 0, after saying
+ * why as `cmd`, when there is none. */
+static int net_join(const char *cmd) {
+  static WifiShared w;
+  static char why[96], line[96];
+  WifiNetResult r;
+  if (wifi_online())
+    return 1;
+  /* The core may still hold a join the OS forgot, after an app. */
+  if (wifi_net(WIFI_NETOP_STATUS, 0, 0, 0, 1000u, &r, 0) == WIFI_NETS_OK)
+    return 1;
+  net_ssid[0] = 0;
+  net_shown = 0xFFFFFFFFu;
+  t_unmount(); /* staging the firmware mounts the card */
+  int ok = wifi_net_join(net_ssid, sizeof(net_ssid), why, sizeof(why),
+                         net_tick);
+  t_need_sd(0);
+  if (!ok) {
+    t_err(cmd, 0, 0, why);
+    return 0;
+  }
+  wifi_get(&w);
+  char *q = t_cpy(line, "Joined ");
+  q = t_cpy(q, net_ssid);
+  q = t_cpy(q, ", address ");
+  t_ip(q, w.ip);
+  t_line(line, TC_DIM);
+  return 1;
+}
+
+static int t_parse_ip(const char *s, u32 *ip) {
+  u32 v = 0;
+  for (int i = 0; i < 4; i++) {
+    u32 x = 0;
+    int digits = 0;
+    while (*s >= '0' && *s <= '9') {
+      x = x * 10u + (u32)(*s++ - '0');
+      if (++digits > 3)
+        return 0;
+    }
+    if (!digits || x > 255u || (i < 3 && *s++ != '.'))
+      return 0;
+    v = (v << 8) | x;
+  }
+  if (*s)
+    return 0;
+  *ip = v;
+  return 1;
+}
+
+static int t_parse_u32(const char *s, u32 *v) {
+  u32 x = 0;
+  if (!*s)
+    return 0;
+  for (; *s; s++) {
+    if (*s < '0' || *s > '9' || x > 100000u)
+      return 0;
+    x = x * 10u + (u32)(*s - '0');
+  }
+  *v = x;
+  return 1;
+}
+
+/* Milliseconds as ping prints a round trip: 0.123, 1.23, 12.3 or 123. */
+static char *t_ms(char *p, u32 us) {
+  u32 ms = us / 1000u, f = us % 1000u;
+  p = t_num(p, ms);
+  if (us >= 100000u)
+    return p;
+  *p++ = '.';
+  if (us >= 10000u) {
+    *p++ = (char)('0' + f / 100u);
+  } else if (us >= 1000u) {
+    p = t_two(p, f / 10u);
+  } else {
+    *p++ = (char)('0' + f / 100u);
+    p = t_two(p, f % 100u);
+  }
+  *p = 0;
+  return p;
+}
+
+/* Three decimals, for the summary. */
+static char *t_ms3(char *p, u32 us) {
+  p = t_num(p, us / 1000u);
+  *p++ = '.';
+  *p++ = (char)('0' + us % 1000u / 100u);
+  return t_two(p, us % 100u);
+}
+
+static u32 isqrt64(unsigned long long v) {
+  unsigned long long r = 0, bit = 1ull << 62;
+  while (bit > v)
+    bit >>= 2;
+  while (bit) {
+    if (v >= r + bit) {
+      v -= r + bit;
+      r = (r >> 1) + bit;
+    } else {
+      r >>= 1;
+    }
+    bit >>= 2;
+  }
+  return (u32)r;
+}
+
+static const char *icmp_text(u32 icmp) {
+  u32 type = icmp >> 8, code = icmp & 0xFFu;
+  if (type == 11u)
+    return "Time to live exceeded";
+  switch (code) {
+    case 0: return "Destination Net Unreachable";
+    case 1: return "Destination Host Unreachable";
+    case 2: return "Destination Protocol Unreachable";
+    case 3: return "Destination Port Unreachable";
+    case 4: return "Frag needed";
+    case 13: return "Packet filtered";
+    default: return "Destination Unreachable";
+  }
+}
+
+static void cmd_ping(int argc, char **argv) {
+  static WifiShared w;
+  static char line[128];
+  WifiNetResult r;
+  const char *host = 0;
+  u32 count = 0, wait_s = 2, ip = 0;
+
+  for (int i = 1; i < argc; i++) {
+    const char *a = argv[i];
+    if ((t_streq(a, "-c") || t_streq(a, "-W")) && i + 1 < argc) {
+      u32 v;
+      if (!t_parse_u32(argv[++i], &v) || !v) {
+        t_err("ping", "invalid argument:", argv[i], 0);
+        return;
+      }
+      if (a[1] == 'c')
+        count = v;
+      else
+        wait_s = v > 10u ? 10u : v;
+    } else if (a[0] == '-') {
+      t_err("ping", "invalid option", a, 0);
+      t_line("usage: ping [-c COUNT] [-W SECONDS] HOST", TC_TEXT);
+      return;
+    } else if (host) {
+      t_err("ping", 0, 0, "usage error: one destination only");
+      return;
+    } else {
+      host = a;
+    }
+  }
+  if (!host) {
+    t_err("ping", 0, 0, "usage error: Destination address required");
+    return;
+  }
+  if (!net_join("ping"))
+    return;
+
+  if (!t_parse_ip(host, &ip)) {
+    u32 st = wifi_net(WIFI_NETOP_DNS, 0, 0, host, 2000u, &r, 0);
+    if (st == WIFI_NETS_NOLINK && net_join("ping"))
+      st = wifi_net(WIFI_NETOP_DNS, 0, 0, host, 2000u, &r, 0);
+    if (st != WIFI_NETS_OK) {
+      t_err("ping", host, 0,
+            st == WIFI_NETS_NONAME || st == WIFI_NETS_BADNAME
+                ? "Name or service not known"
+            : st == WIFI_NETS_DNSFAIL ? "No address associated with hostname"
+                                      : "Temporary failure in name resolution");
+      if (st == WIFI_NETS_NOLINK)
+        t_line("the Wi-Fi link dropped", TC_DIM);
+      return;
+    }
+    ip = r.ip;
+  }
+
+  char *q = t_cpy(line, "PING ");
+  q = t_cpy(q, host);
+  q = t_cpy(q, " (");
+  q = t_ip(q, ip);
+  t_cpy(q, ") 56(84) bytes of data.");
+  t_line(line, TC_TEXT);
+  t_flush();
+
+  u32 sent = 0, got = 0, errors = 0, tmin = 0xFFFFFFFFu, tmax = 0;
+  unsigned long long tsum = 0, tsum2 = 0;
+  u32 start = timer_ticks(), elapsed = 0;
+  int stop = 0;
+  for (u32 seq = 1; !stop; seq++) {
+    u32 t0 = timer_ticks();
+    u32 st = wifi_net(WIFI_NETOP_PING, ip, seq, 0, wait_s * 1000u, &r, 0);
+    sent++;
+    elapsed = timer_us_since(start) / 1000u;
+    if (st == WIFI_NETS_OK) {
+      got++;
+      tsum += r.rtt_us;
+      tsum2 += (unsigned long long)r.rtt_us * r.rtt_us;
+      if (r.rtt_us < tmin)
+        tmin = r.rtt_us;
+      if (r.rtt_us > tmax)
+        tmax = r.rtt_us;
+      q = t_num(line, r.bytes);
+      q = t_cpy(q, " bytes from ");
+      q = t_ip(q, r.from);
+      q = t_cpy(q, ": icmp_seq=");
+      q = t_num(q, seq);
+      q = t_cpy(q, " ttl=");
+      q = t_num(q, r.ttl);
+      q = t_cpy(q, " time=");
+      q = t_ms(q, r.rtt_us);
+      t_cpy(q, " ms");
+      t_line(line, TC_TEXT);
+    } else if (st == WIFI_NETS_ICMPERR || st == WIFI_NETS_NOHOST) {
+      errors++;
+      if (st == WIFI_NETS_NOHOST)
+        wifi_get(&w);
+      q = t_cpy(line, "From ");
+      q = t_ip(q, st == WIFI_NETS_NOHOST ? w.ip : r.from);
+      q = t_cpy(q, " icmp_seq=");
+      q = t_num(q, seq);
+      q = t_cpy(q, " ");
+      t_cpy(q, st == WIFI_NETS_NOHOST ? "Destination Host Unreachable"
+                                      : icmp_text(r.icmp));
+      t_line(line, TC_TEXT);
+    } else if (st == WIFI_NETS_TIMEOUT) {
+      q = t_cpy(line, "no answer yet for icmp_seq=");
+      t_num(q, seq);
+      t_line(line, TC_DIM);
+    } else if (st == WIFI_NETS_NOSEND) {
+      t_err("ping", 0, 0, "sendmsg: No buffer space available");
+    } else {
+      t_err("ping", 0, 0,
+            st == WIFI_NETS_NOLINK ? "the Wi-Fi link dropped"
+                                   : "the Wi-Fi chip is busy");
+      break;
+    }
+    t_flush();
+    if (count && seq >= count)
+      break;
+    /* One a second, as ping sends them; SELECT stops, like Ctrl+C. */
+    while (!stop && timer_us_since(t0) < 1000000u) {
+      stop = !t_busy(0);
+      ui_idle();
+    }
+  }
+  if (stop)
+    t_line("^C", TC_TEXT);
+
+  q = t_cpy(line, "--- ");
+  q = t_cpy(q, host);
+  t_cpy(q, " ping statistics ---");
+  t_line(line, TC_TEXT);
+  q = t_num(line, sent);
+  q = t_cpy(q, " packets transmitted, ");
+  q = t_num(q, got);
+  q = t_cpy(q, " received, ");
+  if (errors) {
+    q = t_cpy(q, "+");
+    q = t_num(q, errors);
+    q = t_cpy(q, " errors, ");
+  }
+  q = t_num(q, sent ? (sent - got) * 100u / sent : 0u);
+  q = t_cpy(q, "% packet loss, time ");
+  q = t_num(q, elapsed);
+  t_cpy(q, "ms");
+  t_line(line, TC_TEXT);
+  if (got) {
+    u32 avg = (u32)(tsum / got);
+    unsigned long long mean2 = tsum2 / got, sq = (unsigned long long)avg * avg;
+    q = t_cpy(line, "rtt min/avg/max/mdev = ");
+    q = t_ms3(q, tmin);
+    *q++ = '/';
+    q = t_ms3(q, avg);
+    *q++ = '/';
+    q = t_ms3(q, tmax);
+    *q++ = '/';
+    q = t_ms3(q, mean2 > sq ? isqrt64(mean2 - sq) : 0u);
+    t_cpy(q, " ms");
+    t_line(line, TC_TEXT);
+  }
+}
+
 static void cmd_shutdown(int argc, char **argv) {
   static const char fl[] = "hPrc";
   u32 on;
@@ -1659,6 +1980,14 @@ const TermCmd t_cmds[] = {
     {"mv", cmd_mv, "mv [-n] SRC... DEST", "move or rename",
      "-n keeps files already there. Otherwise a file in the way is "
      "replaced."},
+    {"ping", cmd_ping, "ping [-c COUNT] [-W SECONDS] HOST",
+     "send echo requests to a host over Wi-Fi",
+     "HOST is a name or an address. If the console is not on the network, "
+     "ping first joins the one saved in Settings > Wi-Fi (open or WPA2), "
+     "which takes about half a minute. One echo a second "
+     "until SELECT, or COUNT of them; -W is how long to wait for each "
+     "reply (2 seconds). Times include the console's polling, so they read "
+     "a little high."},
     {"poweroff", cmd_poweroff, "poweroff", "turn the console off", 0},
     {"pwd", cmd_pwd, "pwd", "print the working folder", 0},
     {"reboot", cmd_reboot, "reboot", "restart the console", 0},

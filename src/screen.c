@@ -130,10 +130,13 @@ void draw_char(volatile u8 *fb, int x, int y, int screen_height, char c,
   if (r0 >= r1)
     return;
 
+  int fbw = screen_fb_width(fb);
   for (int col = 0; col < FONT_WIDTH; col++) {
     int px = x + col;
     if (px < 0)
       continue;
+    if (px >= fbw)
+      break; /* past the right edge is the next buffer in memory */
     volatile u8 *p =
         fb + ((px * screen_height) + (screen_height - 1 - (y + r0))) * 3;
     u8 mask = (u8)(0x80 >> col);

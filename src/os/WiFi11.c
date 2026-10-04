@@ -8,7 +8,10 @@
  *
  * The host controller uses the TMIO register layout of src/sdmmc.h. */
 #include "core11.h"
+#include "crypto.h"
+#include "net11.h"
 #include "wifi.h"
+#include "wpa11.h"
 
 #define WB16(off) MMIO16(WIFI_SDIO_BASE + (off))
 
@@ -36,6 +39,35 @@
 #define WSTAT1_CMDBUSY    0x4000u
 #define WMASK_GW          0x807Fu /* sdmmc.h TMIO_MASK_GW */
 #define WMASK_ALL         0x837F031Du
+
+/* This core's MPCore private timer runs free for the length of a Wi-Fi
+ * command, which nothing else needs meanwhile. With a prescaler of 134 it
+ * counts microseconds at 268 MHz. */
+#define PTIMER_LOAD  0x17E00600u
+#define PTIMER_COUNT 0x17E00604u
+#define PTIMER_CNT   0x17E00608u
+#define PTIMER_STAT  0x17E0060Cu
+#define PTIMER_RUN_US ((133u << 8) | 2u | 1u) /* prescaler, reload, enable */
+
+static uint32_t wifi_now(void) { return ~MMIO32(PTIMER_COUNT); }
+
+static void wifi_wait_us(uint32_t us) {
+  uint32_t t0 = wifi_now();
+  while (wifi_now() - t0 < us)
+    ;
+}
+
+static void wifi_timer_start(void) {
+  MMIO32(PTIMER_CNT) = 0;
+  MMIO32(PTIMER_STAT) = 1;
+  MMIO32(PTIMER_LOAD) = 0xFFFFFFFFu;
+  MMIO32(PTIMER_CNT) = PTIMER_RUN_US;
+}
+
+static void wifi_timer_stop(void) {
+  MMIO32(PTIMER_CNT) = 0;
+  MMIO32(PTIMER_STAT) = 1;
+}
 
 static void wifi_setckl(uint32_t data) {
   WB16(WR_CLKCTL) = (uint16_t)(data & 0xFF);
@@ -155,7 +187,8 @@ static void wifi_cmd(WifiShared *w, WifiCmd *e, uint16_t cmd16, uint32_t arg) {
   e->stat0 = s0;
   e->stat1 = s1;
   e->resp = (uint32_t)WB16(WR_RESP0) | ((uint32_t)WB16(WR_RESP1) << 16);
-  e->ok = (s0 & WSTAT0_CMDRESPEND) ? 1u : 2u;
+  /* A command timeout ends with CMDRESPEND set too, and RESP reads 0. */
+  e->ok = ((s0 & WSTAT0_CMDRESPEND) && !(s1 & WMASK_GW)) ? 1u : 2u;
   if (e->ok == 2u)
     wifi_note_fail(w, cmd16, arg, s0, s1);
 }
@@ -321,6 +354,17 @@ static uint32_t wifi_diag_read(WifiShared *w, uint32_t addr) {
 /* 1 ms apart: the Linux 3DS port raised ath6kl's BMI timeout to 3 s. */
 #define BMI_POLLS 3000
 
+/* BMI command IDs (ath6kl bmi.h). A command must fit the 128-byte target
+ * FIFO. */
+#define BMI_DONE              1u
+#define BMI_WRITE_MEMORY      3u
+#define BMI_EXECUTE          4u
+#define BMI_READ_SOC_REGISTER 6u
+#define BMI_WRITE_SOC_REGISTER 7u
+#define BMI_LZ_STREAM_START  13u
+#define BMI_LZ_DATA          14u
+#define BMI_MBOX_FIFO        128u
+
 /* Reads `len` bytes of a BMI reply from mailbox 0 once RX_LOOKAHEAD_VALID
  * (0x405 bit 0) says a word is there. Returns 0, and ends the boot, when none
  * comes: reading an empty mailbox would leave the late reply in it and shift
@@ -454,8 +498,9 @@ static void wifi_bmi_target_info(WifiShared *w) {
   }
   cmdw = 8; /* BMI_GET_TARGET_INFO */
   w->bmi_wr = wifi_cmd53(w, 1, 0x1000u - 4u, &cmdw, 4, 1, 1, 0, 0);
-  if (w->bmi_wr != 0)
+  if (w->bmi_wr != 0) {
     return;
+  }
 
   uint32_t v0 = wifi_bmi_recv_word(w);
   if (v0 == 0xFFFFFFFFu) {
@@ -485,17 +530,6 @@ static void wifi_bmi_write_word(WifiShared *w, uint32_t addr, uint32_t val) {
       cmd[i * 4 + b] = (uint8_t)((words[i] >> (b * 8)) & 0xFFu);
   wifi_bmi_send(w, cmd, 16);
 }
-
-/* BMI command IDs (ath6kl bmi.h). A command must fit the 128-byte target
- * FIFO. */
-#define BMI_DONE              1u
-#define BMI_WRITE_MEMORY      3u
-#define BMI_EXECUTE          4u
-#define BMI_READ_SOC_REGISTER 6u
-#define BMI_WRITE_SOC_REGISTER 7u
-#define BMI_LZ_STREAM_START  13u
-#define BMI_LZ_DATA          14u
-#define BMI_MBOX_FIFO        128u
 
 static void wr32le(uint8_t *p, uint32_t v) {
   p[0] = (uint8_t)v;
@@ -599,6 +633,14 @@ static void wifi_bmi_fast_download(WifiShared *w, uint32_t addr,
   wifi_bmi_lz_start(w, 0); /* a second stream start flushes the target caches */
 }
 
+static void wifi_step(WifiShared *w, uint32_t step) {
+  w->boot_step = step;
+}
+
+static void wifi_stage(WifiShared *w, uint32_t stage) {
+  w->htc_stage = stage;
+}
+
 /* Powers, resets and enumerates the chip. On return BMI and the diagnostic
  * window work. */
 static void wifi_bringup(WifiShared *w, int cold) {
@@ -668,7 +710,8 @@ static void wifi_bringup(WifiShared *w, int cold) {
   uint32_t rca = e->resp & 0xFFFF0000u;
   wifi_logcmd(w, WCMD7, rca);
 
-  /* CCCR 0x00 SDIO revision and 0x08 card capability, for the log. */
+  /* CCCR 0x00 SDIO revision and 0x08 card capability, for the command log
+   * on the Wi-Fi Test screen. */
   wifi_logcmd(w, WCMD52, WCMD52_RD(0, 0x00));
   wifi_logcmd(w, WCMD52, WCMD52_RD(0, 0x08));
 
@@ -721,22 +764,18 @@ static void wifi_bringup(WifiShared *w, int cold) {
 }
 
 static void wifi_finish(WifiShared *w) {
-  for (int i = 0; i < 32; i++)
-    w->reg[i] = WB16(i * 2);
-  w->ext[WIFI_EXT_D8] = WB16(WR_DATACTL);
-  w->ext[WIFI_EXT_E0] = WB16(WR_RESET);
-  w->ext[WIFI_EXT_FC] = WB16(0xFC);
-  w->ext[WIFI_EXT_FE] = WB16(0xFE);
-  w->ext[WIFI_EXT_100] = WB16(WR_DATACTL32);
-  w->ext[WIFI_EXT_102] = WB16(WR_DATACTL32 + 2);
-
   w->phase = WIFI_PH_DONE;
+  wifi_timer_stop();
   w->seq++;
   dcache_clean();
 }
 
+static void wifi_wmi_reset(WifiShared *w);
+
 static void wifi_probe_run(void) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
+  wifi_timer_start();
+  wifi_wmi_reset(w);
   g_bmi_abort = 0;
   w->bmi_polls = 0;
   w->bmi_extra = 0;
@@ -772,6 +811,10 @@ static void wifi_probe_run(void) {
 /* Reads 0x400-0x40B in one pass, as ath6kl does: host int, cpu int, error,
  * counter, frame, lookahead valid, two more, then the lookahead. Returns 1 with
  * the lookahead when mailbox 0 holds a frame. */
+/* Counter 0 is the firmware's debug interrupt: it asserted (ath6kl's
+ * ATH6KL_TARGET_DEBUG_INTR_MASK). Nothing more comes from it after that. */
+static int g_fw_asserted;
+
 static int wifi_htc_pending(WifiShared *w, uint32_t *look) {
   WifiCmd t;
   uint8_t r[12];
@@ -779,6 +822,12 @@ static int wifi_htc_pending(WifiShared *w, uint32_t *look) {
   for (int i = 0; i < 12; i++) {
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x400 + i));
     r[i] = (uint8_t)(t.resp & 0xFFu);
+  }
+  if ((r[3] & 0x01u) && t.ok == 1u && !g_fw_asserted) {
+    g_fw_asserted = 1;
+    w->fw_assert = 1;
+    w->fw_assert_t = wifi_now();
+    dcache_clean();
   }
   if (look)
     *look = (uint32_t)r[8] | ((uint32_t)r[9] << 8) | ((uint32_t)r[10] << 16) |
@@ -802,7 +851,10 @@ static void wifi_htc_disable_ints(WifiShared *w) {
 #define HTC_MSG_CONNECT_RESP_ID    3u
 #define HTC_MSG_SETUP_COMPLETE_ID  4u
 #define HTC_FLAGS_RECV_TRAILER     0x02u
-#define HTC_FRAME_MAX              256u
+#define HTC_REC_CREDIT             1u    /* trailer record: (endpoint, credits) pairs */
+/* The largest frame: a 1538-byte message, the WMI endpoint's maximum, with
+ * its header, padded to whole blocks. */
+#define HTC_FRAME_MAX              1664u
 /* Every send and receive is padded to the block size: the target only
  * releases a frame once a whole block has moved. */
 #define HTC_BLOCK 128u
@@ -825,8 +877,8 @@ enum {
   HTC_W_COUNT
 };
 
-static int wifi_htc_send(WifiShared *w, uint8_t ep, const uint8_t *payload,
-                         uint32_t len, int style) {
+static int wifi_htc_send(WifiShared *w, uint8_t ep, uint8_t flags,
+                         const uint8_t *payload, uint32_t len, int style) {
   static uint32_t frame[HTC_FRAME_MAX / 4];
   uint8_t *b = (uint8_t *)frame;
   uint32_t padded = htc_pad(HTC_HDR_LENGTH + len);
@@ -838,7 +890,7 @@ static int wifi_htc_send(WifiShared *w, uint8_t ep, const uint8_t *payload,
   for (uint32_t i = 0; i < padded; i++)
     b[i] = 0;
   b[0] = ep;
-  b[1] = 0;
+  b[1] = flags;
   b[2] = (uint8_t)len;
   b[3] = (uint8_t)(len >> 8);
   for (uint32_t i = 0; i < len; i++)
@@ -853,6 +905,34 @@ static int wifi_htc_send(WifiShared *w, uint8_t ep, const uint8_t *payload,
                     block ? HTC_BLOCK : 0u, secure);
 }
 
+/* Set by wifi_htc_recv when it read a frame, even one with no payload left
+ * once its trailer is removed, and the endpoint that frame came on. */
+static int g_htc_got;
+static uint8_t g_htc_rx_ep;
+
+/* Once joining starts, a poll waits this long by the timer instead of
+ * wifi_ms(HTC_TICK_MS), which runs several times longer than it says. */
+static uint32_t g_tick_us;
+
+/* Trailer records: id, length, data. A credit report returns credits to the
+ * endpoints it names; the WMI endpoint's go to htc_credit. */
+static void wifi_htc_trailer(WifiShared *w, const uint8_t *t, uint32_t n) {
+  uint32_t i = 0;
+  while (i + 2u <= n) {
+    uint32_t id = t[i], rl = t[i + 1];
+    if (i + 2u + rl > n)
+      break;
+    if (id == HTC_REC_CREDIT) {
+      for (uint32_t k = 0; k + 2u <= rl; k += 2) {
+        uint32_t ep = t[i + 2 + k], cr = t[i + 3 + k];
+        if (ep != HTC_EP0 && w->htc_stage >= WIFI_HTC_CONNECTED)
+          w->htc_credit += cr;
+      }
+    }
+    i += 2u + rl;
+  }
+}
+
 /* Waits for a frame, then drains it from the mailbox. Returns the payload
  * length with any trailer removed, or 0 if nothing arrived. */
 static uint32_t wifi_htc_recv(WifiShared *w, uint8_t *buf, uint32_t max,
@@ -862,27 +942,38 @@ static uint32_t wifi_htc_recv(WifiShared *w, uint8_t *buf, uint32_t max,
   uint32_t look = 0;
   int have = 0;
 
+  g_htc_got = 0;
   for (int i = 0; i < polls; i++) {
     if (wifi_htc_pending(w, &look)) {
       have = 1;
       break;
     }
-    wifi_ms(HTC_TICK_MS);
+    if (g_fw_asserted)
+      break;
+    if (g_tick_us)
+      wifi_wait_us(g_tick_us);
+    else
+      wifi_ms(HTC_TICK_MS);
   }
   if (!have)
     return 0;
 
   uint32_t len = (look >> 16) & 0xFFFFu; /* payload length */
   uint32_t total = htc_pad(HTC_HDR_LENGTH + len);
-  if (total > HTC_FRAME_MAX)
+  if (total > HTC_FRAME_MAX) {
     return 0; /* not a length this handshake ever produces */
+  }
   for (uint32_t i = 0; i < total; i++) {
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, WIFI_MBOX0 + i));
     frame[i] = (uint8_t)(t.resp & 0xFFu);
   }
   w->htc_look = look;
-  if ((frame[1] & HTC_FLAGS_RECV_TRAILER) && frame[4] <= len)
+  g_htc_got = 1;
+  g_htc_rx_ep = frame[0];
+  if ((frame[1] & HTC_FLAGS_RECV_TRAILER) && frame[4] <= len) {
+    wifi_htc_trailer(w, frame + HTC_HDR_LENGTH + len - frame[4], frame[4]);
     len -= frame[4];
+  }
   uint32_t n = len < max ? len : max;
   for (uint32_t i = 0; i < n; i++)
     buf[i] = frame[HTC_HDR_LENGTH + i];
@@ -963,7 +1054,7 @@ static void wifi_htc_wait_ready(WifiShared *w) {
     w->htc_credits = (uint32_t)msg[2] | ((uint32_t)msg[3] << 8);
     w->htc_credsz = (uint32_t)msg[4] | ((uint32_t)msg[5] << 8);
     if (w->htc_msgid == HTC_MSG_READY_ID)
-      w->htc_stage = WIFI_HTC_READY;
+      wifi_stage(w, WIFI_HTC_READY);
   }
 }
 
@@ -979,6 +1070,971 @@ static void wifi_htc_snapshot(WifiShared *w) {
   wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x405));
   lav = t.resp & 0xFFu;
   w->htc_regs = his | (cpu << 8) | (err << 16) | (lav << 24);
+}
+
+/* WMI on NWM's firmware: every command and event starts with a bare u16 id,
+ * with none of ath6kl's info1 field (Octoblimp's port, from NWM's
+ * disassembly). Ids and layouts are the legacy ath6kl ones. */
+#define WMI_CONNECT_CMDID          1u
+#define WMI_DISCONNECT_CMDID       3u
+#define WMI_ADD_CIPHER_KEY_CMDID   22u
+#define WMI_START_SCAN_CMDID       7u
+#define WMI_SET_SCAN_PARAMS_CMDID  8u
+#define WMI_SET_BSS_FILTER_CMDID   9u
+#define WMI_SET_PROBED_SSID_CMDID  10u
+#define WMI_SET_CHANNEL_PARAMS_CMDID 17u
+#define WMI_SET_POWER_MODE_CMDID   18u
+#define WMI_CONNECT_EVENTID        0x1002u
+#define WMI_DISCONNECT_EVENTID     0x1003u
+#define WMI_BSSINFO_EVENTID        0x1004u
+#define WMI_CMDERROR_EVENTID       0x1005u
+#define WMI_SCAN_COMPLETE_EVENTID  0x100Au
+
+static void put16(uint8_t *p, uint32_t v) {
+  p[0] = (uint8_t)v;
+  p[1] = (uint8_t)(v >> 8);
+}
+
+static void put32(uint8_t *p, uint32_t v) {
+  put16(p, v);
+  put16(p + 2, v >> 16);
+}
+
+static void wifi_wmi_reset(WifiShared *w) {
+  for (uint32_t i = 0; i < 4; i++) {
+    w->svc_ep[i] = 0;
+    w->svc_status[i] = 0;
+  }
+  w->fw_assert = 0;
+  w->fw_assert_t = 0;
+  w->wmi_stage = WIFI_WMI_NONE;
+  w->wmi_events = 0;
+  w->wmi_last = 0;
+  w->wmi_cmderr = 0;
+  w->wmi_errors = 0;
+  w->scan_status = 0;
+  w->htc_credit = 0;
+  w->bss_seen = 0;
+  w->bss_count = 0;
+  w->conn_stage = WIFI_CONN_NONE;
+  w->conn_tries = 0;
+  w->conn_reason = 0;
+  w->conn_channel = 0;
+  w->conn_rssi = 0;
+  w->conn_caps = 0;
+  for (uint32_t i = 0; i < 6; i++) {
+    w->conn_bssid[i] = 0;
+    w->gw_mac[i] = 0;
+  }
+  w->ip = 0;
+  w->mask = 0;
+  w->gw = 0;
+  w->dns = 0;
+  w->dhcp_server = 0;
+  w->lease = 0;
+  w->ping_sent = 0;
+  w->ping_ok = 0;
+  w->ping_best_us = 0;
+  w->tx_frames = 0;
+  w->rx_frames = 0;
+  w->session = 0;
+  w->sec = 0;
+  w->wpa_group = 0;
+  w->wpa_m1 = 0;
+  w->wpa_m3 = 0;
+  w->wpa_g1 = 0;
+  w->wpa_bad_mic = 0;
+  w->wpa_variant = 0;
+  w->wpa_keys = 0;
+}
+
+static void wifi_wmi_stage(WifiShared *w, uint32_t stage) {
+  w->wmi_stage = stage;
+  dcache_clean();
+}
+
+/* The network to join, copied from WifiReq before the scan so that the scan
+ * can pick it out: the strongest BSS with that SSID. */
+static uint8_t g_want[32];
+static uint32_t g_want_len;
+static int g_have_pmk; /* a password was given; the PMK stays in WifiReq */
+static int g_tgt_ok;
+static uint8_t g_tgt_bssid[6];
+static uint32_t g_tgt_channel, g_tgt_caps, g_tgt_sec, g_tgt_group;
+static int32_t g_tgt_rssi;
+
+/* bss[] full: a network is still parsed here so that the join can find it. */
+static WifiBss g_spare;
+
+/* 1 once a CONNECT event came, -1 after a DISCONNECT for any reason but our
+ * own WMI_DISCONNECT, which only counts in g_disc. */
+static volatile int g_link;
+static volatile int g_disc;
+
+static void wifi_join_see(const WifiBss *b, uint32_t group) {
+  if (!g_want_len || b->ssid_len != g_want_len)
+    return;
+  for (uint32_t k = 0; k < g_want_len; k++)
+    if (b->ssid[k] != g_want[k])
+      return;
+  if (g_tgt_ok && b->rssi <= g_tgt_rssi)
+    return;
+  g_tgt_ok = 1;
+  for (uint32_t k = 0; k < 6; k++)
+    g_tgt_bssid[k] = b->bssid[k];
+  g_tgt_channel = b->channel;
+  g_tgt_caps = b->caps;
+  g_tgt_rssi = b->rssi;
+  g_tgt_sec = b->sec;
+  g_tgt_group = group;
+}
+
+static uint32_t le16(const uint8_t *p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8); }
+
+/* An RSN element's body: version, group cipher, pairwise ciphers, AKMs, each
+ * suite 00-0F-AC and a type. Omitted lists default to CCMP and 802.1X. */
+static uint32_t wifi_rsn(const uint8_t *v, uint32_t len, uint32_t *group) {
+  uint32_t off = 2, ccmp = 1, psk = 0, sae = 0, n;
+  *group = 4;
+  if (len < 2u || le16(v) != 1u)
+    return WIFI_SEC_EAP;
+  if (off + 4u <= len) {
+    *group = v[off + 3];
+    off += 4u;
+  }
+  if (off + 2u <= len) {
+    n = le16(v + off);
+    off += 2u;
+    ccmp = 0;
+    for (uint32_t i = 0; i < n && off + 4u <= len; i++, off += 4u)
+      if (v[off] == 0x00 && v[off + 1] == 0x0F && v[off + 2] == 0xAC &&
+          v[off + 3] == 4)
+        ccmp = 1;
+  }
+  if (off + 2u <= len) {
+    n = le16(v + off);
+    off += 2u;
+    for (uint32_t i = 0; i < n && off + 4u <= len; i++, off += 4u)
+      if (v[off] == 0x00 && v[off + 1] == 0x0F && v[off + 2] == 0xAC) {
+        if (v[off + 3] == 2)
+          psk = 1;
+        else if (v[off + 3] == 8)
+          sae = 1;
+      }
+  }
+  if (psk)
+    return ccmp ? WIFI_SEC_WPA2 : WIFI_SEC_TKIP;
+  return sae ? WIFI_SEC_WPA3 : WIFI_SEC_EAP;
+}
+
+/* BSSINFO in NWM's layout: channel, frame type, SNR, RSSI, BSSID and IE mask
+ * (16 bytes), then the beacon or probe-response body: timestamp, interval and
+ * capability (12 bytes), then the information elements, SSID first. */
+static void wifi_bss(WifiShared *w, const uint8_t *p, uint32_t len) {
+  w->bss_seen++;
+  if (len < 16u + 12u)
+    return;
+  uint32_t i;
+  for (i = 0; i < w->bss_count; i++) {
+    uint32_t k = 0;
+    while (k < 6 && w->bss[i].bssid[k] == p[6 + k])
+      k++;
+    if (k == 6)
+      break;
+  }
+  WifiBss *b = i < WIFI_BSS_MAX ? &w->bss[i] : &g_spare;
+  if (i == w->bss_count) {
+    if (i < WIFI_BSS_MAX)
+      w->bss_count++;
+    b->seen = 0;
+    b->ssid_len = 0;
+  }
+  for (uint32_t k = 0; k < 6; k++)
+    b->bssid[k] = p[6 + k];
+  b->channel = (uint16_t)(p[0] | (p[1] << 8));
+  b->frame_type = p[2];
+  b->snr = p[3];
+  b->rssi = (int16_t)(p[4] | (p[5] << 8));
+  if (b->seen < 255)
+    b->seen++;
+  const uint8_t *body = p + 16;
+  uint32_t blen = len - 16u, group = 0, rsn = 0, wpa = 0;
+  b->caps = (uint16_t)(body[10] | (body[11] << 8));
+  b->sec = (b->caps & 0x10u) ? WIFI_SEC_WEP : WIFI_SEC_OPEN;
+  for (uint32_t ie = 12; ie + 2u <= blen;) {
+    uint32_t id = body[ie], il = body[ie + 1];
+    const uint8_t *v = body + ie + 2;
+    if (ie + 2u + il > blen)
+      break;
+    if (id == 0) {
+      uint32_t n = il < 32u ? il : 32u;
+      b->ssid_len = (uint8_t)n;
+      for (uint32_t k = 0; k < n; k++)
+        b->ssid[k] = v[k];
+    } else if (id == 48) {
+      b->sec = (uint8_t)wifi_rsn(v, il, &group);
+      rsn = 1;
+    } else if (id == 0xDD && il >= 4u && v[0] == 0x00 && v[1] == 0x50 &&
+               v[2] == 0xF2 && v[3] == 1) {
+      wpa = 1;
+    }
+    ie += 2u + il;
+  }
+  if (!rsn && wpa && (b->caps & 0x10u))
+    b->sec = WIFI_SEC_WPA1;
+  wifi_join_see(b, group);
+}
+
+static void wifi_wmi_event(WifiShared *w, const uint8_t *p, uint32_t len) {
+  uint32_t id = (uint32_t)p[0] | ((uint32_t)p[1] << 8);
+  const uint8_t *d = p + 2;
+  uint32_t dl = len - 2u;
+  w->wmi_events++;
+  w->wmi_last = id;
+  if (id == WMI_BSSINFO_EVENTID) {
+    wifi_bss(w, d, dl);
+  } else if (id == WMI_CMDERROR_EVENTID && dl >= 3u) {
+    w->wmi_cmderr = (uint32_t)d[0] | ((uint32_t)d[1] << 8) | ((uint32_t)d[2] << 16);
+    w->wmi_errors++;
+  } else if (id == WMI_SCAN_COMPLETE_EVENTID) {
+    w->scan_status = dl >= 4u ? ((uint32_t)d[0] | ((uint32_t)d[1] << 8) |
+                                 ((uint32_t)d[2] << 16) | ((uint32_t)d[3] << 24))
+                              : 0u;
+  } else if (id == WMI_CONNECT_EVENTID && dl >= 8u) {
+    /* channel, BSSID, listen and beacon interval, network type, IE lengths */
+    w->conn_channel = (uint32_t)d[0] | ((uint32_t)d[1] << 8);
+    for (uint32_t k = 0; k < 6; k++)
+      w->conn_bssid[k] = d[2 + k];
+    g_link = 1;
+  } else if (id == WMI_DISCONNECT_EVENTID && dl >= 9u) {
+    /* 802.11 status or reason, BSSID, the firmware's reason */
+    uint32_t reason = d[8];
+    w->conn_reason = reason | (((uint32_t)d[0] | ((uint32_t)d[1] << 8)) << 16);
+    g_disc++;
+    if (reason != 3u) /* DISCONNECT_CMD: ours */
+      g_link = -1;
+  }
+  dcache_clean();
+}
+
+static void wifi_data_rx(WifiShared *w, const uint8_t *p, uint32_t len);
+
+static int wifi_is_data_ep(const WifiShared *w, uint32_t ep) {
+  for (uint32_t i = 0; i < 4; i++)
+    if (w->svc_status[i] == 0 && w->svc_ep[i] == ep && ep != 0)
+      return 1;
+  return 0;
+}
+
+/* Takes frames until event `until` arrives (0: until none comes), giving each
+ * up to `ticks` polls to show up. Returns 1 when `until` came.
+ *
+ * A frame on a data endpoint starts with NWM's two-byte data prefix (RSSI,
+ * info). The firmware also sends some WMI events that way, large probe
+ * responses among them: info bits 7:6 = 2 (the type ath6kl calls ACL), and a
+ * WMI event id right behind the prefix. Those are taken as events. Type 0 is
+ * an 802.3 frame for the IP stack. */
+static int wifi_wmi_events(WifiShared *w, uint32_t until, int ticks,
+                           int frames) {
+  static uint8_t ev[HTC_FRAME_MAX];
+  for (int n = 0; n < frames; n++) {
+    uint32_t len = wifi_htc_recv(w, ev, sizeof(ev), ticks);
+    if (!g_htc_got)
+      return 0;
+    const uint8_t *e = ev;
+    if (g_htc_rx_ep != w->htc_ep) {
+      if (!wifi_is_data_ep(w, g_htc_rx_ep) || len < 4u)
+        continue;
+      uint32_t id = (uint32_t)ev[2] | ((uint32_t)ev[3] << 8);
+      int is_ev = (ev[1] >> 6) == 2u && id >= 0x1001u && id < 0x1040u;
+      if (!is_ev) {
+        if ((ev[1] >> 6) == 0u && len <= sizeof(ev))
+          wifi_data_rx(w, ev + 2, len - 2u);
+        continue;
+      }
+      e = ev + 2;
+      len -= 2u;
+    } else if (len < 2u) {
+      continue;
+    }
+    wifi_wmi_event(w, e, len);
+    if (until && ((uint32_t)e[0] | ((uint32_t)e[1] << 8)) == until)
+      return 1;
+  }
+  return 0;
+}
+
+/* One command on the WMI endpoint, after the events that may already be
+ * waiting. A command takes one credit; with none left the target has no
+ * buffer for it, so it is not sent. With few left the frame asks the target
+ * for a credit report (HTC_FLAGS_NEED_CREDIT_UPDATE), as ath6kl does. */
+static int wifi_wmi_send(WifiShared *w, uint32_t cmd, const uint8_t *payload,
+                         uint32_t len, int style) {
+  uint8_t b[2 + 64];
+  if (len > 64u || g_fw_asserted)
+    return -1;
+  wifi_wmi_events(w, 0, 3, 8);
+  if (!w->htc_credit) {
+    return -1;
+  }
+  put16(b, cmd);
+  for (uint32_t i = 0; i < len; i++)
+    b[2 + i] = payload[i];
+  int r = wifi_htc_send(w, (uint8_t)w->htc_ep, w->htc_credit <= 2u ? 0x01u : 0u,
+                        b, 2u + len, style);
+  if (r == 0)
+    w->htc_credit--;
+  dcache_clean();
+  return r;
+}
+
+/* A discovery scan of the 13 2.4 GHz 802.11g channels, in the order and with
+ * the values Octoblimp's port found to work on this firmware: radio kept at
+ * full power, a wildcard probe in slot 1, default dwell times with three
+ * probes per SSID, an explicit channel table and every beacon reported. */
+static const uint16_t chans[13] = {2412, 2417, 2422, 2427, 2432, 2437, 2442,
+                                   2447, 2452, 2457, 2462, 2467, 2472};
+
+static void wifi_wmi_scan(WifiShared *w, int style, int passive) {
+  uint8_t c[64];
+  int bad = 0;
+
+  w->scan_status = 0xFFFFFFFFu;
+  wifi_wmi_stage(w, WIFI_WMI_SETUP);
+
+  c[0] = 2; /* MAX_PERF_POWER */
+  bad |= wifi_wmi_send(w, WMI_SET_POWER_MODE_CMDID, c, 1, style);
+
+  for (uint32_t i = 0; i < 35; i++)
+    c[i] = 0;
+  c[0] = 1; /* entry */
+  c[1] = 2; /* ANY_SSID_FLAG */
+  bad |= wifi_wmi_send(w, WMI_SET_PROBED_SSID_CMDID, c, 35, style);
+
+  put16(c + 0, 0xFFFF); /* foreground start period, s */
+  put16(c + 2, 0xFFFF); /* foreground end period */
+  put16(c + 4, 0xFFFF); /* background period */
+  put16(c + 6, 0);      /* max active dwell, ms: target default */
+  put16(c + 8, 0);      /* passive dwell */
+  c[10] = 3;            /* short scans per long */
+  /* DEFAULT_SCAN_CTRL_FLAGS; passive drops ACTIVE_SCAN_CTRL_FLAGS (0x04). */
+  c[11] = passive ? 0x2B : 0x2F;
+  put16(c + 12, 0);     /* min active dwell */
+  put16(c + 14, passive ? 0u : 3u); /* probes per SSID */
+  put32(c + 16, 0);     /* max DFS channel active time */
+  bad |= wifi_wmi_send(w, WMI_SET_SCAN_PARAMS_CMDID, c, 20, style);
+
+  c[0] = 0;
+  c[1] = 0;  /* scanParam */
+  c[2] = 2;  /* WMI_11G_MODE */
+  c[3] = 13; /* channels */
+  for (uint32_t i = 0; i < 13; i++)
+    put16(c + 4 + i * 2, chans[i]);
+  bad |= wifi_wmi_send(w, WMI_SET_CHANNEL_PARAMS_CMDID, c, 30, style);
+
+  c[0] = 1; /* ALL_BSS_FILTER */
+  c[1] = 0;
+  put16(c + 2, 0);
+  put32(c + 4, 0); /* IE mask */
+  bad |= wifi_wmi_send(w, WMI_SET_BSS_FILTER_CMDID, c, 8, style);
+
+  put32(c + 0, 0);  /* force foreground scan */
+  put32(c + 4, 0);  /* legacy (Cisco) */
+  put32(c + 8, 0);  /* home dwell */
+  put32(c + 12, 0); /* forced scan interval */
+  c[16] = 0;        /* WMI_LONG_SCAN */
+  c[17] = 13;
+  for (uint32_t i = 0; i < 13; i++)
+    put16(c + 18 + i * 2, chans[i]);
+  if (bad || wifi_wmi_send(w, WMI_START_SCAN_CMDID, c, 44, style) != 0) {
+    wifi_wmi_events(w, 0, 3, 8);
+    return;
+  }
+  wifi_wmi_stage(w, WIFI_WMI_SCAN);
+
+  if (wifi_wmi_events(w, WMI_SCAN_COMPLETE_EVENTID, HTC_TICKS(2000), 96))
+    wifi_wmi_stage(w, WIFI_WMI_DONE);
+  else
+    wifi_wmi_stage(w, WIFI_WMI_TIMEOUT);
+}
+
+/* Joining the WifiReq network (open or WPA2-PSK), then DHCP, ARP for
+ * the gateway and four pings to it. With WIFI_OPT_STAY the link stays up as a
+ * session that AUDIO_CMD_WIFI_NET commands use. */
+static int g_style;
+static int g_net_on;
+static int g_session;
+static NetState g_net;
+static uint32_t g_net_want;    /* 1 << NET_RX_* that end the wait */
+static volatile int g_net_hit; /* one of them came */
+static uint32_t g_ping_seq, g_ping_t;
+/* What ended the last ping wait: NET_RX_PING_REPLY or NET_RX_PING_ERR, with
+ * the round trip and the ICMP error; and the last DNS answer. */
+static int g_ping_got;
+static uint32_t g_ping_rtt, g_ping_err, g_dns_ip;
+
+/* WPA2: the handshake state, from wpa_begin to the end of the join or the
+ * session; g_wpa_hit once message 3 has been answered. */
+static WpaState g_wpa;
+static int g_wpa_on;
+static volatile int g_wpa_hit;
+
+#define NET_BIT(t) (1u << (t))
+
+static void wifi_join_reset(uint32_t opts) {
+  const WifiReq *q = (const WifiReq *)WIFI_REQ_ADDR;
+  g_want_len = 0;
+  g_have_pmk = 0;
+  g_tgt_ok = 0;
+  if (g_wpa_on)
+    wpa_end(&g_wpa);
+  g_wpa_on = 0;
+  g_link = 0;
+  g_disc = 0;
+  g_tick_us = 0;
+  g_net_on = 0;
+  g_session = 0;
+  if (!(opts & WIFI_OPT_CONNECT))
+    return;
+  dcache_clean_inval(); /* the ARM9 wrote the request */
+  if (q->magic != WIFI_REQ_MAGIC || q->ssid_len == 0 || q->ssid_len > 32u)
+    return;
+  g_want_len = q->ssid_len;
+  for (uint32_t k = 0; k < g_want_len; k++)
+    g_want[k] = q->ssid[k];
+  g_have_pmk = q->has_pmk == 1u;
+}
+
+static void wifi_conn_stage(WifiShared *w, uint32_t stage) {
+  w->conn_stage = stage;
+  dcache_clean();
+}
+
+/* Takes frames for up to `ms` until *stop is set, the link drops or the
+ * firmware asserts. */
+static void wifi_pump(WifiShared *w, uint32_t ms, volatile int *stop) {
+  uint32_t t0 = wifi_now();
+  while (!*stop && g_link >= 0 && !g_fw_asserted &&
+         wifi_now() - t0 < ms * 1000u)
+    wifi_wmi_events(w, 0, 1, 4);
+}
+
+/* An Ethernet II frame out on the best-effort endpoint, the way ath6kl hands
+ * data to the firmware: the data prefix (802.3 data, priority 0), then the
+ * frame as 802.3 with an LLC/SNAP header carrying the type. */
+static int wifi_data_send(WifiShared *w, const uint8_t *f, uint32_t len) {
+  static uint8_t b[2u + NET_FRAME_MAX + 8u];
+  if (len < 14u || len > NET_FRAME_MAX || g_fw_asserted)
+    return -1;
+  if (!w->htc_credit) {
+    return -1;
+  }
+  uint32_t pl = len - 14u;
+  b[0] = 0;
+  b[1] = 0;
+  for (uint32_t i = 0; i < 12; i++)
+    b[2 + i] = f[i];
+  b[14] = (uint8_t)((pl + 8u) >> 8);
+  b[15] = (uint8_t)(pl + 8u);
+  b[16] = 0xAA; /* LLC: SNAP */
+  b[17] = 0xAA;
+  b[18] = 0x03;
+  b[19] = 0; /* OUI 0: the type is an Ethernet type */
+  b[20] = 0;
+  b[21] = 0;
+  b[22] = f[12];
+  b[23] = f[13];
+  for (uint32_t i = 0; i < pl; i++)
+    b[24 + i] = f[14 + i];
+  int r = wifi_htc_send(w, w->svc_ep[0], w->htc_credit <= 2u ? 0x01u : 0u, b,
+                        24u + pl, g_style);
+  if (r == 0) {
+    w->htc_credit--;
+    w->tx_frames++;
+  }
+  return r;
+}
+
+/* An 802.3 frame from the firmware, after the data prefix: back to Ethernet II
+ * for the IP stack, and out with any answer it owes. */
+static void wifi_wpa_rx(WifiShared *w, const uint8_t *f, uint32_t n);
+
+static void wifi_data_rx(WifiShared *w, const uint8_t *p, uint32_t len) {
+  static uint8_t f[HTC_FRAME_MAX], reply[NET_FRAME_MAX];
+  uint32_t n = len, rl, v;
+  if (len < 14u)
+    return;
+  w->rx_frames++;
+  if (!g_net_on && !g_wpa_on)
+    return;
+  for (uint32_t i = 0; i < 12; i++)
+    f[i] = p[i];
+  if ((((uint32_t)p[12] << 8) | p[13]) < 0x600u) {
+    if (len < 22u || p[14] != 0xAA || p[15] != 0xAA || p[16] != 0x03 ||
+        p[17] || p[18] || p[19])
+      return;
+    n = len - 8u;
+    f[12] = p[20];
+    f[13] = p[21];
+    for (uint32_t i = 14; i < n; i++)
+      f[i] = p[i + 8];
+  } else {
+    for (uint32_t i = 12; i < n; i++)
+      f[i] = p[i];
+  }
+  if (f[12] == 0x88 && f[13] == 0x8E) { /* EAPOL */
+    wifi_wpa_rx(w, f, n);
+    return;
+  }
+  if (!g_net_on)
+    return;
+
+  int t = net_rx(&g_net, f, n, reply, &rl, &v);
+  if (t == NET_RX_DNS) {
+    g_dns_ip = v;
+  } else if (t == NET_RX_PING_REPLY || t == NET_RX_PING_ERR) {
+    uint32_t seq = t == NET_RX_PING_REPLY ? v : v >> 16;
+    if (seq == g_ping_seq && !g_net_hit) {
+      g_ping_got = t;
+      g_ping_rtt = wifi_now() - g_ping_t;
+      g_ping_err = v & 0xFFFFu;
+      if (t == NET_RX_PING_REPLY && !g_session) { /* the join's own pings */
+        w->ping_ok++;
+        if (!w->ping_best_us || g_ping_rtt < w->ping_best_us)
+          w->ping_best_us = g_ping_rtt;
+      }
+    } else {
+      t = NET_RX_OTHER; /* late: not the echo waited for */
+    }
+  }
+  if (NET_BIT(t) & g_net_want)
+    g_net_hit = 1;
+  if (rl)
+    wifi_data_send(w, reply, rl);
+  dcache_clean();
+}
+
+/* One WMI_CONNECT, after the setup Octoblimp's port found this firmware
+ * needs: a plain connect gets NO_NETWORK_AVAIL, while the SSID in probe slot
+ * 0, the stock scan parameters, a channel table holding only the network's
+ * channel and a connect pinned to its BSSID with CONNECT_PROFILE_MATCH_DONE
+ * associate. Unpinned, it is the plain connect over every channel. */
+static void wifi_join_try(WifiShared *w, int pinned, int secured) {
+  uint8_t c[64];
+  int bad = 0;
+
+  for (uint32_t i = 0; i < sizeof(c); i++)
+    c[i] = 0;
+  c[0] = 0; /* entry */
+  c[1] = 1; /* SPECIFIC_SSID_FLAG */
+  c[2] = (uint8_t)g_want_len;
+  for (uint32_t k = 0; k < g_want_len; k++)
+    c[3 + k] = g_want[k];
+  bad |= wifi_wmi_send(w, WMI_SET_PROBED_SSID_CMDID, c, 35, g_style);
+
+  for (uint32_t i = 0; i < 20; i++)
+    c[i] = 0;
+  c[10] = 3;    /* short scans per long */
+  c[11] = 0x2F; /* DEFAULT_SCAN_CTRL_FLAGS */
+  put16(c + 14, 3);
+  bad |= wifi_wmi_send(w, WMI_SET_SCAN_PARAMS_CMDID, c, 20, g_style);
+
+  c[0] = 0;
+  c[1] = 0;
+  c[2] = 2; /* WMI_11G_MODE */
+  c[3] = pinned ? 1 : 13;
+  if (pinned)
+    put16(c + 4, g_tgt_channel);
+  else
+    for (uint32_t i = 0; i < 13; i++)
+      put16(c + 4 + i * 2, chans[i]);
+  bad |= wifi_wmi_send(w, WMI_SET_CHANNEL_PARAMS_CMDID, c, 4u + c[3] * 2u,
+                       g_style);
+
+  c[0] = 1; /* ALL_BSS_FILTER */
+  c[1] = 0;
+  put16(c + 2, 0);
+  put32(c + 4, 0);
+  bad |= wifi_wmi_send(w, WMI_SET_BSS_FILTER_CMDID, c, 8, g_style);
+
+  for (uint32_t i = 0; i < 52; i++)
+    c[i] = 0;
+  c[0] = 1; /* INFRA_NETWORK */
+  c[1] = 1; /* OPEN_AUTH */
+  /* The AR6014's enums (the Linux 3DS port): auth NONE 1 ... WPA2_PSK 5,
+   * ciphers NONE 1, WEP 2, TKIP 3, AES 4. */
+  c[2] = secured ? 5 : 1;
+  c[3] = secured ? 4 : 1;
+  c[5] = !secured ? 1 : g_tgt_group == 2u ? 3 : 4;
+  c[7] = (uint8_t)g_want_len;
+  for (uint32_t k = 0; k < g_want_len; k++)
+    c[8 + k] = g_want[k];
+  if (pinned) {
+    put16(c + 40, g_tgt_channel);
+    for (uint32_t k = 0; k < 6; k++)
+      c[42 + k] = g_tgt_bssid[k];
+    put32(c + 48, 0x08); /* CONNECT_PROFILE_MATCH_DONE */
+  }
+  if (bad || wifi_wmi_send(w, WMI_CONNECT_CMDID, c, 52, g_style) != 0)
+    return;
+  g_link = 0;
+  w->conn_tries++;
+  wifi_conn_stage(w, WIFI_CONN_ASSOC);
+  wifi_pump(w, 10000, &g_link);
+}
+
+static void wifi_net_run(WifiShared *w) {
+  static uint8_t f[NET_FRAME_MAX];
+  NetState *n = &g_net;
+  uint8_t *z = (uint8_t *)n;
+  for (uint32_t i = 0; i < sizeof(*n); i++)
+    z[i] = 0;
+  n->mac[0] = (uint8_t)w->wmi_mac0;
+  n->mac[1] = (uint8_t)(w->wmi_mac0 >> 8);
+  n->mac[2] = (uint8_t)(w->wmi_mac0 >> 16);
+  n->mac[3] = (uint8_t)(w->wmi_mac0 >> 24);
+  n->mac[4] = (uint8_t)w->wmi_mac1;
+  n->mac[5] = (uint8_t)(w->wmi_mac1 >> 8);
+  n->xid = wifi_now() ^ w->wmi_mac0;
+  n->ping_id = (uint16_t)(wifi_now() | 1u);
+  g_net_on = 1;
+
+  for (uint32_t k = 0; k < 4u && !n->ip && g_link > 0; k++) {
+    wifi_conn_stage(w, WIFI_CONN_DHCP);
+    n->xid++;
+    g_net_want = NET_BIT(NET_RX_OFFER);
+    g_net_hit = 0;
+    wifi_data_send(w, f, net_dhcp(n, f, 0));
+    wifi_pump(w, 4000, &g_net_hit);
+    if (!g_net_hit)
+      continue;
+    g_net_want = NET_BIT(NET_RX_ACK) | NET_BIT(NET_RX_NAK);
+    g_net_hit = 0;
+    wifi_data_send(w, f, net_dhcp(n, f, 1));
+    wifi_pump(w, 4000, &g_net_hit);
+  }
+  g_net_want = 0;
+  if (!n->ip) {
+    wifi_conn_stage(w, WIFI_CONN_NODHCP);
+    return;
+  }
+  if (!n->gw)
+    n->gw = n->server;
+  w->ip = n->ip;
+  w->mask = n->mask;
+  w->gw = n->gw;
+  w->dns = n->dns;
+  w->dhcp_server = n->server;
+  w->lease = n->lease;
+  wifi_conn_stage(w, WIFI_CONN_IP);
+
+  wifi_conn_stage(w, WIFI_CONN_ARP);
+  for (uint32_t k = 0; k < 3u && !n->have_gw_mac && g_link > 0; k++) {
+    g_net_want = NET_BIT(NET_RX_ARP_REPLY) | NET_BIT(NET_RX_ARP_ASKED);
+    g_net_hit = 0;
+    wifi_data_send(w, f, net_arp_request(n, f, n->gw));
+    wifi_pump(w, 2000, &g_net_hit);
+  }
+  g_net_want = 0;
+  if (!n->have_gw_mac) {
+    wifi_conn_stage(w, WIFI_CONN_NOPING);
+    return;
+  }
+  for (uint32_t k = 0; k < 6; k++)
+    w->gw_mac[k] = n->gw_mac[k];
+
+  wifi_conn_stage(w, WIFI_CONN_PING);
+  for (uint32_t s = 1; s <= 4u && g_link > 0; s++) {
+    g_net_want = NET_BIT(NET_RX_PING_REPLY);
+    g_net_hit = 0;
+    g_ping_seq = s;
+    uint32_t len = net_ping(n, f, n->gw, n->gw_mac, (uint16_t)s);
+    g_ping_t = wifi_now();
+    if (wifi_data_send(w, f, len) != 0)
+      continue;
+    w->ping_sent++;
+    wifi_pump(w, 2000, &g_net_hit);
+  }
+  g_net_want = 0;
+  wifi_conn_stage(w, w->ping_ok ? WIFI_CONN_DONE : WIFI_CONN_NOPING);
+}
+
+/* The RSN element the firmware puts in the association request, which message
+ * 2 has to repeat byte for byte. The CONNECT event does not report it, so it
+ * is built: PSK and CCMP with the network's group cipher, and in turn RSN
+ * capabilities 0, 16 PTKSA replay counters (0x000C), or none. */
+static uint32_t wifi_rsn_ie(uint8_t *ie, uint32_t variant, uint32_t group) {
+  static const uint8_t base[20] = {48,   18,   1,    0,    0x00, 0x0F, 0xAC,
+                                   4,    1,    0,    0x00, 0x0F, 0xAC, 4,
+                                   1,    0,    0x00, 0x0F, 0xAC, 2};
+  for (uint32_t i = 0; i < 20; i++)
+    ie[i] = base[i];
+  ie[7] = (uint8_t)group;
+  if (variant == 2)
+    return 20;
+  ie[1] = 20;
+  ie[20] = variant == 1 ? 0x0C : 0x00;
+  ie[21] = 0;
+  return 22;
+}
+
+static void wifi_wpa_begin(WifiShared *w, uint32_t variant) {
+  const WifiReq *q = (const WifiReq *)WIFI_REQ_ADDR;
+  uint8_t pmk[32], seed[32], spa[6], ie[24];
+  uint32_t now = wifi_now();
+  for (uint32_t i = 0; i < 32; i++) {
+    pmk[i] = q->pmk[i];
+    seed[i] = q->seed[i];
+  }
+  for (uint32_t i = 0; i < 4; i++)
+    seed[i] ^= (uint8_t)(now >> (8 * i));
+  seed[4] ^= (uint8_t)variant;
+  for (uint32_t i = 0; i < 4; i++)
+    spa[i] = (uint8_t)(w->wmi_mac0 >> (8 * i));
+  spa[4] = (uint8_t)w->wmi_mac1;
+  spa[5] = (uint8_t)(w->wmi_mac1 >> 8);
+  uint32_t n = wifi_rsn_ie(ie, variant, g_tgt_group);
+  wpa_begin(&g_wpa, pmk, spa, seed, ie, n, g_tgt_group);
+  crypto_wipe(pmk, sizeof(pmk));
+  crypto_wipe(seed, sizeof(seed));
+  g_wpa_on = 1;
+  g_wpa_hit = 0;
+  w->wpa_variant = variant;
+}
+
+static void wifi_wpa_rx(WifiShared *w, const uint8_t *f, uint32_t n) {
+  static uint8_t out[WPA_FRAME_MAX];
+  uint32_t ol = 0, info = 0;
+  int t = WPA_RX_NONE;
+  if (g_wpa_on)
+    t = wpa_rx(&g_wpa, f, n, out, &ol, &info);
+  if (ol)
+    wifi_data_send(w, out, ol);
+  w->wpa_m1 = g_wpa.m1;
+  w->wpa_m3 = g_wpa.m3;
+  w->wpa_g1 = g_wpa.g1;
+  w->wpa_bad_mic = g_wpa.bad_mic;
+  if (t == WPA_RX_M3)
+    g_wpa_hit = 1;
+  dcache_clean();
+}
+
+/* WMI_ADD_CIPHER_KEY in the AR6014's layout: index, cipher, usage (0
+ * pairwise, 1 group), length, RSC, the key in 32 bytes, and KEY_OP_INIT_VAL
+ * (3). */
+static void wifi_add_key(WifiShared *w, uint32_t idx, uint32_t cipher,
+                         uint32_t usage, const uint8_t *key, uint32_t klen,
+                         const uint8_t *rsc) {
+  uint8_t c[45];
+  for (uint32_t i = 0; i < sizeof(c); i++)
+    c[i] = 0;
+  c[0] = (uint8_t)idx;
+  c[1] = (uint8_t)cipher;
+  c[2] = (uint8_t)usage;
+  c[3] = (uint8_t)klen;
+  for (uint32_t i = 0; rsc && i < 8; i++)
+    c[4 + i] = rsc[i];
+  for (uint32_t i = 0; i < klen && i < 32u; i++)
+    c[12 + i] = key[i];
+  c[44] = 3;
+  int r = wifi_wmi_send(w, WMI_ADD_CIPHER_KEY_CMDID, c, sizeof(c), g_style);
+  crypto_wipe(c, sizeof(c));
+  if (r == 0)
+    w->wpa_keys |= usage ? 2u : 1u;
+}
+
+/* Whatever keys the handshake has ready. A TKIP group key goes in with its
+ * MIC halves swapped, as wpa_supplicant hands it to a driver. */
+static void wifi_wpa_keys(WifiShared *w) {
+  if (g_wpa.ptk_ready) {
+    wifi_add_key(w, 0, 4, 0, g_wpa.ptk + 32, 16, 0);
+    g_wpa.ptk_ready = 0;
+  }
+  if (g_wpa.gtk_ready) {
+    uint8_t k[32];
+    uint32_t tkip = g_wpa.group == 2u, len = tkip ? 32u : 16u;
+    if (g_wpa.gtk_len >= len) {
+      for (uint32_t i = 0; i < 16; i++)
+        k[i] = g_wpa.gtk[i];
+      for (uint32_t i = 0; tkip && i < 8; i++) {
+        k[16 + i] = g_wpa.gtk[24 + i];
+        k[24 + i] = g_wpa.gtk[16 + i];
+      }
+      wifi_add_key(w, g_wpa.gtk_idx, tkip ? 3 : 4, 1, k, len, g_wpa.gtk_rsc);
+      crypto_wipe(k, sizeof(k));
+    }
+    g_wpa.gtk_ready = 0;
+  }
+  dcache_clean();
+}
+
+enum { HS_FAIL = 0, HS_OK, HS_IE, HS_BADPASS };
+
+/* After CONNECT on a secured network: up to 8 s for message 3, then the keys.
+ * An access point that takes message 2's MIC but not its RSN element drops
+ * the station at once (hostapd: reason 2); one that cannot check the MIC, a
+ * wrong password, sends message 1 again until it gives up (reason 15). */
+static int wifi_handshake(WifiShared *w) {
+  static volatile int never;
+  wifi_conn_stage(w, WIFI_CONN_KEYS);
+  wifi_pump(w, 8000, &g_wpa_hit);
+  if (g_wpa_hit && g_link > 0) {
+    /* Message 4 has to leave before the keys go in, or it goes out
+     * encrypted with a key the access point does not have yet. */
+    wifi_pump(w, 100, &never);
+    wifi_wpa_keys(w);
+    return g_link > 0 ? HS_OK : HS_FAIL;
+  }
+  uint32_t why = w->conn_reason >> 16;
+  if (g_wpa.bad_mic || g_wpa.m1 >= 2u || why == 15u)
+    return HS_BADPASS;
+  if (g_wpa.m1 == 1u && g_link < 0)
+    return HS_IE;
+  return HS_FAIL;
+}
+
+static void wifi_join(WifiShared *w, int style, int stay) {
+  uint8_t c[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  g_style = style;
+  if (!g_want_len) {
+    wifi_conn_stage(w, WIFI_CONN_NOREQ);
+    return;
+  }
+  if (!g_tgt_ok && !g_fw_asserted)
+    wifi_wmi_scan(w, style, 0); /* once more: a beacon can be missed */
+  g_tick_us = HTC_TICK_MS * 1000u;
+  if (!g_tgt_ok) {
+    wifi_conn_stage(w, WIFI_CONN_NOTFOUND);
+    return;
+  }
+  for (uint32_t k = 0; k < 6; k++)
+    w->conn_bssid[k] = g_tgt_bssid[k];
+  w->conn_channel = g_tgt_channel;
+  w->conn_rssi = g_tgt_rssi;
+  w->conn_caps = g_tgt_caps;
+  w->sec = g_tgt_sec;
+  w->wpa_group = g_tgt_group;
+  int secured = (g_tgt_caps & 0x10u) != 0;
+  if (secured && (g_tgt_sec != WIFI_SEC_WPA2 ||
+                  (g_tgt_group != 4u && g_tgt_group != 2u))) {
+    wifi_conn_stage(w, WIFI_CONN_SECURED);
+    return;
+  }
+  if (secured && !g_have_pmk) {
+    wifi_conn_stage(w, WIFI_CONN_SECURED);
+    return;
+  }
+
+  /* Pinned twice, then plain; on a secured network each association also
+   * has to get through the handshake, and a refused RSN element moves on to
+   * its next form without using up a try. */
+  int tries = 0, variant = 0, up = 0, hs = HS_FAIL;
+  while (tries < 3 && !up && !g_fw_asserted) {
+    if (tries || variant) {
+      /* Stop whatever the firmware still tries before the next attempt. */
+      g_link = 0;
+      g_disc = 0;
+      wifi_wmi_send(w, WMI_DISCONNECT_CMDID, c, 0, style);
+      wifi_pump(w, 1000, &g_disc);
+    }
+    if (secured)
+      wifi_wpa_begin(w, (uint32_t)variant);
+    wifi_join_try(w, tries < 2, secured);
+    if (g_link == 1) {
+      /* NONE_BSS_FILTER. Otherwise every beacon of the network comes up as a
+       * BSSINFO, about ten a second, and reading each byte by byte takes
+       * most of a beacon interval: replies queue behind them. */
+      wifi_wmi_send(w, WMI_SET_BSS_FILTER_CMDID, c, 8, style);
+      if (!secured) {
+        up = 1;
+        break;
+      }
+      hs = wifi_handshake(w);
+      if (hs == HS_OK) {
+        up = 1;
+        break;
+      }
+      if (hs == HS_BADPASS)
+        break;
+      if (hs == HS_IE && variant < 2) {
+        variant++;
+        continue;
+      }
+    }
+    tries++;
+  }
+  if (!up) {
+    if (hs == HS_BADPASS || (hs == HS_IE && variant == 2)) {
+      wifi_conn_stage(w, WIFI_CONN_BADPASS);
+    } else {
+      wifi_conn_stage(w, WIFI_CONN_FAILED);
+    }
+    if (g_link == 1) {
+      g_disc = 0;
+      wifi_wmi_send(w, WMI_DISCONNECT_CMDID, c, 0, style);
+      wifi_pump(w, 1000, &g_disc);
+    }
+    if (g_wpa_on)
+      wpa_end(&g_wpa);
+    g_wpa_on = 0;
+    return;
+  }
+  wifi_conn_stage(w, WIFI_CONN_LINKED);
+
+  if (w->svc_status[0] == 0u && w->svc_ep[0])
+    wifi_net_run(w);
+  else
+    wifi_conn_stage(w, WIFI_CONN_NODHCP); /* no data service */
+
+  if (stay && g_link == 1 && g_net.ip && g_net.have_gw_mac) {
+    g_session = 1;
+    w->session = 1;
+    dcache_clean();
+    return;
+  }
+  /* Leave, so the access point does not keep a station nobody serves. */
+  if (g_link == 1) {
+    g_disc = 0;
+    wifi_wmi_send(w, WMI_DISCONNECT_CMDID, c, 0, style);
+    wifi_pump(w, 1000, &g_disc);
+  }
+  g_net_on = 0;
+  if (g_wpa_on)
+    wpa_end(&g_wpa);
+  g_wpa_on = 0;
+}
+
+/* The boot options of the command in progress. */
+static uint32_t g_opts;
+
+#define WMI_DATA_BE_SVC 0x0101u /* then BK, VI, VO */
+
+/* The four WMI data services, which NWM, ath6kl and Octoblimp's port all
+ * connect before setup complete, with ath6kl's connection flags: reduce
+ * credit dribble, threshold one half. */
+static void wifi_htc_connect_data(WifiShared *w, int style) {
+  for (uint32_t i = 0; i < 4; i++) {
+    uint8_t req[8], msg[64];
+    uint32_t svc = WMI_DATA_BE_SVC + i;
+    req[0] = (uint8_t)HTC_MSG_CONNECT_SERVICE_ID;
+    req[1] = 0;
+    req[2] = (uint8_t)svc;
+    req[3] = (uint8_t)(svc >> 8);
+    req[4] = 0x05; /* HTC_CONNECT_FLAGS_REDUCE_CREDIT_DRIBBLE | ONE_HALF */
+    req[5] = 0;
+    req[6] = 0;
+    req[7] = 0;
+    w->svc_status[i] = 0xFF;
+    w->svc_ep[i] = 0;
+    if (wifi_htc_send(w, HTC_EP0, 0, req, 8, style) == 0) {
+      uint32_t len = wifi_htc_recv(w, msg, sizeof(msg), HTC_TICKS(2000));
+      if (len >= 8u && msg[0] == HTC_MSG_CONNECT_RESP_ID && msg[1] == 0) {
+        w->svc_status[i] = msg[4];
+        w->svc_ep[i] = msg[5];
+      }
+    }
+    dcache_clean();
+  }
 }
 
 /* Connects the WMI control service, sends setup complete and reads WMI_READY,
@@ -1060,7 +2116,7 @@ static void wifi_htc_connect(WifiShared *w) {
   req[5] = 0;
   req[6] = 0;
   req[7] = 0;
-  w->htc_stage = WIFI_HTC_CONNECT;
+  wifi_stage(w, WIFI_HTC_CONNECT);
   dcache_clean();
 
   /* Try each write style until one is answered. The response is message id,
@@ -1075,15 +2131,14 @@ static void wifi_htc_connect(WifiShared *w) {
       wifi_bus_width(w, 1);
     for (uint32_t i = 0; i < sizeof(msg); i++)
       msg[i] = 0;
-    refused = wifi_htc_send(w, HTC_EP0, req, 8, style) != 0;
+    int sent = wifi_htc_send(w, HTC_EP0, 0, req, 8, style);
+    refused = sent != 0;
     if (refused)
       w->htc_err |= 1u << style;
     len = wifi_htc_recv(w, msg, sizeof(msg),
                         (style == HTC_W_BYTE || style == HTC_W_BYTE4)
                             ? HTC_TICKS(2000)
                             : HTC_TICKS(500));
-    w->htc_msg0 = (uint32_t)msg[0] | ((uint32_t)msg[1] << 8) |
-                  ((uint32_t)msg[2] << 16) | ((uint32_t)msg[3] << 24);
     w->htc_try = (uint32_t)(style + 1);
 
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x400));
@@ -1116,15 +2171,18 @@ static void wifi_htc_connect(WifiShared *w) {
     dcache_clean();
     return;
   }
-  w->htc_stage = WIFI_HTC_CONNECTED;
+  wifi_stage(w, WIFI_HTC_CONNECTED);
   dcache_clean();
+
+  if (!(g_opts & WIFI_OPT_CTRL_ONLY))
+    wifi_htc_connect_data(w, mode);
 
   /* HTC_SETUP_COMPLETE hands the mailbox from the control channel to the
    * endpoints, after which the firmware starts WMI. */
   req[0] = (uint8_t)HTC_MSG_SETUP_COMPLETE_ID;
   req[1] = 0;
-  wifi_htc_send(w, HTC_EP0, req, 2, mode);
-  w->htc_stage = WIFI_HTC_SETUP;
+  wifi_htc_send(w, HTC_EP0, 0, req, 2, mode);
+  wifi_stage(w, WIFI_HTC_SETUP);
   dcache_clean();
 
   /* WMI_READY with the AR6014's short header: event id, MAC, PHY capability, a
@@ -1132,13 +2190,17 @@ static void wifi_htc_connect(WifiShared *w) {
   len = wifi_htc_recv(w, msg, sizeof(msg), HTC_TICKS(2000));
   if (len >= 2u) {
     w->wmi_event = (uint32_t)msg[0] | ((uint32_t)msg[1] << 8);
-    w->htc_stage = WIFI_HTC_WMI;
+    wifi_stage(w, WIFI_HTC_WMI);
     if (w->wmi_event == WMI_READY_EVENTID && len >= 14u) {
       w->wmi_mac0 = (uint32_t)msg[2] | ((uint32_t)msg[3] << 8) |
                     ((uint32_t)msg[4] << 16) | ((uint32_t)msg[5] << 24);
       w->wmi_mac1 = (uint32_t)msg[6] | ((uint32_t)msg[7] << 8);
-      w->wmi_swver = (uint32_t)msg[10] | ((uint32_t)msg[11] << 8) |
-                     ((uint32_t)msg[12] << 16) | ((uint32_t)msg[13] << 24);
+      /* Control messages are not counted against the credits: ath6kl's
+       * HTC gives them all to the service endpoints. */
+      w->htc_credit = w->htc_credits;
+      wifi_wmi_scan(w, mode, (g_opts & WIFI_OPT_PASSIVE) != 0);
+      if (g_opts & WIFI_OPT_CONNECT)
+        wifi_join(w, mode, (g_opts & WIFI_OPT_STAY) != 0);
     }
   }
 
@@ -1151,43 +2213,28 @@ static void wifi_boot_firmware(WifiShared *w, uint32_t opts) {
   uint32_t old_sleep = 0, old_scratch = 0;
   dcache_clean_inval(); /* pull the ARM9-staged blobs + header from RAM */
   if (fw->magic != WIFI_FW_MAGIC) {
-    w->boot_step = WIFI_BOOT_NOFW;
+    wifi_step(w, WIFI_BOOT_NOFW);
     dcache_clean();
     return;
   }
   if ((fw->main_type != WIFI_FW_TYPE1 && fw->main_type != WIFI_FW_TYPE4) ||
       fw->main_len == 0) {
-    w->boot_step = WIFI_BOOT_NOFW;
+    wifi_step(w, WIFI_BOOT_NOFW);
     dcache_clean();
     return;
   }
   w->fw_type = fw->main_type;
-
-  {
-    const uint8_t *sd = (const uint8_t *)WIFI_FW_STUBDATA;
-    const uint8_t *sc = (const uint8_t *)WIFI_FW_STUBCODE;
-    const uint8_t *mn = (const uint8_t *)WIFI_FW_MAIN;
-    uint32_t sum = fw->stubdata_len + fw->stubcode_len + fw->main_len;
-    for (uint32_t i = 0; i < fw->stubdata_len; i++)
-      sum = (sum << 1 | sum >> 31) + sd[i];
-    for (uint32_t i = 0; i < fw->stubcode_len; i++)
-      sum = (sum << 1 | sum >> 31) + sc[i];
-    for (uint32_t i = 0; i < fw->main_len; i++)
-      sum = (sum << 1 | sum >> 31) + mn[i];
-    w->fw_sum = sum;
-  }
-  w->clkcnt = MMIO32(0x10141300u); /* CFG11_MPCORE_CLKCNT: ARM11 clock mode */
   dcache_clean();
 
   wifi_bmi_target_info(w);
   if (w->bmi_ver != AR6014_VERSION || w->bmi_type != AR6014_TYPE) {
-    w->boot_step = WIFI_BOOT_BADVER;
+    wifi_step(w, WIFI_BOOT_BADVER);
     dcache_clean();
     return;
   }
 
   /* 1. HTC protocol version into host interest, then the clock/sleep setup. */
-  w->boot_step = WIFI_BOOT_HI;
+  wifi_step(w, WIFI_BOOT_HI);
   dcache_clean();
   wifi_bmi_write_word(w, AR6014_HI, HTC_PROTOCOL_VERSION);
   old_scratch = wifi_bmi_read_soc(w, 0x000180C0u);
@@ -1207,7 +2254,7 @@ static void wifi_boot_firmware(WifiShared *w, uint32_t opts) {
   }
 
   /* 2. Upload and run the NWM stub. */
-  w->boot_step = WIFI_BOOT_STUB;
+  wifi_step(w, WIFI_BOOT_STUB);
   dcache_clean();
   wifi_bmi_write_mem(w, AR6014_PARTD_DST, (const uint8_t *)WIFI_FW_STUBDATA,
                      fw->stubdata_len);
@@ -1230,16 +2277,20 @@ static void wifi_boot_firmware(WifiShared *w, uint32_t opts) {
   }
 
   /* 3. Main firmware, then (unless NO_POST_LZ) stub data and database. */
-  w->boot_step = WIFI_BOOT_MAIN;
+  wifi_step(w, WIFI_BOOT_MAIN);
   dcache_clean();
   wifi_bmi_fast_download(w, AR6014_PARTA_DST, (const uint8_t *)WIFI_FW_MAIN,
                          fw->main_len);
   if (!(opts & WIFI_OPT_NO_POST_LZ)) {
-    /* stub_data goes back over the start of what the LZ stream just wrote:
-     * both land at 0x524C00. The Linux port writes neither this nor the
-     * database, and says the stub reads the calibration EEPROM itself. */
-    wifi_bmi_write_mem(w, AR6014_PARTD_DST, (const uint8_t *)WIFI_FW_STUBDATA,
-                       fw->stubdata_len);
+    /* DATABASE.BIN is an AR6K DataSet list with a BDIFF patch stream for the
+     * firmware, its pointers relocated for 0x53FE18 (Octoblimp's analysis).
+     * The firmware applies it only once hi_dset_list_head (HI + 0x18) points
+     * at it; without that it fails and the chip stops answering right after
+     * HTC_READY. stub_data goes back over the start of what the LZ stream
+     * wrote: both land at 0x524C00. */
+    if (!(opts & WIFI_OPT_NO_STUB2))
+      wifi_bmi_write_mem(w, AR6014_PARTD_DST,
+                         (const uint8_t *)WIFI_FW_STUBDATA, fw->stubdata_len);
     wifi_bmi_write_mem(w, AR6014_PARTB_DST, (const uint8_t *)WIFI_FW_DATABASE,
                        fw->database_len);
     wifi_bmi_write_word(w, AR6014_HI + 0x18u, AR6014_PARTB_DST);
@@ -1267,7 +2318,7 @@ static void wifi_boot_firmware(WifiShared *w, uint32_t opts) {
   /* 4. Hand over, then watch for HTC_READY at once: the AR6014 gives up if the
    * host answers late. */
   wifi_bmi_done(w);
-  w->boot_step = WIFI_BOOT_DONE;
+  wifi_step(w, WIFI_BOOT_DONE);
   dcache_clean();
   wifi_htc_wait_ready(w);
   dcache_clean();
@@ -1279,7 +2330,12 @@ static void wifi_boot_firmware(WifiShared *w, uint32_t opts) {
 
 static void wifi_boot_run(uint32_t opts) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
+  wifi_timer_start();
   w->boot_opts = opts;
+  g_opts = opts;
+  g_fw_asserted = 0;
+  wifi_wmi_reset(w);
+  wifi_join_reset(opts);
   g_bmi_abort = 0;
   w->bmi_polls = 0;
   w->bmi_extra = 0;
@@ -1309,11 +2365,9 @@ static void wifi_boot_run(uint32_t opts) {
   w->wmi_event = 0;
   w->wmi_mac0 = 0;
   w->wmi_mac1 = 0;
-  w->wmi_swver = 0;
   w->htc_regs2 = 0;
   w->htc_look2 = 0;
   w->htc_drained = 0;
-  w->htc_msg0 = 0;
   w->htc_try = 0;
   w->htc_err = 0;
   w->boot_tries = 1;
@@ -1343,5 +2397,194 @@ static void wifi_boot_run(uint32_t opts) {
 }
 
 
+/* Until a command writes it, WifiShared holds whatever FCRAM held. */
+void wifi11_init(void) {
+  volatile uint8_t *p = (volatile uint8_t *)WIFI_SHARED_ADDR;
+  for (uint32_t i = 0; i < sizeof(WifiShared); i++)
+    p[i] = 0;
+  dcache_clean();
+}
+
+/* The MAC a frame to `ip` goes to: the router's for anything off our subnet,
+ * else the host's own, asked for with ARP. 0 if there is none. */
+static int wifi_mac_for(WifiShared *w, uint32_t ip, uint8_t *mac,
+                        uint32_t ms) {
+  static uint8_t f[NET_FRAME_MAX];
+  NetState *n = &g_net;
+  const uint8_t *src = 0;
+  if (ip == n->gw || !n->mask || ((ip ^ n->ip) & n->mask)) {
+    if (n->have_gw_mac)
+      src = n->gw_mac;
+  } else {
+    if (n->arp_ip != ip) {
+      n->arp_ip = ip;
+      n->have_arp = 0;
+    }
+    for (uint32_t k = 0; k < 3u && !n->have_arp && g_link > 0; k++) {
+      g_net_want = NET_BIT(NET_RX_ARP_REPLY);
+      g_net_hit = 0;
+      wifi_data_send(w, f, net_arp_request(n, f, ip));
+      wifi_pump(w, ms < 1000u ? ms : 1000u, &g_net_hit);
+    }
+    g_net_want = 0;
+    if (n->have_arp)
+      src = n->arp_mac;
+  }
+  if (!src)
+    return 0;
+  for (uint32_t k = 0; k < 6; k++)
+    mac[k] = src[k];
+  return 1;
+}
+
+static void wifi_op_dns(WifiShared *w, WifiNetIo *io, uint32_t ms) {
+  static char name[256];
+  static uint8_t f[NET_FRAME_MAX];
+  NetState *n = &g_net;
+  uint8_t mac[6];
+  uint32_t i = 0, server = n->dns ? n->dns : n->gw;
+  for (; i < sizeof(name) - 1u && io->name[i]; i++)
+    name[i] = io->name[i];
+  name[i] = '\0';
+  if (!wifi_mac_for(w, server, mac, ms)) {
+    io->status = WIFI_NETS_NOHOST;
+    return;
+  }
+  io->status = WIFI_NETS_TIMEOUT;
+  for (uint32_t k = 0; k < 3u && g_link > 0; k++) {
+    uint32_t r = wifi_now();
+    n->dns_id = (uint16_t)(r ^ (r >> 16));
+    n->dns_port = (uint16_t)(0xC000u | (r & 0x3FFFu));
+    uint32_t len = net_dns(n, f, server, mac, name);
+    if (!len) {
+      io->status = WIFI_NETS_BADNAME;
+      break;
+    }
+    g_net_want = NET_BIT(NET_RX_DNS);
+    g_net_hit = 0;
+    g_dns_ip = 0;
+    if (wifi_data_send(w, f, len) != 0) {
+      io->status = WIFI_NETS_NOSEND;
+      continue;
+    }
+    wifi_pump(w, ms, &g_net_hit);
+    if (g_net_hit) {
+      io->dns_rcode = n->dns_rcode;
+      io->ip = g_dns_ip;
+      io->status = g_dns_ip               ? WIFI_NETS_OK
+                   : n->dns_rcode == 3u ? WIFI_NETS_NONAME
+                                         : WIFI_NETS_DNSFAIL;
+      break;
+    }
+  }
+  g_net_want = 0;
+  n->dns_port = 0;
+}
+
+static void wifi_op_ping(WifiShared *w, WifiNetIo *io, uint32_t ms) {
+  static uint8_t f[NET_FRAME_MAX];
+  NetState *n = &g_net;
+  uint8_t mac[6];
+  uint32_t dst = io->ip;
+  if (dst == n->ip) { /* ourselves: as the loopback would answer */
+    io->status = WIFI_NETS_OK;
+    io->from = dst;
+    io->ttl = 64;
+    io->bytes = 8u + NET_PING_DATA;
+    return;
+  }
+  if (!wifi_mac_for(w, dst, mac, ms)) {
+    io->status = WIFI_NETS_NOHOST;
+    return;
+  }
+  g_ping_seq = io->seq & 0xFFFFu;
+  g_ping_got = 0;
+  g_net_want = NET_BIT(NET_RX_PING_REPLY) | NET_BIT(NET_RX_PING_ERR);
+  g_net_hit = 0;
+  uint32_t len = net_ping(n, f, dst, mac, (uint16_t)g_ping_seq);
+  g_ping_t = wifi_now();
+  if (wifi_data_send(w, f, len) != 0) {
+    io->status = WIFI_NETS_NOSEND;
+    g_net_want = 0;
+    return;
+  }
+  wifi_pump(w, ms, &g_net_hit);
+  g_net_want = 0;
+  if (!g_net_hit) {
+    io->status = g_link > 0 ? WIFI_NETS_TIMEOUT : WIFI_NETS_NOLINK;
+    return;
+  }
+  io->rtt_us = g_ping_rtt;
+  io->ttl = n->reply_ttl;
+  io->bytes = n->reply_len;
+  io->from = n->reply_from;
+  if (g_ping_got == NET_RX_PING_ERR) {
+    io->status = WIFI_NETS_ICMPERR;
+    io->icmp = g_ping_err;
+  } else {
+    io->status = WIFI_NETS_OK;
+  }
+}
+
+/* One AUDIO_CMD_WIFI_NET operation on the session a WIFI_OPT_STAY join left.
+ * Nothing reads the chip between commands, so what queued up meanwhile is
+ * taken first: a DISCONNECT there ends the session. */
+static void wifi_net_op(uint32_t op) {
+  WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
+  WifiNetIo *io = (WifiNetIo *)WIFI_NET_ADDR;
+  wifi_timer_start();
+  uint32_t ms = io->timeout_ms;
+  ms = ms < 100u ? 2000u : ms > 10000u ? 10000u : ms;
+  io->status = WIFI_NETS_NOLINK;
+  io->rtt_us = 0;
+  io->ttl = 0;
+  io->bytes = 0;
+  io->from = 0;
+  io->icmp = 0;
+  io->dns_rcode = 0;
+  if (g_session && !g_fw_asserted) {
+    g_tick_us = HTC_TICK_MS * 1000u;
+    for (int i = 0; i < 64 && g_link > 0; i++) {
+      wifi_wmi_events(w, 0, 1, 1);
+      if (!g_htc_got)
+        break;
+    }
+    if (g_wpa_on && g_link > 0)
+      wifi_wpa_keys(w); /* a group rekey that came meanwhile */
+    if (g_link <= 0 || g_fw_asserted) {
+      g_session = 0;
+      g_net_on = 0;
+    } else if (op == WIFI_NETOP_STATUS) {
+      io->status = WIFI_NETS_OK;
+    } else if (op == WIFI_NETOP_DNS) {
+      wifi_op_dns(w, io, ms);
+    } else if (op == WIFI_NETOP_PING) {
+      wifi_op_ping(w, io, ms);
+    } else if (op == WIFI_NETOP_LEAVE) {
+      uint8_t c[2] = {0, 0};
+      g_disc = 0;
+      wifi_wmi_send(w, WMI_DISCONNECT_CMDID, c, 0, g_style);
+      wifi_pump(w, 1000, &g_disc);
+      g_session = 0;
+      g_net_on = 0;
+      io->status = WIFI_NETS_OK;
+    }
+    if (g_wpa_on && g_link > 0)
+      wifi_wpa_keys(w);
+    if (g_link <= 0) {
+      g_session = 0;
+      g_net_on = 0;
+    }
+    if (!g_session && g_wpa_on) {
+      wpa_end(&g_wpa);
+      g_wpa_on = 0;
+    }
+  }
+  w->session = (uint32_t)g_session;
+  dcache_clean();
+  wifi_finish(w);
+}
+
 void wifi11_probe(void) { wifi_probe_run(); }
 void wifi11_boot(uint32_t opts) { wifi_boot_run(opts); }
+void wifi11_net(uint32_t op) { wifi_net_op(op); }

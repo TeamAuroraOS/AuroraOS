@@ -563,12 +563,25 @@ static const char *kb_rows[4] = {
 };
 static const char *kb_special[4] = {"Caps", "Space", "Del", "OK"};
 
-/* KB_FILENAME adds the punctuation file names need to the last row. */
+/* KB_PASSWORD's third Caps state: with the letters and digits, all of
+ * printable ASCII. */
+static const char *kb_sym_rows[4] = {
+    "!@#$%^&*()",
+    "-_=+[]{}\\|",
+    ";:'\",.<>/?",
+    "`~",
+};
+
+/* KB_FILENAME and KB_PASSWORD add the punctuation file names need to the last
+ * row. */
 static int kb_mode;
 static const char *kb_hint;
+static int kb_layer; /* the caps state the rows are drawn for */
 
 static const char *kb_row(int row) {
-  return (row == 3 && kb_mode == KB_FILENAME) ? "zxcvbnm-_." : kb_rows[row];
+  if (kb_mode == KB_PASSWORD && kb_layer == 2)
+    return kb_sym_rows[row];
+  return (row == 3 && kb_mode != KB_NAME) ? "zxcvbnm-_." : kb_rows[row];
 }
 
 static int kb_row_len(int row) {
@@ -578,7 +591,7 @@ static int kb_row_len(int row) {
 }
 
 static char kb_apply_caps(char c, int caps) {
-  if (caps && c >= 'a' && c <= 'z')
+  if (caps == 1 && c >= 'a' && c <= 'z')
     return (char)(c - 'a' + 'A');
   return c;
 }
@@ -630,17 +643,20 @@ static void kb_key(int r, int c, int row, int col, int caps, Color accent) {
   }
 
   static const int aw[4] = {56, 96, 56, 56};
+  static const char *layers[3] = {"abc", "ABC", "#+="};
   int ay = KB_Y0 + 4 * KB_YSTEP, ax = 20;
   for (int i = 0; i < c; i++)
     ax += aw[i] + 8;
   Color face = (c == 0 && caps) ? accent : COLOR_HM_SLOT;
+  const char *label = (c == 0 && kb_mode == KB_PASSWORD) ? layers[caps]
+                                                         : kb_special[c];
   patch_corners(ax - 2, ay - 2, aw[c] + 4, KB_KH + 4, 6);
   draw_filled_round_rect(VRAM_BOT_A, ax - 2, ay - 2, aw[c] + 4, KB_KH + 4, 6,
                          SH_BOT, on ? accent : COLOR_HM_BG);
   draw_filled_round_rect(VRAM_BOT_A, ax, ay, aw[c], KB_KH, 5, SH_BOT, face);
-  ui_text(VRAM_BOT_A, ax + (aw[c] - ui_tw(&ui_small, kb_special[c])) / 2,
-          ay + (KB_KH - ui_th(&ui_small)) / 2, SH_BOT, kb_special[c],
-          COLOR_WHITE, face, &ui_small);
+  ui_text(VRAM_BOT_A, ax + (aw[c] - ui_tw(&ui_small, label)) / 2,
+          ay + (KB_KH - ui_th(&ui_small)) / 2, SH_BOT, label, COLOR_WHITE,
+          face, &ui_small);
 }
 
 static void kb_all_keys(int row, int col, int caps, Color accent) {
@@ -667,6 +683,10 @@ static void kb_update(const char *name, int orow, int ocol, int row, int col,
   if (name_changed)
     kb_field(name);
   if (caps_changed) {
+    /* The symbol layer's rows are another length: clear the old keys. */
+    if (kb_mode == KB_PASSWORD)
+      draw_filled_rect(VRAM_BOT_A, 0, KB_Y0 - 2, BOT_SCREEN_WIDTH,
+                       4 * KB_YSTEP + 2, SH_BOT, COLOR_HM_BG);
     kb_all_keys(row, col, caps, accent);
   } else {
     kb_key(orow, ocol, row, col, caps, accent);
@@ -687,8 +707,10 @@ int keyboard_edit(char *name, int size, int mode, const char *hint,
                   Color accent) {
   int row = 1, col = 0, caps = 0;
   int len = (int)slen(name);
+  int states = mode == KB_PASSWORD ? 3 : 2;
   kb_mode = mode;
   kb_hint = hint;
+  kb_layer = 0;
   kb_draw(name, row, col, caps, accent);
   while (1) {
     u32 k = get_keys_down();
@@ -762,7 +784,7 @@ int keyboard_edit(char *name, int size, int mode, const char *hint,
       } else {
         switch (col) {
           case 0:
-            caps = !caps;
+            caps = (caps + 1) % states;
             break;
           case 1:
             typed = ' ';
@@ -785,8 +807,13 @@ int keyboard_edit(char *name, int size, int mode, const char *hint,
     if (k & BUTTON_SELECT)
       return 0;
     if (k & BUTTON_L) {
-      caps = !caps;
+      caps = (caps + 1) % states;
       commit = 1;
+    }
+    if (caps != ocaps) {
+      kb_layer = caps;
+      if (row < 4 && col >= kb_row_len(row))
+        col = kb_row_len(row) - 1;
     }
 
     if (typed && len < size - 1) {

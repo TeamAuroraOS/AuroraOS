@@ -2,15 +2,28 @@
 #include "diskio.h"
 #include "sdmmc.h"
 
+/* Drive 0 is the SD card. Drive 1 is the decrypted CTRNAND, there only once
+ * the OS has set g_nand_read, and never written. */
+int (*g_nand_read)(u32 sector, u32 count, u8 *out);
+u32 g_nand_sectors;
+
 static DSTATUS sd_status = STA_NOINIT;
 
+static DSTATUS nand_status(void) {
+  return g_nand_read ? STA_PROTECT : (STA_NOINIT | STA_NODISK);
+}
+
 DSTATUS disk_status(BYTE pdrv) {
+  if (pdrv == 1)
+    return nand_status();
   if (pdrv != 0)
     return STA_NOINIT;
   return sd_status;
 }
 
 DSTATUS disk_initialize(BYTE pdrv) {
+  if (pdrv == 1)
+    return nand_status();
   if (pdrv != 0)
     return STA_NOINIT;
 
@@ -23,6 +36,12 @@ DSTATUS disk_initialize(BYTE pdrv) {
 }
 
 DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
+  if (pdrv == 1) {
+    if (!g_nand_read)
+      return RES_NOTRDY;
+    return g_nand_read((u32)sector, (u32)count, buff) == 0 ? RES_OK
+                                                            : RES_ERROR;
+  }
   if (pdrv != 0)
     return RES_PARERR;
   if (sd_status & STA_NOINIT)
@@ -35,6 +54,8 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count) {
 }
 
 DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
+  if (pdrv == 1)
+    return RES_WRPRT;
   if (pdrv != 0)
     return RES_PARERR;
   if (sd_status & STA_NOINIT)
@@ -46,7 +67,7 @@ DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count) {
 }
 
 DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
-  if (pdrv != 0)
+  if (pdrv > 1)
     return RES_PARERR;
 
   switch (cmd) {
@@ -56,7 +77,8 @@ DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff) {
       *(WORD *)buff = 512;
       return RES_OK;
     case GET_SECTOR_COUNT:
-      *(LBA_t *)buff = (LBA_t)sdmmc_sdcard_size();
+      *(LBA_t *)buff =
+          (LBA_t)(pdrv == 1 ? g_nand_sectors : sdmmc_sdcard_size());
       return RES_OK;
     case GET_BLOCK_SIZE:
       *(DWORD *)buff = 1; /* erase block size unknown -> 1 */
