@@ -6,6 +6,7 @@
 #include "ff.h"
 #include "font.h"
 #include "keyboard.h"
+#include "fwdump.h"
 #include "lang.h"
 #include "power.h"
 #include "touch.h"
@@ -27,17 +28,18 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
      "Configura una conexi\u00F3n de red inal\u00E1mbrica",
      "Configurez une connexion r\u00E9seau sans fil"},
     /* STR_NET_L2       */
-    {"online features such as the Aurora Store.",
-     "para usar funciones como la Aurora Store.",
-     "pour les fonctions en ligne (Aurora Store)."},
-    /* STR_WIFI_UNAVAIL */
-    {"Wi-Fi is not available yet.",
-     "El Wi-Fi a\u00FAn no est\u00E1 disponible.",
-     "Le Wi-Fi n'est pas encore disponible."},
+    {"online features such as aShop.",
+     "para usar funciones como aShop.",
+     "pour les fonctions en ligne (aShop)."},
+    /* STR_NET_FW       */
+    {"Aurora will copy the Wi-Fi firmware first.",
+     "Aurora copiar\u00E1 antes el firmware Wi-Fi.",
+     "Aurora copiera d'abord le firmware Wi-Fi."},
     /* STR_SKIP         */ {"Skip", "Omitir", "Passer"},
     /* STR_NET_HINT     */
-    {"A / START: Skip    B: Back", "A / START: Omitir   B: Atr\u00E1s",
-     "A / START: Passer   B: Retour"},
+    {"A: Select   START: Next   B: Back",
+     "A: Elegir   START: Siguiente   B: Atr\u00E1s",
+     "A : Choisir   START : Suivant   B : Retour"},
     /* STR_USER_L1      */
     {"Enter your details so Aurora knows what to",
      "Introduce tus datos para que Aurora sepa",
@@ -68,7 +70,7 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_PRESS_A_START*/
     {"Press (A) to start using Aurora!",
      "\u00A1Pulsa (A) para empezar con Aurora!",
-     "Appuyez sur (A) pour d\u00E9marrer Aurora!"},
+     "Appuyez sur (A) pour d\u00E9marrer Aurora !"},
     /* STR_B_BACK       */ {"B: Back", "B: Atr\u00E1s", "B: Retour"},
     /* STR_SETTINGS     */ {"Settings", "Ajustes", "R\u00E9glages"},
     /* STR_WIFI         */ {"Wi-Fi", "Wi-Fi", "Wi-Fi"},
@@ -76,7 +78,7 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     {"Accent Color", "Color de acento", "Couleur d'accent"},
     /* STR_BRIGHTNESS   */ {"Brightness", "Brillo", "Luminosit\u00E9"},
     /* STR_ABOUT        */ {"About", "Acerca de", "\u00C0 propos"},
-    /* STR_OFF          */ {"Off", "No", "Non"},
+    /* STR_OFF          */ {"Off", "Desactivado", "D\u00E9sactiv\u00E9"},
     /* STR_PICK_ACCENT  */
     {"Pick an accent colour", "Elige un color", "Choisir une couleur"},
     /* STR_A_APPLY_B_BACK*/
@@ -92,8 +94,8 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_STOPPED      */ {"Stopped", "Detenido", "Arr\u00EAt\u00E9"},
     /* STR_DEBUG_CRASH  */
     {"Force Debug Crash", "Forzar Fallo", "Forcer un Crash"},
-    /* STR_WIFI_TEST    */ {"Wi-Fi Test", "Wi-Fi", "Wi-Fi"},
-    /* STR_GPU_TEST     */ {"GPU Test", "GPU", "GPU"},
+    /* STR_WIFI_TEST    */ {"Wi-Fi Test", "Prueba de Wi-Fi", "Test Wi-Fi"},
+    /* STR_GPU_TEST     */ {"GPU Test", "Prueba de GPU", "Test GPU"},
     /* STR_VERSION      */ {"Version", "Versi\u00F3n", "Version"},
     /* STR_CONSOLE      */ {"Console", "Consola", "Console"},
     /* STR_BATTERY      */ {"Battery", "Bater\u00EDa", "Batterie"},
@@ -206,6 +208,657 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     {"A folder can't go inside itself",
      "Una carpeta no puede ir dentro de s\u00ED misma",
      "Un dossier ne peut pas aller en lui-m\u00EAme"},
+    /* STR_NET_SETUP    */
+    {"Set up Wi-Fi",
+     "Configurar Wi-Fi",
+     "Configurer le Wi-Fi"},
+    /* STR_NET_READY    */
+    {"Pick your network and connect.",
+     "Elige tu red y con\u00E9ctate.",
+     "Choisissez votre r\u00E9seau."},
+    /* STR_NET_SAVED    */ {"Network: ", "Red: ", "R\u00E9seau : "},
+    /* STR_YES          */ {"Yes", "S\u00ED", "Oui"},
+    /* STR_NOT_NOW      */ {"Not now", "Ahora no", "Plus tard"},
+    /* STR_OK           */ {"OK", "Aceptar", "OK"},
+    /* STR_WF_SAVED_NET */
+    {"Saved network: ",
+     "Red guardada: ",
+     "R\u00E9seau enregistr\u00E9 : "},
+    /* STR_WF_WITH_PASS */
+    {"with a password",
+     "con contrase\u00F1a",
+     "avec mot de passe"},
+    /* STR_WF_OPEN      */
+    {"open, no password",
+     "abierta, sin contrase\u00F1a",
+     "ouvert, sans mot de passe"},
+    /* STR_WF_PICK_SAVED*/
+    {"Pick it to connect, or search for others",
+     "El\u00EDgela para conectarte o busca otras",
+     "Choisissez-le, ou cherchez d'autres r\u00E9seaux"},
+    /* STR_WF_NO_SAVED  */
+    {"No network saved",
+     "No hay ninguna red guardada",
+     "Aucun r\u00E9seau enregistr\u00E9"},
+    /* STR_WF_SEARCH_PICK*/
+    {"Search, then pick your network",
+     "Busca y elige tu red",
+     "Cherchez, puis choisissez votre r\u00E9seau"},
+    /* STR_WF_HINT      */
+    {"A: Select   Y: Forget saved   B: Back",
+     "A: Elegir   Y: Olvidar la guardada   B: Atr\u00E1s",
+     "A : Choisir   Y : Oublier   B : Retour"},
+    /* STR_WF_SEARCH_AGAIN*/
+    {"Search again",
+     "Buscar de nuevo",
+     "Chercher \u00E0 nouveau"},
+    /* STR_WF_SEARCH    */
+    {"Search for networks",
+     "Buscar redes",
+     "Chercher des r\u00E9seaux"},
+    /* STR_WF_SAVED_TAG */ {"Saved", "Guardada", "Enregistr\u00E9"},
+    /* STR_WF_NONE_FOUND*/
+    {"No networks found",
+     "No se encontraron redes",
+     "Aucun r\u00E9seau trouv\u00E9"},
+    /* STR_WF_NONE_YET  */
+    {"No networks listed yet",
+     "A\u00FAn no hay redes en la lista",
+     "Aucun r\u00E9seau pour l'instant"},
+    /* STR_WF_P_CHIP    */
+    {"Starting the Wi-Fi chip",
+     "Iniciando el chip Wi-Fi",
+     "D\u00E9marrage de la puce Wi-Fi"},
+    /* STR_WF_P_FW      */
+    {"Starting its firmware",
+     "Iniciando su firmware",
+     "D\u00E9marrage de son firmware"},
+    /* STR_WF_P_LOOK    */
+    {"Looking for networks",
+     "Buscando redes",
+     "Recherche des r\u00E9seaux"},
+    /* STR_WF_P_JOIN    */
+    {"Joining the network",
+     "Conectando a la red",
+     "Connexion au r\u00E9seau"},
+    /* STR_WF_P_PASS    */
+    {"Checking the password",
+     "Comprobando la contrase\u00F1a",
+     "V\u00E9rification du mot de passe"},
+    /* STR_WF_P_ADDR    */
+    {"Asking for an address",
+     "Pidiendo una direcci\u00F3n",
+     "Demande d'une adresse"},
+    /* STR_WF_P_ROUTER  */
+    {"Finding the router",
+     "Buscando el router",
+     "Recherche du routeur"},
+    /* STR_WF_P_PING    */
+    {"Pinging the router",
+     "Haciendo ping al router",
+     "Ping du routeur"},
+    /* STR_WF_P_FINISH  */ {"Finishing", "Terminando", "Finalisation"},
+    /* STR_WF_STILL     */
+    {"Wi-Fi is still finishing",
+     "El Wi-Fi a\u00FAn est\u00E1 terminando",
+     "Le Wi-Fi n'a pas encore fini"},
+    /* STR_WF_LEAVE     */
+    {"B: Leave Wi-Fi settings",
+     "B: Salir de los ajustes de Wi-Fi",
+     "B : Quitter les r\u00E9glages Wi-Fi"},
+    /* STR_WF_CONNECTING*/
+    {"Connecting to ",
+     "Conectando a ",
+     "Connexion \u00E0 "},
+    /* STR_WF_SEARCHING */ {"Searching", "Buscando", "Recherche"},
+    /* STR_WF_WAIT      */
+    {"Please wait   B twice: Stop waiting",
+     "Espera   B dos veces: dejar de esperar",
+     "Patientez   B deux fois : ne plus attendre"},
+    /* STR_WF_R1        */
+    {"network not found",
+     "red no encontrada",
+     "r\u00E9seau introuvable"},
+    /* STR_WF_R2        */
+    {"link lost",
+     "conexi\u00F3n perdida",
+     "liaison perdue"},
+    /* STR_WF_R4        */
+    {"the hotspot dropped the 3DS",
+     "el punto de acceso desconect\u00F3 la 3DS",
+     "le point d'acc\u00E8s a d\u00E9connect\u00E9 la 3DS"},
+    /* STR_WF_R5        */
+    {"authentication failed",
+     "fall\u00F3 la autenticaci\u00F3n",
+     "\u00E9chec de l'authentification"},
+    /* STR_WF_R6        */
+    {"association failed",
+     "fall\u00F3 la asociaci\u00F3n",
+     "\u00E9chec de l'association"},
+    /* STR_WF_R7        */
+    {"no resources",
+     "sin recursos",
+     "pas de ressources"},
+    /* STR_WF_FW_STOPPED*/
+    {"The Wi-Fi firmware stopped",
+     "El firmware Wi-Fi se detuvo",
+     "Le firmware Wi-Fi s'est arr\u00EAt\u00E9"},
+    /* STR_WF_TRY       */
+    {"Try again",
+     "Int\u00E9ntalo de nuevo",
+     "R\u00E9essayez"},
+    /* STR_WF_NO_START  */
+    {"The Wi-Fi chip did not start",
+     "El chip Wi-Fi no arranc\u00F3",
+     "La puce Wi-Fi n'a pas d\u00E9marr\u00E9"},
+    /* STR_WF_TEST_HINT */
+    {"Settings > Wi-Fi Test shows the chip's state",
+     "Ajustes > Prueba de Wi-Fi muestra el estado del chip",
+     "R\u00E9glages > Test Wi-Fi montre l'\u00E9tat de la puce"},
+    /* STR_WF_SEC_WEP   */
+    {"It uses WEP, which is not supported",
+     "Usa WEP, que no es compatible",
+     "Il utilise WEP, non pris en charge"},
+    /* STR_WF_SEC_WPA1  */
+    {"It uses the old WPA, not WPA2",
+     "Usa el antiguo WPA, no WPA2",
+     "Il utilise l'ancien WPA, pas WPA2"},
+    /* STR_WF_SEC_WPA3  */
+    {"It needs WPA3, which is not supported",
+     "Necesita WPA3, que no es compatible",
+     "Il exige WPA3, non pris en charge"},
+    /* STR_WF_SEC_EAP   */
+    {"It needs a user name (802.1X)",
+     "Necesita un nombre de usuario (802.1X)",
+     "Il exige un nom d'utilisateur (802.1X)"},
+    /* STR_WF_SEC_TKIP  */
+    {"It uses TKIP only, not AES",
+     "Solo usa TKIP, no AES",
+     "Il n'utilise que TKIP, pas AES"},
+    /* STR_WF_SEC_OTHER */
+    {"Its security is not supported",
+     "Su seguridad no es compatible",
+     "Sa s\u00E9curit\u00E9 n'est pas prise en charge"},
+    /* STR_WF_ADDRESS   */ {"Address ", "Direcci\u00F3n ", "Adresse "},
+    /* STR_WF_ROUTER    */ {", router ", ", router ", ", routeur "},
+    /* STR_WF_PING      */ {"Ping: ", "Ping: ", "Ping : "},
+    /* STR_WF_OF        */ {" of ", " de ", " sur "},
+    /* STR_WF_ANSWERED  */
+    {" answered, best ",
+     " respondidos, mejor ",
+     " r\u00E9pondus, meilleur "},
+    /* STR_WF_NO_PINGS  */
+    {"The router did not answer pings",
+     "El router no respondi\u00F3 al ping",
+     "Le routeur n'a pas r\u00E9pondu au ping"},
+    /* STR_WF_CONNECTED */
+    {"Connected to ",
+     "Conectado a ",
+     "Connect\u00E9 \u00E0 "},
+    /* STR_WF_NO_ADDR   */
+    {"Joined, but no address came: ",
+     "Conectado, pero sin direcci\u00F3n: ",
+     "Connect\u00E9, mais sans adresse : "},
+    /* STR_WF_DROPPED   */
+    {"The link dropped while asking",
+     "La conexi\u00F3n se cort\u00F3 al pedirla",
+     "La liaison a coup\u00E9 pendant la demande"},
+    /* STR_WF_NO_DHCP   */
+    {"The hotspot did not answer DHCP",
+     "El punto de acceso no respondi\u00F3 al DHCP",
+     "Le point d'acc\u00E8s n'a pas r\u00E9pondu au DHCP"},
+    /* STR_WF_REASON    */ {"Reason ", "Motivo ", "Raison "},
+    /* STR_WF_NOT_JOINED*/
+    {"Could not join ",
+     "No se pudo conectar a ",
+     "Connexion impossible \u00E0 "},
+    /* STR_WF_NOT_FOUND */ {"Not found: ", "No encontrada: ", "Introuvable : "},
+    /* STR_WF_24GHZ     */
+    {"Is it on? The 3DS only sees 2.4 GHz",
+     "\u00BFEst\u00E1 encendida? La 3DS solo ve redes",
+     "Est-il allum\u00E9 ? La 3DS ne voit que les"},
+    /* STR_WF_CHANNELS  */
+    {"networks, channels 1 to 13",
+     "de 2,4 GHz, canales 1 a 13",
+     "r\u00E9seaux 2,4 GHz, canaux 1 \u00E0 13"},
+    /* STR_WF_BADPASS   */
+    {"Wrong password? ",
+     "\u00BFContrase\u00F1a incorrecta? ",
+     "Mauvais mot de passe ? "},
+    /* STR_WF_REFUSED   */
+    {"The network did not accept it",
+     "La red no la acept\u00F3",
+     "Le r\u00E9seau ne l'a pas accept\u00E9"},
+    /* STR_WF_PICK_CHANGE*/
+    {"Pick the network again to change it",
+     "Elige la red de nuevo para cambiarla",
+     "Choisissez de nouveau le r\u00E9seau pour le modifier"},
+    /* STR_WF_NEEDS_PASS*/
+    {"Needs a password: ",
+     "Necesita contrase\u00F1a: ",
+     "Mot de passe requis : "},
+    /* STR_WF_PICK_TYPE */
+    {"Pick the network again to type it",
+     "Elige la red de nuevo para escribirla",
+     "Choisissez de nouveau le r\u00E9seau pour le saisir"},
+    /* STR_WF_CANNOT    */
+    {"Cannot join ",
+     "No se puede conectar a ",
+     "Connexion impossible \u00E0 "},
+    /* STR_WF_JOINS     */
+    {"AuroraOS joins WPA2 (and open) networks",
+     "AuroraOS se conecta a redes WPA2 (y abiertas)",
+     "AuroraOS rejoint les r\u00E9seaux WPA2 (et ouverts)"},
+    /* STR_WF_KEYS      */
+    {"The password check did not finish: ",
+     "La comprobaci\u00F3n no termin\u00F3: ",
+     "La v\u00E9rification n'a pas abouti : "},
+    /* STR_WF_EARLY     */
+    {"Joining stopped early: ",
+     "La conexi\u00F3n se detuvo antes: ",
+     "La connexion s'est arr\u00EAt\u00E9e t\u00F4t : "},
+    /* STR_WF_SEARCHING_NETS*/
+    {"Searching for networks",
+     "Buscando redes",
+     "Recherche des r\u00E9seaux"},
+    /* STR_WF_20S       */
+    {"This takes about 20 seconds",
+     "Tarda unos 20 segundos",
+     "Cela prend environ 20 secondes"},
+    /* STR_WF_NO_FW     */
+    {"No Wi-Fi firmware on the SD card",
+     "No hay firmware Wi-Fi en la tarjeta SD",
+     "Pas de firmware Wi-Fi sur la carte SD"},
+    /* STR_WF_REOPEN    */
+    {"Open Wi-Fi again to copy it from this console",
+     "Vuelve a abrir Wi-Fi para copiarlo de la consola",
+     "Rouvrez le Wi-Fi pour le copier depuis la console"},
+    /* STR_WF_FOUND1    */
+    {" network found",
+     " red encontrada",
+     " r\u00E9seau trouv\u00E9"},
+    /* STR_WF_FOUNDN    */
+    {" networks found",
+     " redes encontradas",
+     " r\u00E9seaux trouv\u00E9s"},
+    /* STR_WF_PICK_YOURS*/
+    {"Pick yours to connect",
+     "Elige la tuya para conectarte",
+     "Choisissez le v\u00F4tre"},
+    /* STR_WF_HIDDEN    */
+    {"Hidden networks are not listed",
+     "Las redes ocultas no aparecen",
+     "Les r\u00E9seaux masqu\u00E9s n'apparaissent pas"},
+    /* STR_WF_PASS_FOR  */
+    {"Password for ",
+     "Contrase\u00F1a de ",
+     "Mot de passe de "},
+    /* STR_WF_CAPS      */
+    {"L or the abc key: ABC, then symbols",
+     "L o la tecla abc: ABC, luego s\u00EDmbolos",
+     "L ou la touche abc : ABC, puis symboles"},
+    /* STR_WF_KB_HINT   */
+    {"B: Delete   START: Done   SELECT: Cancel",
+     "B: Borrar   START: Listo   SELECT: Cancelar",
+     "B : Effacer   START : OK   SELECT : Annuler"},
+    /* STR_WF_PASSWORD  */ {"Password", "Contrase\u00F1a", "Mot de passe"},
+    /* STR_WF_PASS_LEN  */
+    {"A Wi-Fi password has 8 to 63 characters",
+     "Una contrase\u00F1a Wi-Fi tiene de 8 a 63 caracteres",
+     "Un mot de passe Wi-Fi a de 8 \u00E0 63 caract\u00E8res"},
+    /* STR_WF_PASS_HEX  */
+    {"(or is 64 hex digits)",
+     "(o 64 d\u00EDgitos hexadecimales)",
+     "(ou 64 chiffres hexad\u00E9cimaux)"},
+    /* STR_WF_30S       */
+    {"This takes about half a minute",
+     "Tarda unos 30 segundos",
+     "Cela prend environ 30 secondes"},
+    /* STR_WF_NOT_SAVED */
+    {"(could not save it to the SD card)",
+     "(no se pudo guardar en la tarjeta SD)",
+     "(impossible de l'enregistrer sur la carte SD)"},
+    /* STR_WF_CAN_COPY  */
+    {"Aurora can copy it from this console",
+     "Aurora puede copiarlo de esta consola",
+     "Aurora peut le copier depuis cette console"},
+    /* STR_WF_FW_REQUIRED*/
+    {"Wi-Fi firmware required",
+     "Se necesita el firmware Wi-Fi",
+     "Firmware Wi-Fi requis"},
+    /* STR_WF_COPY_Q    */
+    {"Copy it from this console?",
+     "\u00BFCopiarlo de esta consola?",
+     "Le copier depuis cette console ?"},
+    /* STR_WF_COPIED    */
+    {"Wi-Fi firmware copied",
+     "Firmware Wi-Fi copiado",
+     "Firmware Wi-Fi copi\u00E9"},
+    /* STR_WF_FORGOT    */ {"Forgot ", "Olvidada: ", "Oubli\u00E9 : "},
+    /* STR_WF_SD_FAIL   */
+    {"Could not change the SD card",
+     "No se pudo modificar la tarjeta SD",
+     "Impossible de modifier la carte SD"},
+    /* STR_FD_STEP1     */
+    {"Read the system NAND",
+     "Leer la NAND del sistema",
+     "Lire la NAND syst\u00E8me"},
+    /* STR_FD_STEP2     */
+    {"Find the Wi-Fi module",
+     "Buscar el m\u00F3dulo Wi-Fi",
+     "Trouver le module Wi-Fi"},
+    /* STR_FD_STEP3     */
+    {"Decrypt the module",
+     "Descifrar el m\u00F3dulo",
+     "D\u00E9chiffrer le module"},
+    /* STR_FD_STEP4     */
+    {"Extract the firmware",
+     "Extraer el firmware",
+     "Extraire le firmware"},
+    /* STR_FD_STEP5     */
+    {"Save it to the SD card",
+     "Guardarlo en la tarjeta SD",
+     "L'enregistrer sur la carte SD"},
+    /* STR_FD_NAND      */
+    {"System NAND",
+     "NAND del sistema",
+     "NAND syst\u00E8me"},
+    /* STR_FD_ACCESS    */
+    {"This action accesses the system NAND.",
+     "Esta acci\u00F3n accede a la NAND del sistema.",
+     "Cette action acc\u00E8de \u00E0 la NAND syst\u00E8me."},
+    /* STR_FD_PROCEED   */ {"Proceed?", "\u00BFContinuar?", "Continuer ?"},
+    /* STR_FD_READ_ONLY */
+    {"Aurora only reads it: nothing on the NAND changes.",
+     "Aurora solo la lee: nada cambia en la NAND.",
+     "Aurora la lit seulement : rien n'y est modifi\u00E9."},
+    /* STR_FD_COPIED_TO */
+    {"The Wi-Fi firmware is copied to SD:/Aurora/wifi.",
+     "El firmware Wi-Fi se copia a SD:/Aurora/wifi.",
+     "Le firmware Wi-Fi est copi\u00E9 dans SD:/Aurora/wifi."},
+    /* STR_FD_ENTER     */
+    {"Enter the code below, or SELECT to cancel",
+     "Introduce el c\u00F3digo de abajo, o SELECT para cancelar",
+     "Entrez le code ci-dessous, ou SELECT pour annuler"},
+    /* STR_FD_TITLE     */
+    {"Wi-Fi firmware",
+     "Firmware Wi-Fi",
+     "Firmware Wi-Fi"},
+    /* STR_FD_COPYING   */
+    {"Copying the Wi-Fi firmware",
+     "Copiando el firmware Wi-Fi",
+     "Copie du firmware Wi-Fi"},
+    /* STR_FD_KEEP_ON   */
+    {"Keep the console on",
+     "No apagues la consola",
+     "Laissez la console allum\u00E9e"},
+    /* STR_FD_PRESS     */
+    {"Press these buttons in order",
+     "Pulsa estos botones en orden",
+     "Appuyez sur ces boutons dans l'ordre"},
+    /* STR_FD_WRONG     */
+    {"Not that one: start again",
+     "Ese no: empieza de nuevo",
+     "Pas celui-l\u00E0 : recommencez"},
+    /* STR_FD_SELECT_CANCEL*/
+    {"SELECT: Cancel",
+     "SELECT: Cancelar",
+     "SELECT : Annuler"},
+    /* STR_FD_FAILED    */
+    {"Copy failed",
+     "Error al copiar",
+     "\u00C9chec de la copie"},
+    /* STR_FD_SAVED     */
+    {"Wi-Fi firmware saved",
+     "Firmware Wi-Fi guardado",
+     "Firmware Wi-Fi enregistr\u00E9"},
+    /* STR_FD_FILES_IN  */
+    {"The files are in SD:/Aurora/wifi",
+     "Los archivos est\u00E1n en SD:/Aurora/wifi",
+     "Les fichiers sont dans SD:/Aurora/wifi"},
+    /* STR_FD_PC_WAY    */
+    {"docs/wifi.md shows the way with a PC",
+     "docs/wifi.md explica c\u00F3mo hacerlo con un PC",
+     "docs/wifi.md explique la m\u00E9thode avec un PC"},
+    /* STR_FD_E_EMMC    */
+    {"The system NAND could not be read",
+     "No se pudo leer la NAND del sistema",
+     "Impossible de lire la NAND syst\u00E8me"},
+    /* STR_FD_E_NCSD    */
+    {"The system NAND has no partition table",
+     "La NAND del sistema no tiene tabla de particiones",
+     "La NAND syst\u00E8me n'a pas de table de partitions"},
+    /* STR_FD_E_KEYS    */
+    {"The system NAND did not decrypt",
+     "No se pudo descifrar la NAND del sistema",
+     "Impossible de d\u00E9chiffrer la NAND syst\u00E8me"},
+    /* STR_FD_E_CTRNAND */
+    {"CTRNAND could not be opened",
+     "No se pudo abrir CTRNAND",
+     "Impossible d'ouvrir CTRNAND"},
+    /* STR_FD_E_NOMOD   */
+    {"This console's Wi-Fi module was not found",
+     "No se encontr\u00F3 el m\u00F3dulo Wi-Fi de la consola",
+     "Module Wi-Fi de la console introuvable"},
+    /* STR_FD_E_READ    */
+    {"The Wi-Fi module could not be read",
+     "No se pudo leer el m\u00F3dulo Wi-Fi",
+     "Impossible de lire le module Wi-Fi"},
+    /* STR_FD_E_CRYPT   */
+    {"The module uses encryption Aurora cannot undo",
+     "El m\u00F3dulo usa un cifrado que Aurora no puede deshacer",
+     "Le module utilise un chiffrement qu'Aurora ne sait pas d\u00E9faire"},
+    /* STR_FD_E_DECRYPT */
+    {"The module did not decrypt",
+     "No se pudo descifrar el m\u00F3dulo",
+     "Impossible de d\u00E9chiffrer le module"},
+    /* STR_FD_E_NOCODE  */
+    {"The module has no code",
+     "El m\u00F3dulo no tiene c\u00F3digo",
+     "Le module n'a pas de code"},
+    /* STR_FD_E_UNPACK  */
+    {"The module's code did not unpack",
+     "No se pudo descomprimir el c\u00F3digo del m\u00F3dulo",
+     "Impossible de d\u00E9compresser le code du module"},
+    /* STR_FD_E_NOFW    */
+    {"No Wi-Fi firmware was found in the module",
+     "No se encontr\u00F3 firmware Wi-Fi en el m\u00F3dulo",
+     "Aucun firmware Wi-Fi trouv\u00E9 dans le module"},
+    /* STR_FD_E_WRITE   */
+    {"Could not write to the SD card",
+     "No se pudo escribir en la tarjeta SD",
+     "Impossible d'\u00E9crire sur la carte SD"},
+    /* STR_ST_UPDATE1   */ {" new update)", " actualizaci\u00F3n)",
+                            " mise \u00E0 jour)"},
+    /* STR_ST_UPDATES   */ {" new updates)", " actualizaciones)",
+                            " mises \u00E0 jour)"},
+    /* STR_ST_DL_BAR    */
+    {"aShop (Downloading software...)",
+     "aShop (Descargando software...)",
+     "aShop (T\u00E9l\u00E9chargement...)"},
+    /* STR_ST_SEARCH    */ {"Search", "Buscar", "Chercher"},
+    /* STR_ST_GO        */ {"Go!", "Entrar", "Ouvrir"},
+    /* STR_ST_OPTIONS   */ {"Options", "Opciones", "Options"},
+    /* STR_ST_DOWNLOAD  */ {"Download", "Descargar", "T\u00E9l\u00E9charger"},
+    /* STR_ST_UPDATE    */ {"Update", "Actualizar", "Mettre \u00E0 jour"},
+    /* STR_ST_AGAIN     */
+    {"Download again",
+     "Descargar de nuevo",
+     "Ret\u00E9l\u00E9charger"},
+    /* STR_ST_WELCOME   */
+    {"Welcome to aShop!",
+     "\u00A1Te damos la bienvenida a aShop!",
+     "Bienvenue sur aShop !"},
+    /* STR_ST_SEARCH_TITLE*/
+    {"Search aShop",
+     "Buscar en aShop",
+     "Chercher dans aShop"},
+    /* STR_ST_KB_HINT   */
+    {"B: Delete   L: Caps   START: Search   SELECT: Cancel",
+     "B: Borrar   L: May\u00FAs.   START: Buscar   SELECT: Cancelar",
+     "B : Effacer   L : Maj   START : Chercher   SELECT : Annuler"},
+    /* STR_ST_APP_NAME  */
+    {"Name of an app",
+     "Nombre de una app",
+     "Nom d'une app"},
+    /* STR_ST_EMPTY     */
+    {"Nothing in the catalogue",
+     "El cat\u00E1logo est\u00E1 vac\u00EDo",
+     "Le catalogue est vide"},
+    /* STR_ST_INSTALLED */ {"Installed", "Instalada", "Install\u00E9e"},
+    /* STR_ST_UPDATE_TAG*/ {"Update", "Actualizar", "Mise \u00E0 jour"},
+    /* STR_ST_VERSION   */ {"Version", "Versi\u00F3n", "Version"},
+    /* STR_ST_SIZE      */ {"Size", "Tama\u00F1o", "Taille"},
+    /* STR_ST_STATUS    */ {"Status", "Estado", "\u00C9tat"},
+    /* STR_ST_UPD_AVAIL */
+    {"Update available",
+     "Actualizaci\u00F3n disponible",
+     "Mise \u00E0 jour disponible"},
+    /* STR_ST_NOT_INST  */
+    {"Not installed",
+     "No instalada",
+     "Non install\u00E9e"},
+    /* STR_ST_SCROLL    */
+    {"Up and Down scroll the page",
+     "Arriba y Abajo desplazan la p\u00E1gina",
+     "Haut et Bas font d\u00E9filer la page"},
+    /* STR_ST_DOWNLOADING*/
+    {"Downloading",
+     "Descargando",
+     "T\u00E9l\u00E9chargement"},
+    /* STR_ST_DL_PREFIX */
+    {"Downloading... (",
+     "Descargando... (",
+     "T\u00E9l\u00E9chargement... ("},
+    /* STR_ST_DL_FAILED */
+    {"Download failed",
+     "Error en la descarga",
+     "\u00C9chec du t\u00E9l\u00E9chargement"},
+    /* STR_ST_ON_HOME   */
+    {"is on the Home Menu",
+     "ya est\u00E1 en el men\u00FA de inicio",
+     "est dans le menu d'accueil"},
+    /* STR_ST_UP_TO_DATE*/ {"Up to date", "Actualizada", "\u00C0 jour"},
+    /* STR_ST_DEMO1     */
+    {"This demo had no package, so",
+     "Esta demo no ten\u00EDa paquete, as\u00ED que",
+     "Cette d\u00E9mo n'avait pas de paquet :"},
+    /* STR_ST_DEMO2     */
+    {"the app on the card is unchanged",
+     "la app de la tarjeta no cambia",
+     "l'app sur la carte n'a pas chang\u00E9"},
+    /* STR_ST_DL_DONE   */
+    {"Download finished",
+     "Descarga terminada",
+     "T\u00E9l\u00E9chargement termin\u00E9"},
+    /* STR_ST_DEMO3     */
+    {"This demo had no package to install:",
+     "Esta demo no ten\u00EDa paquete que instalar:",
+     "Cette d\u00E9mo n'avait aucun paquet \u00E0 installer :"},
+    /* STR_ST_DEMO4     */
+    {"put one in /Aurora/Store/Packages",
+     "pon uno en /Aurora/Store/Packages",
+     "mettez-en un dans /Aurora/Store/Packages"},
+    /* STR_ST_E_NOSD    */
+    {"There is no SD card",
+     "No hay tarjeta SD",
+     "Pas de carte SD"},
+    /* STR_ST_E_NOTAPP  */
+    {"The package is not an Aurora app",
+     "El paquete no es una app de Aurora",
+     "Le paquet n'est pas une app Aurora"},
+    /* STR_ST_E_INSTALL */
+    {"Could not install the app",
+     "No se pudo instalar la app",
+     "Impossible d'installer l'app"},
+    /* STR_ST_E_READ    */
+    {"Could not read the package",
+     "No se pudo leer el paquete",
+     "Impossible de lire le paquet"},
+    /* STR_ST_E_FULL    */
+    {"The SD card is full",
+     "La tarjeta SD est\u00E1 llena",
+     "La carte SD est pleine"},
+    /* STR_ST_NO_UPDATES*/
+    {"No updates",
+     "No hay actualizaciones",
+     "Aucune mise \u00E0 jour"},
+    /* STR_ST_ALL_CURRENT*/
+    {"Your apps are up to date",
+     "Tus apps est\u00E1n al d\u00EDa",
+     "Vos apps sont \u00E0 jour"},
+    /* STR_ST_NOTHING   */
+    {"Nothing here yet",
+     "Aqu\u00ED no hay nada todav\u00EDa",
+     "Rien ici pour l'instant"},
+    /* STR_ST_SOON      */
+    {"Come back soon",
+     "Vuelve pronto",
+     "Revenez bient\u00F4t"},
+    /* STR_ST_NO_RESULTS*/
+    {"No results",
+     "Sin resultados",
+     "Aucun r\u00E9sultat"},
+    /* STR_ST_RELOADED  */
+    {"Catalogue reloaded",
+     "Cat\u00E1logo recargado",
+     "Catalogue recharg\u00E9"},
+    /* STR_ST_FROM_SD   */
+    {"From the SD card",
+     "Desde la tarjeta SD",
+     "Depuis la carte SD"},
+    /* STR_ST_BUILTIN   */
+    {"The built-in demo catalogue",
+     "El cat\u00E1logo de demo integrado",
+     "Le catalogue de d\u00E9mo int\u00E9gr\u00E9"},
+    /* STR_ST_CHECK     */
+    {"Check for updates",
+     "Buscar actualizaciones",
+     "V\u00E9rifier les mises \u00E0 jour"},
+    /* STR_ST_RELOAD    */
+    {"Reload catalogue",
+     "Recargar el cat\u00E1logo",
+     "Recharger le catalogue"},
+    /* STR_ST_ABOUT     */
+    {"About aShop",
+     "Acerca de aShop",
+     "\u00C0 propos d'aShop"},
+    /* STR_ST_SEARCH_PREFIX*/ {"Search: ", "B\u00FAsqueda: ", "Recherche : "},
+    /* STR_ST_UPDATES_TITLE*/
+    {"Download updates",
+     "Descargar actualizaciones",
+     "T\u00E9l\u00E9charger les mises \u00E0 jour"},
+    /* STR_ST_AB_INTRO  */
+    {"aShop is where apps for Aurora are found and downloaded.",
+     "aShop es donde se encuentran y descargan las apps para Aurora.",
+     "aShop est l'endroit o\u00F9 trouver et t\u00E9l\u00E9charger des apps "
+     "pour Aurora."},
+    /* STR_ST_AB_CAT    */ {"Catalogue: ", "Cat\u00E1logo: ", "Catalogue : "},
+    /* STR_ST_AB_CARD   */
+    {"/Aurora/Store/catalog.txt on the SD card",
+     "/Aurora/Store/catalog.txt en la tarjeta SD",
+     "/Aurora/Store/catalog.txt sur la carte SD"},
+    /* STR_ST_AB_DEMO   */
+    {"the built-in demo",
+     "la demo integrada",
+     "la d\u00E9mo int\u00E9gr\u00E9e"},
+    /* STR_ST_AB_WITH   */ {", with ", ", con ", ", avec "},
+    /* STR_ST_AB_APP    */ {" app and ", " app y ", " app et "},
+    /* STR_ST_AB_APPS   */ {" apps and ", " apps y ", " apps et "},
+    /* STR_ST_AB_NEWS1  */ {" news item.", " noticia.", " actualit\u00E9."},
+    /* STR_ST_AB_NEWSN  */ {" news items.", " noticias.", " actualit\u00E9s."},
+    /* STR_ST_AB_SERVER */
+    {"There is no download server yet. A download copies the app from "
+     "/Aurora/Store/Packages when it is there; otherwise only the progress "
+     "runs. Apps go to /Aurora/Apps and appear on the Home Menu.",
+     "A\u00FAn no hay servidor de descargas. Una descarga copia la app de "
+     "/Aurora/Store/Packages si est\u00E1 all\u00ED; si no, solo avanza la "
+     "barra. Las apps van a /Aurora/Apps y aparecen en el men\u00FA de "
+     "inicio.",
+     "Il n'y a pas encore de serveur. Un t\u00E9l\u00E9chargement copie "
+     "l'app depuis /Aurora/Store/Packages si elle s'y trouve ; sinon seule "
+     "la progression s'affiche. Les apps vont dans /Aurora/Apps et "
+     "apparaissent dans le menu d'accueil."},
 };
 
 const char *L(StringId id) {
@@ -522,35 +1175,84 @@ static void step_language(UserConfig *cfg) {
   }
 }
 
-/* Wi-Fi is not implemented, so this screen only offers Skip; B still steps
- * back. */
-
 typedef enum { NAV_NEXT, NAV_BACK } Nav;
+
+static const SetupWifi *s_wifi;
+
+#define NET_BX 60
+#define NET_BW 200
+#define NET_BH 40
+#define NET_BY(i) (86 + (i) * 56)
+
+static void net_buttons(int sel, const char *saved, Color accent) {
+  button(NET_BX, NET_BY(0), NET_BW, NET_BH, L(STR_NET_SETUP), sel == 0,
+         accent);
+  button(NET_BX, NET_BY(1), NET_BW, NET_BH,
+         L(saved[0] ? STR_NEXT : STR_SKIP), sel == 1, accent);
+  screen_present_bottom();
+}
+
+/* Set up Wi-Fi opens Settings > Wi-Fi itself, which first offers to copy the
+ * firmware when the card lacks it. */
+static void net_draw(int sel, const char *saved, Color accent) {
+  char line[80];
+  setup_top(1, L(STR_NET_L1), L(STR_NET_L2), accent);
+  screen_present_top();
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+  bottom_title("Home Menu");
+  if (saved[0]) {
+    char *p = line, *e = line + sizeof(line) - 1;
+    for (const char *q = L(STR_NET_SAVED); *q && p < e; q++)
+      *p++ = *q;
+    for (const char *q = saved; *q && p < e; q++)
+      *p++ = *q;
+    *p = '\0';
+  }
+  text_center_tr(VRAM_BOT_A, 50, BOT_SCREEN_WIDTH, SH_BOT,
+                 saved[0] ? line
+                 : fwdump_present() ? L(STR_NET_READY) : L(STR_NET_FW),
+                 COLOR_HM_TEXT2);
+  text_center_tr(VRAM_BOT_A, BOT_SCREEN_HEIGHT - 22, BOT_SCREEN_WIDTH, SH_BOT,
+                 L(STR_NET_HINT), COLOR_HM_TEXT2);
+  net_buttons(sel, saved, accent);
+}
 
 static Nav step_network(UserConfig *cfg) {
   Color accent = aurora_accent_presets[cfg->accent];
-  setup_top(1, L(STR_NET_L1), L(STR_NET_L2), accent);
-  screen_present_top();
+  const char *saved = s_wifi ? s_wifi->wifi_saved() : "";
+  int sel = 0;
 
-  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
-  bottom_title("Home Menu");
-  text_center_tr(VRAM_BOT_A, 70, BOT_SCREEN_WIDTH, SH_BOT, L(STR_WIFI_UNAVAIL),
-                 COLOR_HM_TEXT2);
-  button((BOT_SCREEN_WIDTH - 180) / 2, 110, 180, 40, L(STR_SKIP), 1, accent);
-  text_center_tr(VRAM_BOT_A, BOT_SCREEN_HEIGHT - 22, BOT_SCREEN_WIDTH, SH_BOT,
-                 L(STR_NET_HINT), COLOR_HM_TEXT2);
-  screen_present_bottom();
-
+  net_draw(sel, saved, accent);
   while (1) {
     u32 k = get_keys_down();
-    int tx, ty;
-    if (touch_tap(&tx, &ty) &&
-        touch_in(tx, ty, (BOT_SCREEN_WIDTH - 180) / 2, 110, 180, 40))
-      return NAV_NEXT;
-    if (k & (BUTTON_A | BUTTON_START))
+    int prev = sel, go = 0, tx, ty;
+    if (k & BUTTON_DUP)
+      sel = 0;
+    if (k & BUTTON_DDOWN)
+      sel = 1;
+    if (touch_tap(&tx, &ty))
+      for (int i = 0; i < 2; i++)
+        if (touch_in(tx, ty, NET_BX, NET_BY(i), NET_BW, NET_BH)) {
+          sel = i;
+          go = 1;
+        }
+    if (k & BUTTON_A)
+      go = 1;
+    if (go && sel == 0 && s_wifi) {
+      anim_transition(ANIM_PUSH, ANIM_BOTH);
+      s_wifi->wifi_screen();
+      anim_transition(ANIM_POP, ANIM_BOTH);
+      saved = s_wifi->wifi_saved();
+      sel = 1;
+      net_draw(sel, saved, accent);
+      continue;
+    }
+    if ((go && sel == 1) || (k & BUTTON_START))
       return NAV_NEXT;
     if (k & BUTTON_B)
       return NAV_BACK;
+    if (sel != prev)
+      net_buttons(sel, saved, accent);
     ui_idle();
   }
 }
@@ -1147,7 +1849,8 @@ static Nav step_welcome(UserConfig *cfg) {
   }
 }
 
-void setup_run(UserConfig *cfg) {
+void setup_run(UserConfig *cfg, const SetupWifi *wifi) {
+  s_wifi = wifi;
   g_lang = cfg->language;
   int step = 0;
   while (step < 5) {

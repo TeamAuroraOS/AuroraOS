@@ -1367,12 +1367,11 @@ static void wifi_say(Color c, const char *a, const char *a2, const char *b,
 
 static void wifi_say_saved(void) {
   if (wifi_saved_ssid[0])
-    wifi_say(COLOR_WHITE, "Saved network: ", wifi_saved_ssid,
-             wifi_saved_pass[0] ? "with a password" : "open, no password",
-             "Pick it to connect, or search for others");
+    wifi_say(COLOR_WHITE, L(STR_WF_SAVED_NET), wifi_saved_ssid,
+             L(wifi_saved_pass[0] ? STR_WF_WITH_PASS : STR_WF_OPEN),
+             L(STR_WF_PICK_SAVED));
   else
-    wifi_say(COLOR_WHITE, "No network saved", 0,
-             "Search, then pick your network", "");
+    wifi_say(COLOR_WHITE, L(STR_WF_NO_SAVED), 0, L(STR_WF_SEARCH_PICK), "");
 }
 
 static void wifi_top(void) {
@@ -1387,8 +1386,7 @@ static void wifi_top(void) {
                     i ? COLOR_HM_TEXT2 : wifi_msg_color, COLOR_HM_BG_BOT,
                     &ui_font);
   ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 224, TOP_SCREEN_HEIGHT,
-              wifi_top_hint ? wifi_top_hint
-                            : "A: Select   Y: Forget saved   B: Back",
+              wifi_top_hint ? wifi_top_hint : L(STR_WF_HINT),
               COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_small);
   screen_present_top();
 }
@@ -1422,7 +1420,7 @@ static void wifi_row(int y, int i) {
             ASSET_ICON_WIFI_32, icon_wifi_bits, COLOR_WHITE);
     ui_text(VRAM_BOT_A, ROW_X + 44, y + (ROW_H - ui_th(&ui_bold)) / 2,
             BOT_SCREEN_HEIGHT,
-            wn_searched ? "Search again" : "Search for networks", COLOR_WHITE,
+            L(wn_searched ? STR_WF_SEARCH_AGAIN : STR_WF_SEARCH), COLOR_WHITE,
             g_accent, &ui_bold);
     return;
   }
@@ -1446,9 +1444,10 @@ static void wifi_row(int y, int i) {
             BOT_SCREEN_HEIGHT, tag, COLOR_HM_TEXT2, COLOR_HM_SLOT, &ui_small);
     right -= tw + 8;
   } else if (wifi_saved_ssid[0] && wifi_streq(n->ssid, wifi_saved_ssid)) {
-    int tw = ui_tw(&ui_small, "Saved");
+    int tw = ui_tw(&ui_small, L(STR_WF_SAVED_TAG));
     ui_text(VRAM_BOT_A, right - tw, y + (ROW_H - ui_th(&ui_small)) / 2,
-            BOT_SCREEN_HEIGHT, "Saved", g_accent, COLOR_HM_SLOT, &ui_small);
+            BOT_SCREEN_HEIGHT, L(STR_WF_SAVED_TAG), g_accent, COLOR_HM_SLOT,
+            &ui_small);
     right -= tw + 8;
   }
   ui_text_fit(VRAM_BOT_A, ROW_X + 12, ty, BOT_SCREEN_HEIGHT, n->ssid,
@@ -1479,7 +1478,7 @@ static void wifi_paint(void) {
   if (wn_count == 0)
     ui_text_mid(VRAM_BOT_A, BOT_SCREEN_WIDTH / 2, ROW_Y0 + ROW_STEP + 10,
                 BOT_SCREEN_HEIGHT,
-                wn_searched ? "No networks found" : "No networks listed yet",
+                L(wn_searched ? STR_WF_NONE_FOUND : STR_WF_NONE_YET),
                 COLOR_HM_TEXT2, COLOR_HM_BG_TOP, &ui_font);
   draw_round_ring(VRAM_BOT_A, ROW_X - 3,
                   ROW_Y0 + anim_px(&wn_list.ring) - scroll - 3, ROW_W + 6,
@@ -1495,26 +1494,26 @@ static int wifi_job_drawn;
 
 static const char *wifi_progress(const WifiShared *w, u32 ms) {
   if (ms < 1000u || w->boot_step < WIFI_BOOT_DONE)
-    return "Starting the Wi-Fi chip";
+    return L(STR_WF_P_CHIP);
   if (w->htc_stage < WIFI_HTC_WMI)
-    return "Starting its firmware";
+    return L(STR_WF_P_FW);
   switch (w->conn_stage) {
     case WIFI_CONN_NONE:
-      return "Looking for networks";
+      return L(STR_WF_P_LOOK);
     case WIFI_CONN_ASSOC:
-      return "Joining the network";
+      return L(STR_WF_P_JOIN);
     case WIFI_CONN_KEYS:
-      return "Checking the password";
+      return L(STR_WF_P_PASS);
     case WIFI_CONN_LINKED:
     case WIFI_CONN_DHCP:
-      return "Asking for an address";
+      return L(STR_WF_P_ADDR);
     case WIFI_CONN_IP:
     case WIFI_CONN_ARP:
-      return "Finding the router";
+      return L(STR_WF_P_ROUTER);
     case WIFI_CONN_PING:
-      return "Pinging the router";
+      return L(STR_WF_P_PING);
     default:
-      return "Finishing";
+      return L(STR_WF_P_FINISH);
   }
 }
 
@@ -1556,8 +1555,8 @@ static void wifi_progress_draw(const WifiShared *w, u32 ms) {
  * stays drawn directly until it is done. B leaves anyway. */
 static int wifi_job_wait(WifiShared *w, u32 *waited) {
   u32 t0 = timer_ticks(), shown = 0xFFFFFFFFu, base = *waited;
-  hm_str_copy(wifi_job_title, "Wi-Fi is still finishing");
-  wifi_job_hint = "B: Leave Wi-Fi settings";
+  hm_str_copy(wifi_job_title, L(STR_WF_STILL));
+  wifi_job_hint = L(STR_WF_LEAVE);
   wifi_job_drawn = 0;
   for (;;) {
     wifi_get(w);
@@ -1583,9 +1582,10 @@ static int wifi_job(WifiShared *w, const char *ssid, const char *pass) {
   u32 waited = 0;
   if (!wifi_load_firmware(WIFI_FW_TYPE4))
     return -1;
-  snd_cpy(snd_cpy(wifi_job_title, ssid ? "Connecting to " : "Searching"),
+  snd_cpy(snd_cpy(wifi_job_title,
+                  L(ssid ? STR_WF_CONNECTING : STR_WF_SEARCHING)),
           ssid ? ssid : "");
-  wifi_job_hint = "Please wait   B twice: Stop waiting";
+  wifi_job_hint = L(STR_WF_WAIT);
   wifi_job_drawn = 0;
   if (ssid)
     wifi_request(ssid, pass);
@@ -1605,12 +1605,12 @@ static int wifi_job(WifiShared *w, const char *ssid, const char *pass) {
 
 static const char *wifi_reason(u32 r) {
   switch (r) {
-    case 1: return "network not found";
-    case 2: return "link lost";
-    case 4: return "the hotspot dropped the 3DS";
-    case 5: return "authentication failed";
-    case 6: return "association failed";
-    case 7: return "no resources";
+    case 1: return L(STR_WF_R1);
+    case 2: return L(STR_WF_R2);
+    case 4: return L(STR_WF_R4);
+    case 5: return L(STR_WF_R5);
+    case 6: return L(STR_WF_R6);
+    case 7: return L(STR_WF_R7);
     default: return "";
   }
 }
@@ -1618,10 +1618,10 @@ static const char *wifi_reason(u32 r) {
 /* Whether the chip came up and scanned; says so on the top screen if not. */
 static int wifi_chip_ok(const WifiShared *w) {
   if (w->fw_assert)
-    wifi_say(COLOR_RED, "The Wi-Fi firmware stopped", 0, "Try again", "");
+    wifi_say(COLOR_RED, L(STR_WF_FW_STOPPED), 0, L(STR_WF_TRY), "");
   else if (w->wmi_event != 0x1001u)
-    wifi_say(COLOR_RED, "The Wi-Fi chip did not start", 0, "Try again",
-             "Settings > Wi-Fi Test shows the chip's state");
+    wifi_say(COLOR_RED, L(STR_WF_NO_START), 0, L(STR_WF_TRY),
+             L(STR_WF_TEST_HINT));
   else
     return 1;
   return 0;
@@ -1630,12 +1630,12 @@ static int wifi_chip_ok(const WifiShared *w) {
 /* What a network's security is, when AuroraOS cannot join it. */
 static const char *wifi_sec_text(u32 sec) {
   switch (sec) {
-    case WIFI_SEC_WEP: return "It uses WEP, which is not supported";
-    case WIFI_SEC_WPA1: return "It uses the old WPA, not WPA2";
-    case WIFI_SEC_WPA3: return "It needs WPA3, which is not supported";
-    case WIFI_SEC_EAP: return "It needs a user name (802.1X)";
-    case WIFI_SEC_TKIP: return "It uses TKIP only, not AES";
-    default: return "Its security is not supported";
+    case WIFI_SEC_WEP: return L(STR_WF_SEC_WEP);
+    case WIFI_SEC_WPA1: return L(STR_WF_SEC_WPA1);
+    case WIFI_SEC_WPA3: return L(STR_WF_SEC_WPA3);
+    case WIFI_SEC_EAP: return L(STR_WF_SEC_EAP);
+    case WIFI_SEC_TKIP: return L(STR_WF_SEC_TKIP);
+    default: return L(STR_WF_SEC_OTHER);
   }
 }
 
@@ -1647,76 +1647,70 @@ static void wifi_say_result(const WifiShared *w, const char *ssid) {
   switch (w->conn_stage) {
     case WIFI_CONN_DONE:
     case WIFI_CONN_NOPING:
-      p = wifi_ip(snd_cpy(a, "Address "), w->ip);
-      p = wifi_ip(snd_cpy(p, ", router "), w->gw);
+      p = wifi_ip(snd_cpy(a, L(STR_WF_ADDRESS)), w->ip);
+      p = wifi_ip(snd_cpy(p, L(STR_WF_ROUTER)), w->gw);
       if (w->ping_ok) {
-        p = snd_cpy(b, "Ping: ");
+        p = snd_cpy(b, L(STR_WF_PING));
         snd_u32(p, w->ping_ok);
-        p = snd_cpy(p + wifi_len(p), " of ");
+        p = snd_cpy(p + wifi_len(p), L(STR_WF_OF));
         snd_u32(p, w->ping_sent);
-        p = snd_cpy(p + wifi_len(p), " answered, best ");
+        p = snd_cpy(p + wifi_len(p), L(STR_WF_ANSWERED));
         snd_u32(p, (w->ping_best_us + 500u) / 1000u);
         snd_cpy(p + wifi_len(p), " ms");
       } else {
-        snd_cpy(b, "The router did not answer pings");
+        snd_cpy(b, L(STR_WF_NO_PINGS));
       }
-      wifi_say(COLOR_AURORA, "Connected to ", ssid, a, b);
+      wifi_say(COLOR_AURORA, L(STR_WF_CONNECTED), ssid, a, b);
       break;
     case WIFI_CONN_NODHCP:
       /* Reason 3 is the core's own disconnect at the end. */
-      wifi_say(COLOR_ORANGE, "Joined, but no address came: ", ssid,
-               (w->conn_reason & 0xFFu) && (w->conn_reason & 0xFFu) != 3u
-                   ? "The link dropped while asking"
-                   : "The hotspot did not answer DHCP",
-               "Try again");
+      wifi_say(COLOR_ORANGE, L(STR_WF_NO_ADDR), ssid,
+               L((w->conn_reason & 0xFFu) && (w->conn_reason & 0xFFu) != 3u
+                     ? STR_WF_DROPPED
+                     : STR_WF_NO_DHCP),
+               L(STR_WF_TRY));
       break;
     case WIFI_CONN_FAILED:
-      p = snd_cpy(a, "Reason ");
+      p = snd_cpy(a, L(STR_WF_REASON));
       snd_u32(p, w->conn_reason & 0xFFu);
       p = snd_cpy(p + wifi_len(p), " ");
       snd_cpy(p, wifi_reason(w->conn_reason & 0xFFu));
-      wifi_say(COLOR_RED, "Could not join ", ssid, a, "Try again");
+      wifi_say(COLOR_RED, L(STR_WF_NOT_JOINED), ssid, a, L(STR_WF_TRY));
       break;
     case WIFI_CONN_NOTFOUND:
-      wifi_say(COLOR_RED, "Not found: ", ssid,
-               "Is it on? The 3DS only sees 2.4 GHz",
-               "networks, channels 1 to 13");
+      wifi_say(COLOR_RED, L(STR_WF_NOT_FOUND), ssid, L(STR_WF_24GHZ),
+               L(STR_WF_CHANNELS));
       break;
     case WIFI_CONN_BADPASS:
-      wifi_say(COLOR_RED, "Wrong password? ", ssid,
-               "The network did not accept it",
-               "Pick the network again to change it");
+      wifi_say(COLOR_RED, L(STR_WF_BADPASS), ssid, L(STR_WF_REFUSED),
+               L(STR_WF_PICK_CHANGE));
       break;
     case WIFI_CONN_SECURED:
       if ((w->conn_stage == WIFI_CONN_SECURED) &&
           (w->sec == WIFI_SEC_WPA2 || w->sec == WIFI_SEC_OPEN))
-        wifi_say(COLOR_ORANGE, "Needs a password: ", ssid,
-                 "Pick the network again to type it", "");
+        wifi_say(COLOR_ORANGE, L(STR_WF_NEEDS_PASS), ssid, L(STR_WF_PICK_TYPE),
+                 "");
       else
-        wifi_say(COLOR_ORANGE, "Cannot join ", ssid, wifi_sec_text(w->sec),
-                 "AuroraOS joins WPA2 (and open) networks");
+        wifi_say(COLOR_ORANGE, L(STR_WF_CANNOT), ssid, wifi_sec_text(w->sec),
+                 L(STR_WF_JOINS));
       break;
     case WIFI_CONN_KEYS:
-      wifi_say(COLOR_ORANGE, "The password check did not finish: ", ssid,
-               "Try again", "");
+      wifi_say(COLOR_ORANGE, L(STR_WF_KEYS), ssid, L(STR_WF_TRY), "");
       break;
     default:
-      wifi_say(COLOR_ORANGE, "Joining stopped early: ", ssid, "Try again",
-               "");
+      wifi_say(COLOR_ORANGE, L(STR_WF_EARLY), ssid, L(STR_WF_TRY), "");
       break;
   }
 }
 
 static int wifi_do_search(WifiShared *w) {
-  wifi_say(COLOR_WHITE, "Searching for networks", 0,
-           "This takes about 20 seconds", "");
+  wifi_say(COLOR_WHITE, L(STR_WF_SEARCHING_NETS), 0, L(STR_WF_20S), "");
   wifi_top_hint = "";
   wifi_top();
   wifi_top_hint = 0;
   int r = wifi_job(w, 0, 0);
   if (r < 0) {
-    wifi_say(COLOR_RED, "No Wi-Fi firmware on the SD card", 0,
-             "Open Wi-Fi again to copy it from this console", "");
+    wifi_say(COLOR_RED, L(STR_WF_NO_FW), 0, L(STR_WF_REOPEN), "");
     return 1;
   }
   if (!r)
@@ -1730,10 +1724,9 @@ static int wifi_do_search(WifiShared *w) {
   for (int i = 0; i < wn_count; i++)
     n += wn[i].rssi != 0;
   snd_u32(p, (u32)n);
-  snd_cpy(p + wifi_len(p), n == 1 ? " network found" : " networks found");
-  wifi_say(n ? COLOR_AURORA : COLOR_ORANGE, n ? a : "No networks found", 0,
-           n ? "Pick yours to connect" : "Hidden networks are not listed",
-           "");
+  snd_cpy(p + wifi_len(p), L(n == 1 ? STR_WF_FOUND1 : STR_WF_FOUNDN));
+  wifi_say(n ? COLOR_AURORA : COLOR_ORANGE, n ? a : L(STR_WF_NONE_FOUND), 0,
+           L(n ? STR_WF_PICK_YOURS : STR_WF_HIDDEN), "");
   return 1;
 }
 
@@ -1748,13 +1741,12 @@ static int wifi_password(WifiShared *w, const char *ssid) {
   pass[0] = '\0';
   if (wifi_streq(ssid, wifi_saved_ssid))
     hm_str_copy(pass, wifi_saved_pass);
-  wifi_say(COLOR_WHITE, "Password for ", ssid,
-           "L or the abc key: ABC, then symbols", "");
-  wifi_top_hint = "B: Delete   START: Done   SELECT: Cancel";
+  wifi_say(COLOR_WHITE, L(STR_WF_PASS_FOR), ssid, L(STR_WF_CAPS), "");
+  wifi_top_hint = L(STR_WF_KB_HINT);
   anim_transition(ANIM_PUSH, ANIM_BOTH);
   wifi_top();
-  int ok = keyboard_edit(pass, WIFI_PASS_MAX, KB_PASSWORD, "Password",
-                         g_accent);
+  int ok = keyboard_edit(pass, WIFI_PASS_MAX, KB_PASSWORD,
+                         L(STR_WF_PASSWORD), g_accent);
   anim_transition(ANIM_POP, ANIM_BOTH);
   wifi_top_hint = 0;
   while (get_keys() & (BUTTON_B | BUTTON_A | BUTTON_START | BUTTON_SELECT))
@@ -1764,8 +1756,7 @@ static int wifi_password(WifiShared *w, const char *ssid) {
   if (!ok)
     wifi_say_saved();
   else if (n < 8 || n > 64)
-    wifi_say(COLOR_ORANGE, "A Wi-Fi password has 8 to 63 characters", 0,
-             "(or is 64 hex digits)", "");
+    wifi_say(COLOR_ORANGE, L(STR_WF_PASS_LEN), 0, L(STR_WF_PASS_HEX), "");
   else
     r = wifi_connect(w, ssid, pass, wifi_saved_store(ssid, pass));
   wifi_wipe(pass, sizeof(pass));
@@ -1778,8 +1769,8 @@ static int wifi_do_pick(WifiShared *w, int i) {
   static char ssid[33];
   hm_str_copy(ssid, wn[i].ssid);
   if (wn[i].secured && wifi_sec_tag(wn[i].sec)) {
-    wifi_say(COLOR_ORANGE, "Cannot join ", ssid, wifi_sec_text((u32)wn[i].sec),
-             "AuroraOS joins WPA2 (and open) networks");
+    wifi_say(COLOR_ORANGE, L(STR_WF_CANNOT), ssid,
+             wifi_sec_text((u32)wn[i].sec), L(STR_WF_JOINS));
     return 1;
   }
   if (wn[i].secured)
@@ -1789,16 +1780,14 @@ static int wifi_do_pick(WifiShared *w, int i) {
 
 static int wifi_connect(WifiShared *w, const char *ssid, const char *pass,
                         int saved) {
-  wifi_say(COLOR_WHITE, "Connecting to ", ssid,
-           "This takes about half a minute",
-           saved ? "" : "(could not save it to the SD card)");
+  wifi_say(COLOR_WHITE, L(STR_WF_CONNECTING), ssid, L(STR_WF_30S),
+           saved ? "" : L(STR_WF_NOT_SAVED));
   wifi_top_hint = "";
   wifi_top();
   wifi_top_hint = 0;
   int r = wifi_job(w, ssid, pass);
   if (r < 0) {
-    wifi_say(COLOR_RED, "No Wi-Fi firmware on the SD card", 0,
-             "Open Wi-Fi again to copy it from this console", "");
+    wifi_say(COLOR_RED, L(STR_WF_NO_FW), 0, L(STR_WF_REOPEN), "");
     return 1;
   }
   if (!r)
@@ -1901,16 +1890,14 @@ static void wifi_screen(void) {
   wn_add_saved();
   wifi_say_saved();
   if (!fwdump_present()) {
-    wifi_say(COLOR_ORANGE, "No Wi-Fi firmware on the SD card", 0,
-             "Aurora can copy it from this console", "");
+    wifi_say(COLOR_ORANGE, L(STR_WF_NO_FW), 0, L(STR_WF_CAN_COPY), "");
     wifi_top();
     anim_list_jump(&wn_list, sel);
     wifi_paint();
-    if (fv_confirm("Wi-Fi firmware required", "Copy it from this console?",
-                   "Yes", "Not now") &&
+    if (fv_confirm(L(STR_WF_FW_REQUIRED), L(STR_WF_COPY_Q), L(STR_YES),
+                   L(STR_NOT_NOW)) &&
         fwdump_run())
-      wifi_say(COLOR_WHITE, "Wi-Fi firmware copied", 0,
-               "Search, then pick your network", "");
+      wifi_say(COLOR_WHITE, L(STR_WF_COPIED), 0, L(STR_WF_SEARCH_PICK), "");
   }
   wifi_top();
   anim_list_jump(&wn_list, sel);
@@ -1952,9 +1939,9 @@ static void wifi_screen(void) {
       hm_str_copy(was, wifi_saved_ssid);
       if (wifi_saved_forget()) {
         wn_drop_unseen();
-        wifi_say(COLOR_WHITE, "Forgot ", was, "", "");
+        wifi_say(COLOR_WHITE, L(STR_WF_FORGOT), was, "", "");
       } else {
-        wifi_say(COLOR_RED, "Could not change the SD card", 0, "", "");
+        wifi_say(COLOR_RED, L(STR_WF_SD_FAIL), 0, "", "");
       }
       redraw = 1;
     }
@@ -1973,6 +1960,13 @@ static void wifi_screen(void) {
     ui_idle();
   }
 }
+
+static const char *wifi_saved_name(void) {
+  wifi_saved_load();
+  return wifi_saved_ssid;
+}
+
+static const SetupWifi setup_wifi = {wifi_screen, wifi_saved_name};
 
 /* GPU Test. GPL-2.0: part of the PICA200 driver (docs/gpu.md "License and
  * credits").
@@ -3388,7 +3382,7 @@ void os_main(void) {
   int loaded = user_config_load(&g_cfg);
   if (!loaded || !g_cfg.setup_done) {
     anim_transition(ANIM_FADE, ANIM_BOTH); /* from whatever the boot left */
-    setup_run(&g_cfg);
+    setup_run(&g_cfg, &setup_wifi);
     user_config_save(&g_cfg);
   }
 

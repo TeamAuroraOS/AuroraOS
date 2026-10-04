@@ -14,6 +14,7 @@
 #include "anim.h"
 #include "ff.h"
 #include "image.h"
+#include "lang.h"
 #include "nand.h"
 #include "statusbar.h"
 #include "timer.h"
@@ -173,7 +174,7 @@ static u32 fd_load(const char *path, int *packed, const char **why) {
   int crypt;
   u8 ctr[16];
 
-  *why = "The Wi-Fi module could not be read";
+  *why = L(STR_FD_E_READ);
   if (f_open(&f, path, FA_READ) != FR_OK)
     return 0;
   if (!read_at(&f, 0, ncch, 0x200) || !read_at(&f, 0x200, exh, 0x400)) {
@@ -189,7 +190,7 @@ static u32 fd_load(const char *path, int *packed, const char **why) {
   crypt = !(flags[7] & 0x04); /* NoCrypto */
   if (crypt && ((flags[7] & 0x21) || flags[3])) {
     /* a fixed key, a seed, or 7.x and later keyslots: not set on the ARM9 */
-    *why = "The module uses encryption Aurora cannot undo";
+    *why = L(STR_FD_E_CRYPT);
     f_close(&f);
     return 0;
   }
@@ -208,7 +209,7 @@ static u32 fd_load(const char *path, int *packed, const char **why) {
     }
   rounded = (size + 15u) & ~15u;
   if (!size || rounded > FD_IN_MAX) {
-    *why = crypt ? "The module did not decrypt" : "The module has no code";
+    *why = L(crypt ? STR_FD_E_DECRYPT : STR_FD_E_NOCODE);
     f_close(&f);
     return 0;
   }
@@ -352,13 +353,13 @@ const char *fwdump_copy(void (*step)(int n)) {
     goto done;
   }
   if (f_mount(&nandfs, "1:", 1) != FR_OK) {
-    why = "CTRNAND could not be opened";
+    why = L(STR_FD_E_CTRNAND);
     goto done;
   }
   if (step)
     step(1);
   if (!fd_find(app)) {
-    why = "This console's Wi-Fi module was not found";
+    why = L(STR_FD_E_NOMOD);
     goto done;
   }
   if (step)
@@ -373,17 +374,17 @@ const char *fwdump_copy(void (*step)(int n)) {
     code = FD_OUT;
   }
   if (!len) {
-    why = "The module's code did not unpack";
+    why = L(STR_FD_E_UNPACK);
     goto done;
   }
   if (!fd_extract(code, len)) {
-    why = "No Wi-Fi firmware was found in the module";
+    why = L(STR_FD_E_NOFW);
     goto done;
   }
   if (step)
     step(4);
   if (f_mount(&sdfs, "0:", 1) != FR_OK || !fd_save(code))
-    why = "Could not write to the SD card";
+    why = L(STR_FD_E_WRITE);
 
 done:
   f_mount(NULL, "1:", 0);
@@ -409,9 +410,9 @@ int fwdump_present(void) {
 
 #define STEPS 5
 
-static const char *const fd_step_name[STEPS] = {
-    "Read the system NAND", "Find the Wi-Fi module", "Decrypt the module",
-    "Extract the firmware", "Save it to the SD card"};
+static const StringId fd_step_name[STEPS] = {STR_FD_STEP1, STR_FD_STEP2,
+                                             STR_FD_STEP3, STR_FD_STEP4,
+                                             STR_FD_STEP5};
 
 static const Color c_ok = {0x4C, 0xD9, 0x64};
 static const Color c_bad = {0xE0, 0x40, 0x40};
@@ -428,18 +429,17 @@ static void top_head(u32 icon, Color tint, const char *title) {
 
 static void top_warning(void) {
   volatile u8 *fb = VRAM_TOP_LA;
-  top_head(ASSET_ICON_REPORT_64, c_warn, "System NAND");
-  ui_text_mid(fb, TW / 2, 140, TSH,
-              "This action accesses the system NAND. Proceed?", COLOR_WHITE,
+  top_head(ASSET_ICON_REPORT_64, c_warn, L(STR_FD_NAND));
+  ui_text_mid_fit(fb, TW / 2, 132, TSH, L(STR_FD_ACCESS), TW - 16,
+                  COLOR_WHITE, COLOR_HM_BG_BOT, &ui_bold);
+  ui_text_mid(fb, TW / 2, 151, TSH, L(STR_FD_PROCEED), COLOR_WHITE,
               COLOR_HM_BG_BOT, &ui_bold);
-  ui_text_mid(fb, TW / 2, 166, TSH,
-              "Aurora only reads it: nothing on the NAND changes.",
-              COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_font);
-  ui_text_mid(fb, TW / 2, 186, TSH,
-              "The Wi-Fi firmware is copied to SD:/Aurora/wifi.",
-              COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_font);
-  ui_text_mid(fb, TW / 2, 222, TSH, "Enter the code below, or SELECT to cancel",
-              COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_small);
+  ui_text_mid_fit(fb, TW / 2, 176, TSH, L(STR_FD_READ_ONLY), TW - 16,
+                  COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_font);
+  ui_text_mid_fit(fb, TW / 2, 195, TSH, L(STR_FD_COPIED_TO), TW - 16,
+                  COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_font);
+  ui_text_mid_fit(fb, TW / 2, 222, TSH, L(STR_FD_ENTER), TW - 16,
+                  COLOR_HM_TEXT2, COLOR_HM_BG_BOT, &ui_small);
   screen_present_top();
 }
 
@@ -447,7 +447,7 @@ static void top_warning(void) {
 static void top_steps(int at, int failed) {
   volatile u8 *fb = VRAM_TOP_LA;
   int x = 112;
-  top_head(ASSET_ICON_WIFI_64, COLOR_WHITE, "Wi-Fi firmware");
+  top_head(ASSET_ICON_WIFI_64, COLOR_WHITE, L(STR_FD_TITLE));
   for (int i = 0; i < STEPS; i++) {
     int y = 132 + i * 18, cy = y + ui_th(&ui_font) / 2;
     Color c = i < at ? COLOR_WHITE : COLOR_HM_TEXT2;
@@ -460,7 +460,7 @@ static void top_steps(int at, int failed) {
                              i == at ? g_accent : COLOR_HM_TEXT2);
     if (i == at)
       c = failed ? c_bad : COLOR_WHITE;
-    ui_text(fb, x + 26, y, TSH, fd_step_name[i], c, COLOR_HM_BG_BOT,
+    ui_text(fb, x + 26, y, TSH, L(fd_step_name[i]), c, COLOR_HM_BG_BOT,
             &ui_font);
   }
   screen_present_top();
@@ -485,15 +485,15 @@ static void fd_step(int n) {
   int fill = (CARD_W - 48) * (n + 1) / STEPS;
   top_steps(n, 0);
   bot_card();
-  ui_text_mid(fb, BW / 2, CARD_Y + 30, BSH, "Copying the Wi-Fi firmware",
-              COLOR_WHITE, COLOR_PANEL_TOP, &ui_bold);
-  ui_text_mid(fb, BW / 2, CARD_Y + 56, BSH, fd_step_name[n], COLOR_HM_TEXT2,
-              COLOR_PANEL_TOP, &ui_font);
+  ui_text_mid_fit(fb, BW / 2, CARD_Y + 30, BSH, L(STR_FD_COPYING), CARD_W - 24,
+                  COLOR_WHITE, COLOR_PANEL_TOP, &ui_bold);
+  ui_text_mid_fit(fb, BW / 2, CARD_Y + 56, BSH, L(fd_step_name[n]),
+                  CARD_W - 24, COLOR_HM_TEXT2, COLOR_PANEL_TOP, &ui_font);
   draw_filled_round_rect(fb, CARD_X + 24, CARD_Y + 100, CARD_W - 48, 8, 4, BSH,
                          COLOR_HM_SLOT);
   draw_filled_round_rect(fb, CARD_X + 24, CARD_Y + 100, fill, 8, 4, BSH,
                          g_accent);
-  ui_text_mid(fb, BW / 2, CARD_Y + 140, BSH, "Keep the console on",
+  ui_text_mid(fb, BW / 2, CARD_Y + 140, BSH, L(STR_FD_KEEP_ON),
               COLOR_HM_TEXT2, COLOR_PANEL_BOT, &ui_small);
   screen_present_bottom();
 }
@@ -501,8 +501,7 @@ static void fd_step(int n) {
 /* The code: five of these, never the same twice in a row. */
 static const u32 code_key[6] = {BUTTON_DUP,   BUTTON_DDOWN, BUTTON_DLEFT,
                                 BUTTON_DRIGHT, BUTTON_A,    BUTTON_B};
-static const char *const code_name[6] = {"UP",    "DOWN", "LEFT",
-                                         "RIGHT", "A",    "B"};
+static const char *const code_name[6] = {0, 0, 0, 0, "A", "B"};
 
 #define CODE_N     5
 #define CHIP_W     54
@@ -516,11 +515,31 @@ static const char *const code_name[6] = {"UP",    "DOWN", "LEFT",
 #define CANCEL_W   112
 #define CANCEL_H   30
 
+/* A D-pad direction (0 up, 1 down, 2 left, 3 right) as an arrow centred on
+ * (cx, cy): a head 14 pixels across and a shaft behind it. */
+static void arrow(volatile u8 *fb, int cx, int cy, int dir, Color c) {
+  for (int i = 0; i < 7; i++) {
+    int along = -7 + i, half = i + 1;
+    if (dir == 0)
+      draw_filled_rect(fb, cx - half, cy + along, 2 * half, 1, BSH, c);
+    else if (dir == 1)
+      draw_filled_rect(fb, cx - half, cy - along - 1, 2 * half, 1, BSH, c);
+    else if (dir == 2)
+      draw_filled_rect(fb, cx + along, cy - half, 1, 2 * half, BSH, c);
+    else
+      draw_filled_rect(fb, cx - along - 1, cy - half, 1, 2 * half, BSH, c);
+  }
+  if (dir < 2)
+    draw_filled_rect(fb, cx - 2, dir ? cy - 7 : cy, 4, 8, BSH, c);
+  else
+    draw_filled_rect(fb, dir == 2 ? cx : cx - 7, cy - 2, 8, 4, BSH, c);
+}
+
 static void code_draw(const u8 *code, int got, int wrong) {
   volatile u8 *fb = VRAM_BOT_A;
   bot_card();
-  ui_text_mid(fb, BW / 2, CARD_Y + 18, BSH, "Press these buttons in order",
-              COLOR_WHITE, COLOR_PANEL_TOP, &ui_bold);
+  ui_text_mid_fit(fb, BW / 2, CARD_Y + 18, BSH, L(STR_FD_PRESS), CARD_W - 24,
+                  COLOR_WHITE, COLOR_PANEL_TOP, &ui_bold);
   for (int i = 0; i < CODE_N; i++) {
     int x = CHIP_X(i);
     Color text = i < got ? COLOR_HM_BAR : i == got ? COLOR_WHITE
@@ -535,17 +554,21 @@ static void code_draw(const u8 *code, int got, int wrong) {
     if (i == got && !wrong)
       draw_round_ring(fb, x - 3, CHIP_Y - 3, CHIP_W + 6, CHIP_H + 6, 12, 3,
                       BSH, g_accent);
-    ui_text_mid_fit(fb, x + CHIP_W / 2, CHIP_Y + (CHIP_H - ui_th(&ui_bold)) / 2,
-                    BSH, code_name[code[i]], CHIP_W - 6,
-                    wrong ? COLOR_WHITE : text, COLOR_HM_SLOT, &ui_bold);
+    if (code_name[code[i]])
+      ui_text_mid(fb, x + CHIP_W / 2, CHIP_Y + (CHIP_H - ui_th(&ui_title)) / 2,
+                  BSH, code_name[code[i]], wrong ? COLOR_WHITE : text,
+                  COLOR_HM_SLOT, &ui_title);
+    else
+      arrow(fb, x + CHIP_W / 2, CHIP_Y + CHIP_H / 2, code[i],
+            wrong ? COLOR_WHITE : text);
   }
   ui_text_mid(fb, BW / 2, CHIP_Y + CHIP_H + 12, BSH,
-              wrong ? "Not that one: start again" : "SELECT: Cancel",
+              L(wrong ? STR_FD_WRONG : STR_FD_SELECT_CANCEL),
               wrong ? c_bad : COLOR_HM_TEXT2, COLOR_PANEL_BOT, &ui_small);
   draw_gradient_round_rect(fb, CANCEL_X, CANCEL_Y, CANCEL_W, CANCEL_H, 9, BSH,
                            COLOR_HM_SLOT_TOP, COLOR_HM_SLOT_BOT);
   ui_text_mid(fb, BW / 2, CANCEL_Y + (CANCEL_H - ui_th(&ui_font)) / 2, BSH,
-              "Cancel", COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
+              L(STR_CANCEL), COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
   screen_present_bottom();
 }
 
@@ -645,18 +668,16 @@ static void result(const char *why) {
   top_steps(why ? fd_at : STEPS, why != 0);
   bot_card();
   ui_text_mid(fb, BW / 2, CARD_Y + 22, BSH,
-              why ? "Copy failed" : "Wi-Fi firmware saved",
+              L(why ? STR_FD_FAILED : STR_FD_SAVED),
               why ? c_bad : COLOR_WHITE, COLOR_PANEL_TOP, &ui_title);
-  two_lines(why ? why : "The files are in SD:/Aurora/wifi", CARD_Y + 60,
-            COLOR_HM_TEXT2);
+  two_lines(why ? why : L(STR_FD_FILES_IN), CARD_Y + 60, COLOR_HM_TEXT2);
   if (why)
-    ui_text_mid(fb, BW / 2, CARD_Y + 110, BSH,
-                "docs/wifi.md shows the way with a PC", COLOR_HM_TEXT2,
-                COLOR_PANEL_BOT, &ui_small);
+    ui_text_mid(fb, BW / 2, CARD_Y + 110, BSH, L(STR_FD_PC_WAY),
+                COLOR_HM_TEXT2, COLOR_PANEL_BOT, &ui_small);
   draw_gradient_round_rect(fb, CANCEL_X, CANCEL_Y, CANCEL_W, CANCEL_H, 9, BSH,
                            COLOR_HM_SLOT_TOP, COLOR_HM_SLOT_BOT);
   ui_text_mid(fb, BW / 2, CANCEL_Y + (CANCEL_H - ui_th(&ui_font)) / 2, BSH,
-              "OK", COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
+              L(STR_OK), COLOR_WHITE, COLOR_HM_SLOT, &ui_font);
   screen_present_bottom();
   touch_tap(0, 0);
   for (;;) {

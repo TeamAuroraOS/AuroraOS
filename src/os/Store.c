@@ -13,6 +13,7 @@
 #include "ff.h"
 #include "image.h"
 #include "keyboard.h"
+#include "lang.h"
 #include "power.h"
 #include "statusbar.h"
 #include "timer.h"
@@ -720,7 +721,7 @@ static void status_update(void) {
   if (n) {
     p = put_str(p, " (");
     p = put_u32(p, (u32)n);
-    put_str(p, n == 1 ? " new update)" : " new updates)");
+    put_str(p, L(n == 1 ? STR_ST_UPDATE1 : STR_ST_UPDATES));
   }
 }
 
@@ -840,20 +841,18 @@ static const char *item_text(int it) {
 static void about_build(void) {
   static char text[640];
   char *p = text;
-  p = put_str(p, "aShop is where apps for Aurora are found and downloaded.\n\n"
-                 "Catalogue: ");
-  p = put_str(p, cat_on_card ? "/Aurora/Store/catalog.txt on the SD card"
-                             : "the built-in demo");
-  p = put_str(p, ", with ");
+  p = put_str(p, L(STR_ST_AB_INTRO));
+  p = put_str(p, "\n\n");
+  p = put_str(p, L(STR_ST_AB_CAT));
+  p = put_str(p, L(cat_on_card ? STR_ST_AB_CARD : STR_ST_AB_DEMO));
+  p = put_str(p, L(STR_ST_AB_WITH));
   p = put_u32(p, (u32)napps);
-  p = put_str(p, napps == 1 ? " app and " : " apps and ");
+  p = put_str(p, L(napps == 1 ? STR_ST_AB_APP : STR_ST_AB_APPS));
   p = put_u32(p, (u32)nnews);
-  p = put_str(p, nnews == 1 ? " news item.\n\n" : " news items.\n\n");
-  put_str(p, "There is no download server yet. A download copies the app from "
-             "/Aurora/Store/Packages when it is there; otherwise only the "
-             "progress runs. Apps go to /Aurora/Apps and appear on the Home "
-             "Menu.");
-  about = (News){"about", "About aShop", AURORA_VERSION, text};
+  p = put_str(p, L(nnews == 1 ? STR_ST_AB_NEWS1 : STR_ST_AB_NEWSN));
+  p = put_str(p, "\n\n");
+  put_str(p, L(STR_ST_AB_SERVER));
+  about = (News){"about", L(STR_ST_ABOUT), AURORA_VERSION, text};
   wrapped = 0;
 }
 
@@ -953,8 +952,7 @@ static void bar_put(void) {
 
 static void bar_draw(int downloading) {
   volatile u8 *fb = VRAM_TOP_LA;
-  status_bar_draw_app(downloading ? "aShop (Downloading software...)"
-                                  : status_text,
+  status_bar_draw_app(downloading ? L(STR_ST_DL_BAR) : status_text,
                       downloading ? c_bg : c_bar,
                       downloading ? UI_NO_ASSET : ASSET_APP_STORE_16);
   for (int x = 0; x < TW; x++)
@@ -1020,30 +1018,39 @@ static void item_icon(volatile u8 *fb, int x, int y, int size, int sh,
 #define BB_H (BSH - BB_Y)
 
 typedef struct {
-  const char *label;
+  StringId label;
   u32 icon;
   int back; /* a chevron before the label */
 } Btn;
 
-static void btn_rect(int n, int i, int *x, int *w) {
+/* A side button is 85 pixels, or wider when its label needs it; the middle
+ * one takes what is left. */
+static int btn_side(const Btn *b) {
+  int need = ui_tw(&ui_font, L(b->label)) + 14 +
+             (b->icon != UI_NO_ASSET ? 22 : b->back ? 14 : 0);
+  return need > 85 ? need : 85;
+}
+
+static void btn_rect(const Btn *b, int n, int i, int *x, int *w) {
+  int l = n > 1 ? btn_side(&b[0]) : BW, r = n > 2 ? btn_side(&b[2]) : 0;
   if (n == 1) {
     *x = 0;
     *w = BW;
   } else if (n == 2) {
-    *x = i ? 86 : 0;
-    *w = i ? BW - 86 : 85;
+    *x = i ? l + 1 : 0;
+    *w = i ? BW - l - 1 : l;
   } else {
-    *x = i == 0 ? 0 : i == 1 ? 86 : 235;
-    *w = i == 1 ? 148 : 85;
+    *x = i == 0 ? 0 : i == 1 ? l + 1 : BW - r;
+    *w = i == 0 ? l : i == 1 ? BW - l - r - 2 : r;
   }
 }
 
-static int btn_at(int n, int tx, int ty) {
+static int btn_at(const Btn *b, int n, int tx, int ty) {
   if (ty < BB_Y - 4)
     return -1;
   for (int i = 0; i < n; i++) {
     int x, w;
-    btn_rect(n, i, &x, &w);
+    btn_rect(b, n, i, &x, &w);
     if (tx >= x && tx < x + w + 1)
       return i;
   }
@@ -1064,7 +1071,7 @@ static void buttons(const Btn *b, int n) {
   for (int i = 0; i < n; i++) {
     int x, w, tw, iw, lx, ty = BB_Y + (BB_H - ui_th(&ui_font)) / 2;
     int left = i == 0 ? 6 : 0, right = i == n - 1 ? 6 : 0;
-    btn_rect(n, i, &x, &w);
+    btn_rect(b, n, i, &x, &w);
     if (i == bar_lit) {
       draw_filled_round_rect(fb, x, BB_Y, w, BB_H + 8, 6, BSH, c_btn_lit);
       if (!left)
@@ -1077,15 +1084,18 @@ static void buttons(const Btn *b, int n) {
     }
     if (i)
       draw_filled_rect(fb, x - 1, BB_Y, 1, BB_H, BSH, c_bg);
-    tw = ui_tw(&ui_font, b[i].label);
+    tw = ui_tw(&ui_font, L(b[i].label));
     iw = b[i].icon != UI_NO_ASSET ? 22 : b[i].back ? 14 : 0;
+    if (tw > w - 8 - iw)
+      tw = w - 8 - iw;
     lx = x + (w - tw - iw) / 2;
     if (b[i].icon != UI_NO_ASSET)
       ui_icon(fb, lx, BB_Y + (BB_H - 16) / 2, 16, BSH, b[i].icon, 0,
               COLOR_WHITE);
     else if (b[i].back)
       chevron(fb, lx, BB_Y + BB_H / 2, COLOR_WHITE);
-    ui_text(fb, lx + iw, ty, BSH, b[i].label, COLOR_WHITE, c_btn, &ui_font);
+    ui_text_fit(fb, lx + iw, ty, BSH, L(b[i].label), tw, COLOR_WHITE, c_btn,
+                &ui_font);
   }
 }
 
@@ -1296,9 +1306,9 @@ static void page_top(int it, int scroll) {
 #define SLOP      8
 #define SWIPE     36
 
-static const Btn main_btns[3] = {{"Search", ASSET_ICON_SEARCH_16, 0},
-                                 {"Go!", UI_NO_ASSET, 0},
-                                 {"Options", ASSET_ICON_WRENCH_16, 0}};
+static const Btn main_btns[3] = {{STR_ST_SEARCH, ASSET_ICON_SEARCH_16, 0},
+                                 {STR_ST_GO, UI_NO_ASSET, 0},
+                                 {STR_ST_OPTIONS, ASSET_ICON_WRENCH_16, 0}};
 
 static int m_sel;
 static AnimVal m_scroll;
@@ -1364,7 +1374,7 @@ static void paint_main(void) {
                     TILE_W + 2 * RING_PAD, TILE_H + 2 * RING_PAD,
                     TILE_R + RING_PAD, RING_T, BSH, c_ring);
   else
-    ui_text_mid(fb, BW / 2, TILE_Y + 40, BSH, "Nothing in the catalogue",
+    ui_text_mid(fb, BW / 2, TILE_Y + 40, BSH, L(STR_ST_EMPTY),
                 COLOR_HM_TEXT2, c_bg, &ui_font);
 
   draw_filled_round_rect(fb, TC_X, TC_Y, TC_W, TC_H, 9, BSH, c_card);
@@ -1378,7 +1388,7 @@ static void paint_main(void) {
 
 static void draw_main(void) {
   bar_draw(0);
-  top_home("Welcome to aShop!", 0);
+  top_home(L(STR_ST_WELCOME), 0);
   screen_present_top();
   paint_main();
   screen_present_bottom();
@@ -1403,18 +1413,18 @@ typedef struct {
 
 static List *cur_list;
 
-static const Btn list_btns[3] = {{"Back", UI_NO_ASSET, 1},
-                                 {"Go!", UI_NO_ASSET, 0},
-                                 {"Search", ASSET_ICON_SEARCH_16, 0}};
+static const Btn list_btns[3] = {{STR_BACK, UI_NO_ASSET, 1},
+                                 {STR_ST_GO, UI_NO_ASSET, 0},
+                                 {STR_ST_SEARCH, ASSET_ICON_SEARCH_16, 0}};
 
 static void row_tag(int it, char *out, Color *c) {
   *c = COLOR_HM_TEXT2;
   if (IS_NEWS(it)) {
     put_str(out, news_at(it)->date);
   } else if (apps[it].state == A_INSTALLED) {
-    put_str(out, "Installed");
+    put_str(out, L(STR_ST_INSTALLED));
   } else if (apps[it].state == A_UPDATE) {
-    put_str(out, "Update");
+    put_str(out, L(STR_ST_UPDATE_TAG));
     *c = c_ring;
   } else {
     size_text(out, apps[it].size);
@@ -1478,6 +1488,19 @@ static void fade_top_page(int it, int dir) {
 
 static int pg_item;
 
+/* Back, and for an app the download: their count. */
+static int page_btns(int it, Btn *b) {
+  b[0] = (Btn){STR_BACK, UI_NO_ASSET, 1};
+  if (IS_NEWS(it))
+    return 1;
+  b[1] = (Btn){STR_ST_DOWNLOAD, UI_NO_ASSET, 0};
+  if (apps[it].state == A_UPDATE)
+    b[1].label = STR_ST_UPDATE;
+  else if (apps[it].state == A_INSTALLED)
+    b[1].label = STR_ST_AGAIN;
+  return 2;
+}
+
 static void paint_page(void) {
   volatile u8 *fb = VRAM_BOT_A;
   int it = pg_item;
@@ -1491,7 +1514,8 @@ static void paint_page(void) {
   draw_filled_rect(fb, 22, 84, BW - 44, 1, BSH, c_line);
 
   if (!IS_NEWS(it)) {
-    static const char *const label[3] = {"Version", "Size", "Status"};
+    static const StringId label[3] = {STR_ST_VERSION, STR_ST_SIZE,
+                                      STR_ST_STATUS};
     const App *a = &apps[it];
     char size[24];
     const char *val[3];
@@ -1499,31 +1523,24 @@ static void paint_page(void) {
     size_text(size, a->size);
     val[0] = a->version[0] ? a->version : "-";
     val[1] = size;
-    val[2] = a->state == A_INSTALLED ? "Installed"
-             : a->state == A_UPDATE  ? "Update available"
-                                     : "Not installed";
+    val[2] = L(a->state == A_INSTALLED ? STR_ST_INSTALLED
+               : a->state == A_UPDATE  ? STR_ST_UPD_AVAIL
+                                       : STR_ST_NOT_INST);
     if (a->state == A_UPDATE)
       vc[2] = c_ring;
     for (int i = 0; i < 3; i++) {
       int y = 96 + i * 24;
-      ui_text(fb, 22, y, BSH, label[i], COLOR_HM_TEXT2, c_card, &ui_font);
+      ui_text(fb, 22, y, BSH, L(label[i]), COLOR_HM_TEXT2, c_card, &ui_font);
       ui_text(fb, BW - 22 - ui_tw(&ui_font, val[i]), y, BSH, val[i], vc[i],
               c_card, &ui_font);
     }
   }
-  ui_text_mid(fb, BW / 2, 180, BSH, "Up and Down scroll the page",
+  ui_text_mid(fb, BW / 2, 180, BSH, L(STR_ST_SCROLL),
               COLOR_HM_TEXT2, c_card, &ui_small);
 
-  if (IS_NEWS(it)) {
-    static const Btn back[1] = {{"Back", UI_NO_ASSET, 1}};
-    buttons(back, 1);
-  } else {
-    Btn b[2] = {{"Back", UI_NO_ASSET, 1}, {"Download", UI_NO_ASSET, 0}};
-    if (apps[it].state == A_UPDATE)
-      b[1].label = "Update";
-    else if (apps[it].state == A_INSTALLED)
-      b[1].label = "Download again";
-    buttons(b, 2);
+  {
+    Btn b[2];
+    buttons(b, page_btns(it, b));
   }
 }
 
@@ -1553,7 +1570,7 @@ static void dl_close(int remove) {
 static void dl_fail(const char *why) {
   dl_close(1);
   dl.state = DL_FAILED;
-  dl.title = "Download failed";
+  dl.title = L(STR_ST_DL_FAILED);
   dl.line1 = why;
   dl.line2 = "";
 }
@@ -1571,7 +1588,7 @@ static void dl_start(App *a) {
   dl.total = a->size ? a->size : (1u << 20);
   dl.t0 = timer_ticks();
   if (!mounted) {
-    dl_fail("There is no SD card");
+    dl_fail(L(STR_ST_E_NOSD));
     return;
   }
   path2(src, ST_PACKAGES, a->file);
@@ -1580,7 +1597,7 @@ static void dl_start(App *a) {
   if (aurora_parse_header(&dl_src, &h) != AURORA_OK ||
       f_lseek(&dl_src, 0) != FR_OK) {
     f_close(&dl_src);
-    dl_fail("The package is not an Aurora app");
+    dl_fail(L(STR_ST_E_NOTAPP));
     return;
   }
   dl.total = f_size(&dl_src);
@@ -1589,7 +1606,7 @@ static void dl_start(App *a) {
   put_str(put_str(dl.tmp, dl.dst), ".part");
   if (f_open(&dl_dst, dl.tmp, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) {
     f_close(&dl_src);
-    dl_fail("Could not write to the SD card");
+    dl_fail(L(STR_FD_E_WRITE));
     return;
   }
   dl.real = 1;
@@ -1604,21 +1621,21 @@ static void dl_finish(void) {
     f_unlink(dl.dst);
     if (f_rename(dl.tmp, dl.dst) != FR_OK) {
       f_unlink(dl.tmp);
-      dl_fail("Could not install the app");
+      dl_fail(L(STR_ST_E_INSTALL));
       return;
     }
     installs++;
-    dl.title = "Installed";
+    dl.title = L(STR_ST_INSTALLED);
     dl.line1 = a->name;
-    dl.line2 = "is on the Home Menu";
+    dl.line2 = L(STR_ST_ON_HOME);
   } else if (dl.existed) {
-    dl.title = "Up to date";
-    dl.line1 = "This demo had no package, so";
-    dl.line2 = "the app on the card is unchanged";
+    dl.title = L(STR_ST_UP_TO_DATE);
+    dl.line1 = L(STR_ST_DEMO1);
+    dl.line2 = L(STR_ST_DEMO2);
   } else {
-    dl.title = "Download finished";
-    dl.line1 = "This demo had no package to install:";
-    dl.line2 = "put one in /Aurora/Store/Packages";
+    dl.title = L(STR_ST_DL_DONE);
+    dl.line1 = L(STR_ST_DEMO3);
+    dl.line2 = L(STR_ST_DEMO4);
   }
   if (real || dl.existed)
     record_set(a->file, a->version);
@@ -1641,11 +1658,11 @@ static void dl_step(void) {
   for (int n = 0; dl.real && dl.done < want && n < 4; n++) {
     UINT len = want - dl.done > CHUNK ? CHUNK : want - dl.done, br, bw;
     if (f_read(&dl_src, dl_buf, len, &br) != FR_OK || br != len) {
-      dl_fail("Could not read the package");
+      dl_fail(L(STR_ST_E_READ));
       return;
     }
     if (f_write(&dl_dst, dl_buf, len, &bw) != FR_OK || bw != len) {
-      dl_fail("The SD card is full");
+      dl_fail(L(STR_ST_E_FULL));
       return;
     }
     dl.done += len;
@@ -1695,7 +1712,7 @@ static void dl_top(void) {
     char *p;
     fmt_size(a, dl.done);
     fmt_size(b, dl.total);
-    p = put_str(line, "Downloading... (");
+    p = put_str(line, L(STR_ST_DL_PREFIX));
     p = put_str(p, a);
     p = put_str(p, " / ");
     p = put_str(p, b);
@@ -1718,15 +1735,15 @@ static int dl_pct(void) {
 }
 
 static void paint_dl(void) {
-  static const Btn cancel[1] = {{"Cancel", UI_NO_ASSET, 0}};
-  static const Btn ok[1] = {{"OK", UI_NO_ASSET, 0}};
+  static const Btn cancel[1] = {{STR_CANCEL, UI_NO_ASSET, 0}};
+  static const Btn ok[1] = {{STR_OK, UI_NO_ASSET, 0}};
   volatile u8 *fb = VRAM_BOT_A;
   char pct[8];
   int run = dl.state == DL_RUN, fill;
 
   draw_filled_rect(fb, 0, 0, BW, BSH, BSH, c_bg);
   draw_filled_round_rect(fb, 8, 8, BW - 16, 196, 12, BSH, c_card);
-  ui_text_mid_fit(fb, BW / 2, 30, BSH, run ? "Downloading" : dl.title,
+  ui_text_mid_fit(fb, BW / 2, 30, BSH, run ? L(STR_ST_DOWNLOADING) : dl.title,
                   BW - 48, dl.state == DL_FAILED ? c_ring : COLOR_WHITE,
                   c_card, &ui_title);
   if (run) {
@@ -1763,7 +1780,7 @@ static void download_screen(App *a) {
   while (dl.state == DL_RUN) {
     u32 k = get_keys_down();
     int ms;
-    if ((k & BUTTON_B) || (tapped(&tx, &ty) && btn_at(1, tx, ty) == 0)) {
+    if ((k & BUTTON_B) || (tapped(&tx, &ty) && ty >= BB_Y - 4)) {
       flash(paint_dl, 0);
       dl_close(1);
       dl.state = DL_CANCELLED;
@@ -1795,7 +1812,7 @@ static void download_screen(App *a) {
     while (1) {
       u32 k = get_keys_down();
       if ((k & (BUTTON_A | BUTTON_B)) ||
-          (tapped(&tx, &ty) && btn_at(1, tx, ty) == 0)) {
+          (tapped(&tx, &ty) && ty >= BB_Y - 4)) {
         flash(paint_dl, 0);
         break;
       }
@@ -1827,8 +1844,11 @@ static int page_screen(int it, int push_top) {
   while (1) {
     u32 k = get_keys_down();
     int b = -1, ms, cx, cy;
-    if (tapped(&tx, &ty))
-      b = btn_at(n, tx, ty);
+    if (tapped(&tx, &ty)) {
+      Btn pb[2];
+      page_btns(it, pb);
+      b = btn_at(pb, n, tx, ty);
+    }
     if ((k & (BUTTON_B | BUTTON_START)) || b == 0) {
       flash(paint_page, 0);
       break;
@@ -1906,7 +1926,7 @@ static void list_screen(List *l) {
 
     if (tapped(&tx, &ty)) {
       int top = anim_list_top(&l->al, l->sel);
-      b = btn_at(3, tx, ty);
+      b = btn_at(list_btns, 3, tx, ty);
       for (int r = 0; b < 0 && r < VISIBLE && top + r < l->n; r++) {
         int y = ROW_Y0 + r * ROW_STEP;
         if (touch_in(tx, ty, ROW_X, y - ROW_RING, ROW_W,
@@ -1994,14 +2014,14 @@ static void open_section(int s) {
   if (section_list(s, &l))
     list_screen(&l);
   else if (secs[s].kind == K_UPDATES)
-    message("No updates", "Your apps are up to date");
+    message(L(STR_ST_NO_UPDATES), L(STR_ST_ALL_CURRENT));
   else
-    message("Nothing here yet", "Come back soon");
+    message(L(STR_ST_NOTHING), L(STR_ST_SOON));
 }
 
 static void updates_list(void) {
   static List l;
-  l.title = "Download updates";
+  l.title = L(STR_ST_UPDATES_TITLE);
   l.n = 0;
   for (int i = 0; i < napps; i++)
     if (apps[i].state == A_UPDATE)
@@ -2009,7 +2029,7 @@ static void updates_list(void) {
   if (l.n)
     list_screen(&l);
   else
-    message("No updates", "Your apps are up to date");
+    message(L(STR_ST_NO_UPDATES), L(STR_ST_ALL_CURRENT));
 }
 
 static void search_screen(void) {
@@ -2019,10 +2039,9 @@ static void search_screen(void) {
 
   q[0] = 0;
   anim_transition(ANIM_PUSH, ANIM_BOTH);
-  top_home("Search aShop",
-           "B: Delete   L: Caps   START: Search   SELECT: Cancel");
+  top_home(L(STR_ST_SEARCH_TITLE), L(STR_ST_KB_HINT));
   screen_present_top();
-  ok = keyboard_edit(q, sizeof(q), KB_FILENAME, "Name of an app", c_ring);
+  ok = keyboard_edit(q, sizeof(q), KB_FILENAME, L(STR_ST_APP_NAME), c_ring);
   settle();
   if (!ok || !q[0]) {
     anim_transition(ANIM_POP, ANIM_BOTH);
@@ -2035,11 +2054,11 @@ static void search_screen(void) {
       l.items[l.n++] = i;
   if (!l.n) {
     draw_filled_rect(VRAM_BOT_A, 0, 0, BW, BSH, BSH, c_bg);
-    message("No results", q);
+    message(L(STR_ST_NO_RESULTS), q);
     anim_transition(ANIM_POP, ANIM_BOTH);
     return;
   }
-  put_str(put_str(title, "Search: "), q);
+  put_str(put_str(title, L(STR_ST_SEARCH_PREFIX)), q);
   l.title = title;
   list_screen(&l);
 }
@@ -2054,8 +2073,8 @@ static void search_screen(void) {
 #define OP_BH    32
 #define OP_BY(i) (OP_Y + 44 + (i) * 38)
 
-static const char *const op_label[OP_N] = {"Check for updates",
-                                           "Reload catalogue", "About aShop"};
+static const StringId op_label[OP_N] = {STR_ST_CHECK, STR_ST_RELOAD,
+                                        STR_ST_ABOUT};
 
 static void options_draw(int item) {
   static const Color scrim = {0x00, 0x00, 0x00};
@@ -2064,12 +2083,12 @@ static void options_draw(int item) {
   draw_filled_rect_alpha(fb, 0, 0, BW, BSH, BSH, scrim, 150);
   anim_popup_behind();
   draw_filled_round_rect(fb, OP_X, OP_Y, OP_W, OP_H, 14, BSH, c_card);
-  ui_text_mid(fb, BW / 2, OP_Y + 14, BSH, "Options", COLOR_WHITE, c_card,
-              &ui_bold);
+  ui_text_mid(fb, BW / 2, OP_Y + 14, BSH, L(STR_ST_OPTIONS), COLOR_WHITE,
+              c_card, &ui_bold);
   for (int i = 0; i < OP_N; i++) {
     draw_filled_round_rect(fb, OP_BX, OP_BY(i), OP_BW, OP_BH, 8, BSH, c_btn);
     ui_text_mid(fb, BW / 2, OP_BY(i) + (OP_BH - ui_th(&ui_font)) / 2, BSH,
-                op_label[i], COLOR_WHITE, c_btn, &ui_font);
+                L(op_label[i]), COLOR_WHITE, c_btn, &ui_font);
   }
   draw_round_ring(fb, OP_BX - 2, OP_BY(item) - 2, OP_BW + 4, OP_BH + 4, 10, 3,
                   BSH, c_ring);
@@ -2133,8 +2152,8 @@ static void main_options(void) {
     m_sel = first_section();
     anim_jump(&m_scroll, m_sel * TILE_STEP);
     paint_main();
-    message("Catalogue reloaded", cat_on_card ? "From the SD card"
-                                              : "The built-in demo catalogue");
+    message(L(STR_ST_RELOADED),
+            L(cat_on_card ? STR_ST_FROM_SD : STR_ST_BUILTIN));
   } else if (pick == 2) {
     about_build();
     page_screen(ITEM_ABOUT, 1);
@@ -2185,7 +2204,7 @@ static void main_screen(void) {
         m_sel = s < 0 ? 0 : s >= nsecs ? nsecs - 1 : s;
         anim_to(&m_scroll, m_sel * TILE_STEP);
       } else if (y0 >= BB_Y - 4) {
-        act = btn_at(3, x0, y0);
+        act = btn_at(main_btns, 3, x0, y0);
       } else if (y0 >= CAR_Y0 && y0 < CAR_Y1) {
         if (x0 < TILE_X - RING_PAD)
           m_sel = m_sel > 0 ? m_sel - 1 : 0;

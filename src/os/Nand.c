@@ -12,6 +12,7 @@
 
 #include "nand.h"
 #include "aes.h"
+#include "lang.h"
 #include "sdmmc.h"
 #include <string.h>
 
@@ -102,9 +103,9 @@ void nand_close(void) {
 const char *nand_error(int err) {
   switch (err) {
     case NAND_OK:       return "";
-    case NAND_ERR_EMMC: return "The system NAND could not be read";
-    case NAND_ERR_NCSD: return "The system NAND has no partition table";
-    default:            return "The system NAND did not decrypt";
+    case NAND_ERR_EMMC: return L(STR_FD_E_EMMC);
+    case NAND_ERR_NCSD: return L(STR_FD_E_NCSD);
+    default:            return L(STR_FD_E_KEYS);
   }
 }
 

@@ -52,8 +52,16 @@ int  user_config_load(UserConfig *cfg);
 /* Returns 1 on success, 0 on any SD / FatFs error. */
 int  user_config_save(const UserConfig *cfg);
 
+/* What the network step reaches in os_main.c: Settings > Wi-Fi (the firmware
+ * check and copy, the search, the join) and the name of the network saved,
+ * "" for none. */
+typedef struct {
+  void (*wifi_screen)(void);
+  const char *(*wifi_saved)(void);
+} SetupWifi;
+
 /* Returns once the user reaches the final Welcome screen. */
-void setup_run(UserConfig *cfg);
+void setup_run(UserConfig *cfg, const SetupWifi *wifi);
 
 /* Defined in os_setup.c. Index 0, Aurora teal, is the default. */
 #define AURORA_ACCENT_COUNT 14
