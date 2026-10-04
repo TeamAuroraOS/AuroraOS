@@ -52,6 +52,8 @@ MASKS = [
     ('FILE_BIN',     'Unknown-Bin-File.png'),
     ('CUBE',         'Cube.png'),
     ('FOLDER',       'folder-icon-without-text.png'),
+    ('SEARCH',       'Search.png'),
+    ('WRENCH',       'Wrench.png'),
 ]
 
 # Full-colour art, kept as RGBA and drawn untinted: game card.png has grey
@@ -68,9 +70,17 @@ COLOR = [
     ('APP_FILES',  'files.png',       16, True),
     ('APP_PREFS',  'preferences.png', 64, True),
     ('APP_STORE',  'store.png',       64, True),
+    ('APP_STORE',  'store.png',       32, True),
+    ('APP_STORE',  'store.png',       16, True),
     ('ICON_GAMECARD', 'game card.png', 64, False),
     ('ICON_GAMECARD', 'game card.png', 32, False),
     ('ICON_GAMECARD', 'game card.png', 16, False),
+]
+
+# Full-colour art that is not square, kept at its own size: the auroraShop
+# logo the Home Menu shows for the store. (asset id, source, width, height).
+ART = [
+    ('STORE_LOGO', 'store-logo.png', 191, 152),
 ]
 
 # Faces for the About page's More Info credits, cut to a circle rather than to
@@ -309,6 +319,12 @@ def main():
         entries.append(('%s_%d' % (name, sz), T_RGBA, sz, sz, rgba))
         if a.verbose:
             print('  color %-24s %dx%d' % (fn, w, h))
+
+    for name, fn, aw, ah in ART:
+        w, h, px = png_read.read(os.path.join(a.icons, fn))
+        entries.append((name, T_RGBA, aw, ah, area_rgba(w, h, px, aw, ah)))
+        if a.verbose:
+            print('  art   %-24s %dx%d -> %dx%d' % (fn, w, h, aw, ah))
 
     for name, fn, sz in PEOPLE:
         w, h, px = png_read.read(os.path.join(a.icons, fn))
