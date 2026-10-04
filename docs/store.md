@@ -13,6 +13,9 @@ carousel (`shop-main-bottom` with the `shop-main-icon-*`, `shop-promo-1` and
 (`downloading`) and the Home Menu preview (`topscreen-home-menu`,
 `topscreen-icon`).
 
+aShop's own screens follow the language chosen in setup (English, Spanish or
+French); the catalogue's text, banners included, is shown as written.
+
 ## Opening it
 
 aShop is a tile on the Home Menu. On a card that already has a

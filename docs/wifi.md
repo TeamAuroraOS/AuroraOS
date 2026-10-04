@@ -11,7 +11,9 @@ DHCP gave an address and the router answered 4 pings of 4 in 48 ms.
 **The firmware copies itself (2026-10-03, not yet run on a console).**
 When the firmware is missing from the SD card, Settings > Wi-Fi offers to copy
 it from the console's own NWM module, read from the system NAND after a button
-code, so no PC is needed (see *Copying the firmware on the console*).
+code, so no PC is needed (see *Copying the firmware on the console*). The
+setup wizard's Network step leads to the same screen, and Settings > Wi-Fi
+and the copy speak English, Spanish and French.
 
 **Core v113 drops the debug log.** With everything working, the
 `SD:/Aurora/WiFi_Log.txt` writer (`WiFiLog.c`), the Wi-Fi Test's full test
@@ -586,8 +588,9 @@ finishing" page until the core is done, and B there leaves Wi-Fi settings.
 
 ## Copying the firmware on the console
 
-When Settings > Wi-Fi opens and `SD:/Aurora/wifi` lacks any of the five files
-the driver loads, it says so and asks **"Wi-Fi firmware required: Copy it from
+When Settings > Wi-Fi opens (also from the setup wizard's Network step, whose
+*Set up Wi-Fi* opens the same screen) and `SD:/Aurora/wifi` lacks any of the
+five files the driver loads, it says so and asks **"Wi-Fi firmware required: Copy it from
 this console?"**. Yes moves to a warning, **"This action accesses the system
 NAND. Proceed?"**, with a code of five buttons drawn at random from Up, Down,
 Left, Right, A and B (never the same twice in a row). The code has to be

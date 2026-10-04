@@ -142,8 +142,9 @@ distribution; it is kept as-is and recorded here and in `docs/assets.md`.
   plays sounds from `SD:\Aurora\Apps\TETRIS\` when they are there; see
   [`docs/apps.md`](docs/apps.md)
 - Wi-Fi needs your console's own Wi-Fi firmware. The first time you open
-  Settings > Wi-Fi, Aurora offers to copy it from the system NAND (read only,
-  after a button code) to `SD:\Aurora\wifi\`; it can also be extracted on a
+  Settings > Wi-Fi (or reach Network in the setup wizard), Aurora offers to
+  copy it from the system NAND (read only, after a button code) to
+  `SD:\Aurora\wifi\`; it can also be extracted on a
   PC with `tools/nwm_extract.py`. See [`docs/wifi.md`](docs/wifi.md). The
   saved network is in `SD:\Aurora\wifi\network.txt`
 ## How to Open:
