@@ -54,7 +54,11 @@ ARM9_LDFLAGS := -T $(ARM9_LD) -nostdlib -nostartfiles -Wl,--build-id=none -Wl,--
 
 ARM11_ARCH := -mcpu=mpcore -march=armv6k -marm
 ARM11_ASFLAGS := $(ARM11_ARCH) -mthumb-interwork
+# The ARM11 runs with SCTLR.U clear (legacy alignment), where an unaligned
+# halfword or word access silently goes to the aligned address, so GCC must
+# not merge byte stores into unaligned ones.
 ARM11_CFLAGS := $(ARM11_ARCH) \
+                -mno-unaligned-access \
                 -mthumb-interwork \
                 -ffreestanding \
                 -fno-builtin \
@@ -145,7 +149,9 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_ff.o $(BUILD_DIR)/os_ffunicode.o \
            $(BUILD_DIR)/os_launch.o $(BUILD_DIR)/os_gpu9.o \
            $(BUILD_DIR)/os_power.o \
-           $(BUILD_DIR)/os_wifi9.o $(BUILD_DIR)/os_touch9.o \
+           $(BUILD_DIR)/os_wifi9.o \
+           $(BUILD_DIR)/os_crypto.o \
+           $(BUILD_DIR)/os_touch9.o \
            $(BUILD_DIR)/os_timer9.o $(BUILD_DIR)/os_assets.o \
            $(BUILD_DIR)/os_ui.o $(BUILD_DIR)/os_files.o \
            $(BUILD_DIR)/os_image.o $(BUILD_DIR)/os_jpeg.o \
@@ -159,9 +165,12 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_statusbar.o $(BUILD_DIR)/os_fileview.o \
            $(BUILD_DIR)/os_fileops.o $(BUILD_DIR)/os_screenshot.o \
            $(BUILD_DIR)/os_touchcal.o $(BUILD_DIR)/os_terminal.o \
-           $(BUILD_DIR)/os_termcmds.o $(BUILD_DIR)/os_anim.o
+           $(BUILD_DIR)/os_termcmds.o $(BUILD_DIR)/os_anim.o \
+           $(BUILD_DIR)/os_store.o \
+           $(BUILD_DIR)/os_aes.o $(BUILD_DIR)/os_nand.o \
+           $(BUILD_DIR)/os_fwdump.o
 
-CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o $(BUILD_DIR)/Stereo11.o $(BUILD_DIR)/P3d11.o
+CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o $(BUILD_DIR)/Net11.o $(BUILD_DIR)/Wpa11.o $(BUILD_DIR)/Crypto.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o $(BUILD_DIR)/Stereo11.o $(BUILD_DIR)/P3d11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
 AUDIO11_BLOB := $(BUILD_DIR)/audio11_blob.h
 
@@ -286,6 +295,22 @@ $(BUILD_DIR)/os_homelayout.o: $(OS_DIR)/HomeLayout.c $(wildcard $(INC_DIR)/*.h) 
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/os_store.o: $(OS_DIR)/Store.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_aes.o: $(OS_DIR)/Aes.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_nand.o: $(OS_DIR)/Nand.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_fwdump.o: $(OS_DIR)/FwDump.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/os_p3d9.o: $(OS_DIR)/P3d9.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
@@ -327,6 +352,10 @@ $(BUILD_DIR)/os_anim.o: $(OS_DIR)/Anim.c $(wildcard $(INC_DIR)/*.h) | dirs
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_wifi9.o: $(OS_DIR)/WiFi9.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_crypto.o: $(OS_DIR)/Crypto.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 

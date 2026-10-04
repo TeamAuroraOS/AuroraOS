@@ -6,6 +6,9 @@ mockup/
 # Dumped copyright material (NWM Wi-Fi sysmodule + extracted Atheros firmware).
 # Must NOT be committed; users dump these from their own console.
 exclude/
+# The aShop demo's "Better on New 3DS" banner shows Nintendo's logo and
+# console photo; it stays local like the rest of that material.
+Aurora/Store/new3ds.png
 *.bin
 *.elf
 *.firm
