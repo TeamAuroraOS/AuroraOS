@@ -184,7 +184,7 @@ before. The only loader change is that `boot_aurora()` now calls the shared
 | `src/os/os.ld` | `_os_image_end` symbol for the return snapshot |
 | `include/loader.h` | app staging / return-contract / icon constants |
 | `src/i2c.c`, `include/i2c.h` | `I2C_readRegBuf`, used to poll the MCU for the HOME button |
-| `auric-lang/runtime/auric_runtime.c` | the app side: HOME return, GPU present, sound from the SD card |
+| `auric-lang/runtime/auric_runtime.c` | the app side: HOME return, GPU present of both screens, touch, sound from the SD card |
 
 ## A worked example
 

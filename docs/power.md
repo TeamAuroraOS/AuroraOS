@@ -29,13 +29,14 @@ masks each field before decoding: `0x3F` for hours and day, `0x1F` for month,
 a real date. A dead or half-initialised MCU tends to return all `0x00` or all
 `0xFF`, and it is much better to show `--:--` than a convincing but wrong clock.
 
-## The charging bit is unverified
+## The charging bit
 
 `MCU_STATUS_CHARGING` in `src/power.c` is currently `1 << 4` of register `0x0F`.
 That the register holds the power flags is documented; *which* bit means "charger
 attached" is not, in any source I could confirm.
 
 It is deliberately isolated as a single `#define` so it is a one-line change.
+On a New 3DS the pill follows the charger (2026-10-04).
 
 **To verify:** watch the battery pill in the top-right of the home menu. It turns
 green while charging. Plug the charger in and out; if the colour does not

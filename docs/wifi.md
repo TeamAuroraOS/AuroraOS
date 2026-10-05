@@ -8,12 +8,21 @@ networks from Settings > Wi-Fi, gets an address over DHCP, and the terminal's
 took the first RSN element form (capabilities `0x0000`), both keys went in,
 DHCP gave an address and the router answered 4 pings of 4 in 48 ms.
 
-**The firmware copies itself (2026-10-03, not yet run on a console).**
+**The firmware copies itself (2026-10-03; works on hardware, 2026-10-04).**
 When the firmware is missing from the SD card, Settings > Wi-Fi offers to copy
 it from the console's own NWM module, read from the system NAND after a button
 code, so no PC is needed (see *Copying the firmware on the console*). The
 setup wizard's Network step leads to the same screen, and Settings > Wi-Fi
 and the copy speak English, Spanish and French.
+
+**Core v114 speaks TCP, and it works on hardware (New 3DS, 2026-10-04).** A new
+network operation, `WIFI_NETOP_HTTP`, makes one HTTP exchange over a TCP
+connection inside a single command: connect, send the request, collect the
+reply, close (see *Staying joined*). The TCP client in `Net11.c` is small (one
+connection, in-order data, retransmission from 1 s doubling to 4 s). It passed
+a PC test against a simulated server and a lossy link first. Aurora accounts
+use it to link the console (`docs/account.md`), and linking works on a New 3DS
+against the live server behind Cloudflare.
 
 **Core v113 drops the debug log.** With everything working, the
 `SD:/Aurora/WiFi_Log.txt` writer (`WiFiLog.c`), the Wi-Fi Test's full test
@@ -48,7 +57,7 @@ scan sets (every beacon) was still on, so each of the network's ten beacons a
 second came up as a 277-byte `BSSINFO`, and reading one a byte at a time
 takes about 90 ms, so a reply queued behind several of them.
 
-**Core v111 (2026-10-03, not yet run on hardware)** turns the filter off
+**Core v111 (2026-10-03, works on hardware)** turns the filter off
 (`NONE_BSS_FILTER`) as soon as the join succeeds, keeps the join up when asked
 to (`WIFI_OPT_STAY`), and adds `AUDIO_CMD_WIFI_NET`: DNS look-ups and pings to
 any address over that link. The terminal's `ping` uses it (see *Staying
@@ -542,10 +551,13 @@ answer is `WIFI_NETS_NOLINK`.
 | `DNS` | an A query for `name` to the DNS server DHCP gave (the router if none), up to three tries; `ip`, or `NONAME` (NXDOMAIN), `DNSFAIL`, `BADNAME`, `TIMEOUT` |
 | `PING` | one echo to `ip` with `seq`: 56 data bytes as Linux sends; `rtt_us`, `ttl`, `bytes`, `from`, or `ICMPERR` with the type and code of an unreachable or time-exceeded that quotes our echo |
 | `LEAVE` | `WMI_DISCONNECT`, and the session ends |
+| `HTTP` | one HTTP exchange over TCP with `ip`:`port` (core 114): the request at `WIFI_HTTP_REQ` (`0x233B9000`, 2 KB) goes out, the reply comes back at `WIFI_HTTP_RESP` (`0x233B9800`, 8 KB) until the server closes or its `Content-Length` is in; `resp_len`, `stage`, `resent`, or `REFUSED` (RST), `TOOBIG`, `TIMEOUT` |
 
 A frame for an address off our subnet goes to the router's MAC; one on the
 subnet first needs that host's MAC, asked for with ARP (one entry is kept).
-Each wait is `timeout_ms` (100 to 10000, 2000 by default).
+Each wait is `timeout_ms` (100 to 10000, 2000 by default; for `HTTP` it
+bounds the whole exchange, up to 20000). The TCP details are in
+docs/account.md, *The network underneath*.
 
 On the ARM9, `src/os/WiFi9.c` posts the command and waits for it with the
 screens drawn directly (`wifi_net()`), and `wifi_net_join()` in `os_main.c`
@@ -644,8 +656,10 @@ damaged MBR, no NCSD); and the whole flow in the host harness with the NWM
 module this console's GodMode9 dump came from, unencrypted and encrypted both
 ways: the six files matched the PC extractor's exactly, and a fixed-key, a
 7.x and a missing module each stopped with their reason. The eMMC init and
-the AES engine's register use follow GodMode9 and Luma3DS but have not run on
-a console yet.
+the AES engine's register use follow GodMode9 and Luma3DS.
+
+On hardware (New 3DS, 2026-10-04) the copy works: the console copies its own
+firmware and joins networks with it.
 
 ## The Wi-Fi Test screen
 
@@ -758,8 +772,9 @@ there into shared FCRAM before each boot. Main.type5 is copied but not used.
 ## Path forward
 
 1. Servicing the chip between commands (today frames wait in it until the
-   next one), then UDP and TCP sockets on top of `Net11.c` for anything more
-   than ping.
+   next one). Until then a TCP connection lives inside one command
+   (`WIFI_NETOP_HTTP`); longer-lived sockets and TLS need the chip serviced
+   in the background.
 2. WPA3 (SAE) would need the firmware to pass authentication frames to the
    host, which this one may not do; WPA2/WPA3 transition networks already
    work as WPA2.

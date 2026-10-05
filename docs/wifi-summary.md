@@ -16,7 +16,7 @@ Verified on real hardware (New 3DS). Starting from nothing, AuroraOS:
 - Copies that firmware from the console's own NWM system module the first time
   Settings > Wi-Fi opens: it reads the system NAND (never writes it),
   decrypts NWM and unpacks its code, and saves the blobs to the SD card
-  (checked on the PC; not yet run on a console).
+  (works on hardware, 2026-10-04).
 - Talks to its bootloader (BMI), uploads the NWM firmware from the SD card,
   registers the firmware's patch (the "database" blob, a DataSet list the
   firmware applies once `hi_dset_list_head` points at it) and starts it.
@@ -34,7 +34,7 @@ existing homebrew routes Wi-Fi through Nintendo's sysmodule. The work combines
 reverse engineering of the retail NWM module with GBATEK, 3dbrew, the ath6kl
 driver, and the Linux 3DS port's AR6014 support.
 
-## Where it stands (2026-10-03)
+## Where it stands (2026-10-04)
 
 - Two bugs stood between HTC_READY and WMI. An ARM11 compiler setting let GCC
   emit unaligned stores that this core's alignment mode silently misplaces,
@@ -50,8 +50,11 @@ driver, and the Linux 3DS port's AR6014 support.
   type a secured network's password on the keyboard, join.
 - The debug log (`WiFi_Log.txt`) that got it here was removed in core v113
   once everything worked.
+- Core v114 adds a small TCP client: one HTTP exchange per command, which
+  links the console to an Aurora account (works on hardware, 2026-10-04).
 
 ## Not done
 
-WPA3, servicing the chip between commands, and TCP. The hardware foundation, the firmware boot, the WMI channel, the
+WPA3, servicing the chip between commands, long-lived TCP connections, and
+TLS. The hardware foundation, the firmware boot, the WMI channel, the
 scan, the join and the data path are in place.

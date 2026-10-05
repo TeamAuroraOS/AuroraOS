@@ -630,7 +630,7 @@ bounds there get shorter in real time at 3x, so `GPU_POLL_MAX` was tripled. The
 codec's `SPI_GUARD` stays far above a transfer either way, and the `sleep_ms`
 delays run only at start-up, before any switch. The mode holds until reboot.
 
-Not yet tested on hardware.
+Works on a New 3DS (2026-10-04).
 
 ## License and credits
 

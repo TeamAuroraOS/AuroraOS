@@ -72,6 +72,11 @@ offset 40 the record holds a flag byte and then `x_min`, `x_max`, `y_min` and
 1 file has zeros there and reads as no calibration. At boot a saved calibration
 that `touch_cal_set()` refuses is ignored.
 
+An Auric app replaces the OS image, calibration included, so its runtime links
+`Touch9.c` itself and reads the same record from `USER.dat` the first time the
+app asks for touch. It reads `TouchShared` only when the app was launched from
+the Home Menu, since otherwise no ARM11 core is filling it.
+
 ## Screenshots
 
 Pressing **L** and **R** together on any OS screen saves both screens as one
