@@ -22,7 +22,7 @@
 #define BUTTON_X            (1 << 10)
 #define BUTTON_Y            (1 << 11)
 
-#define AURORA_VERSION "Beta v0.1.3"
+#define AURORA_VERSION "Beta v0.1.4"
 
 #define REG_SDMMC_BASE      0x10006000
 

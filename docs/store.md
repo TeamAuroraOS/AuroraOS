@@ -7,9 +7,8 @@ the apps come from the account server (the `aurora-site/Account-API`
 repository; its `API.md`, section *aShop*, is the contract), so aShop needs an
 Aurora account linked to the console (see [`account.md`](account.md)).
 
-Status: works on the PC against the real server under `wrangler dev` (see
-*What was checked*). It needs the server version with aShop deployed before it
-works on a console.
+Status: works on a New 3DS against the live server (2026-10-05), after PC
+tests against the server under `wrangler dev` (see *What was checked*).
 
 The screens follow the mock-ups: the welcome screen (`shop-home`), the banner
 carousel (`shop-main-bottom` with the `shop-main-icon-*`, `shop-promo-1` and
@@ -290,7 +289,8 @@ card", and the catalogue copy, icons and `installed.txt` were not saved
 fails as on the console (`FR_NOT_ENABLED`, and `FR_INVALID_OBJECT` for a
 join during a download); the new one writes, rejoins twice mid-download,
 resumes at the right length and installs the file byte for byte.
-Not yet on hardware: speed, and the download screen drawn during pieces.
+On a New 3DS (2026-10-05) the catalogue, icons, downloads and the download
+screen drawn during pieces work. The download speed has not been measured.
 
 ## Console checklist
 

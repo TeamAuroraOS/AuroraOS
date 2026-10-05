@@ -38,7 +38,7 @@ static u32 len_of(const char *s) {
   return n;
 }
 
-/* "Beta v0.1.3" -> "0.1.3", for the User-Agent. */
+/* "Beta v0.1.4" -> "0.1.4", for the User-Agent. */
 static char *put_version(char *p) {
   const char *v = AURORA_VERSION;
   while (*v && !(*v >= '0' && *v <= '9'))
