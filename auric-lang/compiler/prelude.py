@@ -15,6 +15,8 @@ class Builtin:
 
 # Built-in calls, each lowering to one runtime helper.
 BUILTINS: dict[str, Builtin] = {
+    # Which screen the drawing built-ins draw on: TOP (default) or BOTTOM.
+    "screen":    Builtin(("int",), "void", "aur_screen"),
     "print":     Builtin(("string", "int", "int", "int"), "void", "aur_print"),
     "print_int": Builtin(("int", "int", "int", "int"), "void", "aur_print_int"),
     "clear":     Builtin(("int",), "void", "aur_clear"),
@@ -25,6 +27,13 @@ BUILTINS: dict[str, Builtin] = {
     # Polling input, for games that cannot block on a single button.
     "keys_down": Builtin((), "int", "aur_keys_down"),
     "keys_held": Builtin((), "int", "aur_keys_held"),
+    # Touch, in bottom-screen pixels; down/up are edges like keys_down.
+    "touch_down": Builtin((), "bool", "aur_touch_down"),
+    "touch_held": Builtin((), "bool", "aur_touch_held"),
+    "touch_up":   Builtin((), "bool", "aur_touch_up"),
+    "touch_x":    Builtin((), "int", "aur_touch_x"),
+    "touch_y":    Builtin((), "int", "aur_touch_y"),
+    "touch_in":   Builtin(("int", "int", "int", "int"), "bool", "aur_touch_in"),
     # Frame control: buffered(true) defers drawing until present().
     "buffered":  Builtin(("bool",), "void", "aur_buffered"),
     "present":   Builtin((), "void", "aur_present"),
@@ -63,6 +72,8 @@ CONSTANTS: dict[str, Const] = {
     "AURORA":    Const("int", "AUR_AURORA"),
     "GRAY":      Const("int", "AUR_GRAY"),
     "DARK_GRAY": Const("int", "AUR_DARK_GRAY"),
+    "TOP":       Const("int", "AUR_TOP"),
+    "BOTTOM":    Const("int", "AUR_BOTTOM"),
     "KEY_A":      Const("int", "AUR_KEY_A"),
     "KEY_B":      Const("int", "AUR_KEY_B"),
     "KEY_SELECT": Const("int", "AUR_KEY_SELECT"),

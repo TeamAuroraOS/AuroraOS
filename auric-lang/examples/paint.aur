@@ -1,0 +1,116 @@
+// Touch paint: both screens and the stylus. Pick a colour on the bar along the
+// top of the bottom screen and draw below it; B clears the canvas. The top
+// screen shows the colour and where the stylus is.
+
+let palette: int[8];
+let ink = 0;
+let last_x = -1;   // the previous point of the stroke, -1 when the stylus is up
+let last_y = -1;
+
+let BAR_H = 24;    // the colour bar: eight 40-pixel boxes
+let CANVAS_Y = 26;
+
+fn abs(n: int) -> int {
+    if n < 0 {
+        return -n;
+    }
+    return n;
+}
+
+fn draw_bar() {
+    screen(BOTTOM);
+    let i = 0;
+    while i < 8 {
+        fill_rect(i * 40, 0, 40, BAR_H, palette[i]);
+        i = i + 1;
+    }
+    fill_rect(ink * 40 + 14, 8, 12, 8, BLACK);
+    fill_rect(ink * 40 + 16, 10, 8, 4, WHITE);
+}
+
+fn clear_canvas() {
+    screen(BOTTOM);
+    fill_rect(0, BAR_H, 320, CANVAS_Y - BAR_H, DARK_GRAY);
+    fill_rect(0, CANVAS_Y, 320, 240 - CANVAS_Y, WHITE);
+}
+
+fn dab(x: int, y: int) {
+    if y - 2 >= CANVAS_Y {
+        fill_rect(x - 2, y - 2, 4, 4, palette[ink]);
+    }
+}
+
+// Touch is sampled, so a quick stroke arrives as points far apart: fill the
+// gap from the previous one.
+fn stroke(x: int, y: int) {
+    screen(BOTTOM);
+    if last_x < 0 {
+        dab(x, y);
+    } else {
+        let dx = x - last_x;
+        let dy = y - last_y;
+        let steps = abs(dx);
+        if abs(dy) > steps {
+            steps = abs(dy);
+        }
+        steps = steps / 2 + 1;
+        let i = 1;
+        while i <= steps {
+            dab(last_x + dx * i / steps, last_y + dy * i / steps);
+            i = i + 1;
+        }
+    }
+    last_x = x;
+    last_y = y;
+}
+
+fn show_status() {
+    screen(TOP);
+    fill_rect(180, 90, 40, 40, palette[ink]);
+    fill_rect(0, 150, 400, 8, BLACK);
+    if touch_held() {
+        print("Stylus at", 128, 150, WHITE);
+        print_int(touch_x(), 216, 150, YELLOW);
+        print_int(touch_y(), 256, 150, YELLOW);
+    } else {
+        print("Stylus up", 164, 150, GRAY);
+    }
+}
+
+fn main() {
+    palette[0] = BLACK;
+    palette[1] = RED;
+    palette[2] = ORANGE;
+    palette[3] = YELLOW;
+    palette[4] = GREEN;
+    palette[5] = BLUE;
+    palette[6] = MAGENTA;
+    palette[7] = WHITE;
+
+    buffered(true);
+    screen(TOP);
+    clear(BLACK);
+    print("Touch paint", 156, 24, AURORA);
+    print("Pick a colour on the bar, then draw.", 56, 48, WHITE);
+    print("B clears the canvas.  HOME exits.", 68, 60, WHITE);
+    fill_rect(176, 86, 48, 48, GRAY);
+    clear_canvas();
+    draw_bar();
+
+    while true {
+        if (keys_down() & KEY_B) != 0 {
+            clear_canvas();
+        }
+        if touch_down() && touch_in(0, 0, 320, BAR_H) {
+            ink = touch_x() / 40;
+            draw_bar();
+        }
+        if touch_held() && touch_y() >= CANVAS_Y {
+            stroke(touch_x(), touch_y());
+        } else {
+            last_x = -1;
+        }
+        show_status();
+        present();
+    }
+}

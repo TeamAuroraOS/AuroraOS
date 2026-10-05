@@ -19,6 +19,7 @@ AURORA_SOURCES = [
     ("screen.c", "aurora_src"),
     ("i2c.c", "aurora_src"),
     (os.path.join("os", "Gpu9.c"), os.path.join("aurora_src", "os")),
+    (os.path.join("os", "Touch9.c"), os.path.join("aurora_src", "os")),
     ("wavload.c", "aurora_src"),
     ("ff.c", "aurora_src"),
     ("ffunicode.c", "aurora_src"),

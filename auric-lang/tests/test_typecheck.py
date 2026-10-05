@@ -138,5 +138,29 @@ class SoundBuiltinTest(unittest.TestCase):
         bad('fn main() { play_sound("A.WAV"); }')
 
 
+class ScreenTouchBuiltinTest(unittest.TestCase):
+    def test_screen_selects_a_screen(self):
+        ok("fn main() { screen(BOTTOM); clear(BLACK); screen(TOP); }")
+
+    def test_screen_takes_an_int(self):
+        bad("fn main() { screen(true); }")
+
+    def test_touch_edges_are_bool(self):
+        ok("fn main() { if touch_down() || touch_up() || touch_held() {} }")
+
+    def test_touch_position_is_int(self):
+        ok("fn main() { let x = touch_x() + touch_y(); }")
+        bad("fn main() { if touch_x() {} }")
+        bad("fn main() { let x: int = touch_down(); }")
+
+    def test_touch_in(self):
+        ok("fn main() { if touch_down() && touch_in(0, 0, 40, 24) {} }")
+        bad("fn main() { let b = touch_in(0, 0, 40); }")
+
+    def test_cannot_shadow_screen_names(self):
+        bad("fn main() { let BOTTOM = 1; }")
+        bad("fn touch_x() -> int { return 0; } fn main() {}")
+
+
 if __name__ == "__main__":
     unittest.main()

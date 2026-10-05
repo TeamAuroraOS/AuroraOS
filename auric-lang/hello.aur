@@ -1,0 +1,5 @@
+fn main() {
+    clear(BLACK);
+    print("Hello Auric", 156, 116, GREEN);
+    wait_key(KEY_A);
+}

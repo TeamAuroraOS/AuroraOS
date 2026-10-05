@@ -44,6 +44,8 @@ AURORA_SCREEN = AURORA_SRC / "screen.c"
 AURORA_I2C = AURORA_SRC / "i2c.c"
 # The ARM9 GPU driver, so buffered apps present with a GPU blit.
 AURORA_GPU9 = AURORA_SRC / "os" / "Gpu9.c"
+# The touch calibration maths for the touch_* built-ins.
+AURORA_TOUCH9 = AURORA_SRC / "os" / "Touch9.c"
 # load_sound(): the WAV reader, the SD card stack it reads through (FatFs over
 # the SD driver), and the string routines FatFs calls. --gc-sections drops
 # them again from an app that loads no sound.
@@ -147,6 +149,7 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     screen_o = work / "screen.o"
     i2c_o = work / "i2c.o"
     gpu9_o = work / "gpu9.o"
+    touch9_o = work / "touch9.o"
     sound_o = [work / (src.stem + ".o") for src in AURORA_SOUND]
     start_o = work / "auric_start.o"
     elf = work / f"{stem}.elf"
@@ -159,6 +162,7 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_SCREEN), "-o", str(screen_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_I2C), "-o", str(i2c_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_GPU9), "-o", str(gpu9_o)], verbose)
+    _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_TOUCH9), "-o", str(touch9_o)], verbose)
     for src, obj in zip(AURORA_SOUND, sound_o):
         _run([cc, *ARM9_CFLAGS, *includes, "-c", str(src), "-o", str(obj)], verbose)
     _run([cc, *ARM9_ASFLAGS, "-c", str(RUNTIME_START), "-o", str(start_o)], verbose)
@@ -166,7 +170,8 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     # Link. Section placement (icon header first, then _start) is fixed by the
     # linker script, so object order here is not significant.
     _run([cc, *ARM9_LDFLAGS, str(head_o), str(start_o), str(prog_o), str(runtime_o),
-          str(screen_o), str(i2c_o), str(gpu9_o), *map(str, sound_o),
+          str(screen_o), str(i2c_o), str(gpu9_o), str(touch9_o),
+          *map(str, sound_o),
           "-o", str(elf), "-lgcc"], verbose)
 
     _run([objcopy, "-O", "binary", str(elf), str(payload)], verbose)
@@ -176,7 +181,7 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
 
     if not keep:
         for f in (head_o, head_s, prog_o, runtime_o, screen_o, i2c_o, gpu9_o,
-                  start_o, elf, payload, *sound_o):
+                  touch9_o, start_o, elf, payload, *sound_o):
             f.unlink(missing_ok=True)
 
     return output

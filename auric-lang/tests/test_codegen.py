@@ -74,5 +74,22 @@ class SoundCodegenTest(unittest.TestCase):
         self.assertIn("aur_stop_sounds()", c)
 
 
+class ScreenTouchCodegenTest(unittest.TestCase):
+    def test_screen_lowers_to_shim(self):
+        c = compile_to_c("fn main() { screen(BOTTOM); screen(TOP); }")
+        self.assertIn("aur_screen(AUR_BOTTOM)", c)
+        self.assertIn("aur_screen(AUR_TOP)", c)
+
+    def test_touch_builtins_lower_to_shim(self):
+        c = compile_to_c("fn main() { if touch_down() && touch_in(1, 2, 3, 4) "
+                         "{ let x = touch_x(); let y = touch_y(); } "
+                         "let h = touch_held(); let u = touch_up(); }")
+        self.assertIn("(aur_touch_down() && aur_touch_in(1, 2, 3, 4))", c)
+        self.assertIn("int au_x = aur_touch_x();", c)
+        self.assertIn("int au_y = aur_touch_y();", c)
+        self.assertIn("int au_h = aur_touch_held();", c)
+        self.assertIn("int au_u = aur_touch_up();", c)
+
+
 if __name__ == "__main__":
     unittest.main()

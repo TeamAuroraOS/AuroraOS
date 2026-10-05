@@ -1,7 +1,8 @@
 /* Auric runtime: maps the built-ins onto AuroraOS. Drawing comes from
- * src/screen.c, compiled alongside; input, timing and sound live here so an app
- * does not pull in the Home Menu. Everything draws on the top screen (400x240,
- * 8x8 font). */
+ * src/screen.c and the touch calibration maths from src/os/Touch9.c, compiled
+ * alongside; input, timing and sound live here so an app does not pull in the
+ * Home Menu. Drawing goes to the screen screen() selected: the top (400x240)
+ * or the bottom (320x240), with the 8x8 font. */
 #include "aurora.h"
 #include "gpu.h"
 #include "i2c.h"
@@ -9,6 +10,8 @@
 #include "audio.h"
 #include "ff.h"
 #include "wav.h"
+#include "touch.h"
+#include "user.h"
 #include "auric_runtime.h"
 
 /* ARM9 timers at 0x10003000: a value/reload register then a control register
@@ -56,9 +59,19 @@ static u32 aur_ticks(void) {
 
 int aur_millis(void) { return (int)(aur_ticks() / TICKS_PER_MS); }
 
-/* Current text-background colour, updated by aur_clear so text drawn after a
- * clear() sits on a matching background instead of a black box. */
-static Color aur_bg = {0x00, 0x00, 0x00};
+/* The screen the drawing built-ins draw on, and per screen the text-background
+ * colour, updated by aur_clear so text drawn after a clear() sits on a matching
+ * background instead of a black box. */
+static int aur_scr = AUR_TOP;
+static Color aur_bg[2];
+
+static volatile u8 *aur_fb(void) {
+  return aur_scr == AUR_BOTTOM ? VRAM_BOT_A : VRAM_TOP_LA;
+}
+
+static int aur_height(void) {
+  return aur_scr == AUR_BOTTOM ? BOT_SCREEN_HEIGHT : TOP_SCREEN_HEIGHT;
+}
 
 static Color aur_unpack(int packed) {
   Color c;
@@ -97,14 +110,26 @@ static int aur_from_home(void) {
   return desc[0] == AURORA_RETURN_READY_MAGIC;
 }
 
+static int aur_core_ready(u32 version) {
+  const AudioCtrl *ct = (const AudioCtrl *)AUDIO_CTRL_ADDR;
+  os_cache_sync();
+  return aur_from_home() && ct->magic == AUDIO_MAGIC && ct->version >= version;
+}
+
 static int aur_audio_ready(void) {
-  if (!aur_audio) {
-    const AudioCtrl *ct = (const AudioCtrl *)AUDIO_CTRL_ADDR;
-    os_cache_sync();
-    aur_audio = (aur_from_home() && ct->magic == AUDIO_MAGIC &&
-                 ct->version >= AUDIO_VOICE_VERSION) ? 1 : -1;
-  }
+  if (!aur_audio)
+    aur_audio = aur_core_ready(AUDIO_VOICE_VERSION) ? 1 : -1;
   return aur_audio > 0;
+}
+
+/* The card stays mounted once a built-in has needed it. */
+static int aur_mount(void) {
+  static FATFS fs;
+  static int mounted;
+
+  if (!mounted && f_mount(&fs, "", 1) == FR_OK)
+    mounted = 1;
+  return mounted;
 }
 
 /* The ARM11 writes ack_seq, so drop the cached line to see its change. */
@@ -192,12 +217,27 @@ void aur_check_home(void) {
 }
 
 /* Immediate mode presents after every drawing call; buffered mode waits for
- * present(). */
+ * present(), which copies only the screens drawn on since the last one. */
 static int aur_buffered_mode = 0;
+static int aur_dirty[2];
 
-static void aur_auto_present(void) {
-  if (!aur_buffered_mode)
+static void aur_show(int scr) {
+  if (scr == AUR_BOTTOM)
+    screen_present_bottom();
+  else
     screen_present_top();
+}
+
+static void aur_drew(void) {
+  if (aur_buffered_mode)
+    aur_dirty[aur_scr] = 1;
+  else
+    aur_show(aur_scr);
+}
+
+void aur_screen(int which) {
+  aur_check_home();
+  aur_scr = which == AUR_BOTTOM ? AUR_BOTTOM : AUR_TOP;
 }
 
 void aur_buffered(int on) {
@@ -214,14 +254,19 @@ void aur_buffered(int on) {
 
 void aur_present(void) {
   aur_check_home();
-  screen_present_top();
+  for (int s = AUR_TOP; s <= AUR_BOTTOM; s++) {
+    if (aur_dirty[s]) {
+      aur_dirty[s] = 0;
+      aur_show(s);
+    }
+  }
 }
 
 void aur_print(const char *text, int x, int y, int color) {
   aur_check_home();
-  draw_string(VRAM_TOP_LA, x, y, TOP_SCREEN_HEIGHT, text, aur_unpack(color),
-              aur_bg);
-  aur_auto_present();
+  draw_string(aur_fb(), x, y, aur_height(), text, aur_unpack(color),
+              aur_bg[aur_scr]);
+  aur_drew();
 }
 
 void aur_print_int(int value, int x, int y, int color) {
@@ -240,22 +285,23 @@ void aur_print_int(int value, int x, int y, int color) {
   if (negative && i > 0)
     buf[--i] = '-';
 
-  draw_string(VRAM_TOP_LA, x, y, TOP_SCREEN_HEIGHT, &buf[i], aur_unpack(color),
-              aur_bg);
-  aur_auto_present();
+  draw_string(aur_fb(), x, y, aur_height(), &buf[i], aur_unpack(color),
+              aur_bg[aur_scr]);
+  aur_drew();
 }
 
 void aur_clear(int color) {
   aur_check_home();
-  aur_bg = aur_unpack(color);
-  clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, aur_bg);
-  aur_auto_present();
+  aur_bg[aur_scr] = aur_unpack(color);
+  clear_screen(aur_fb(), aur_scr == AUR_BOTTOM ? BOT_FB_SIZE : TOP_FB_SIZE,
+               aur_bg[aur_scr]);
+  aur_drew();
 }
 
 void aur_fill_rect(int x, int y, int w, int h, int color) {
   aur_check_home();
-  draw_filled_rect(VRAM_TOP_LA, x, y, w, h, TOP_SCREEN_HEIGHT, aur_unpack(color));
-  aur_auto_present();
+  draw_filled_rect(aur_fb(), x, y, w, h, aur_height(), aur_unpack(color));
+  aur_drew();
 }
 
 int aur_keys_down(void) {
@@ -315,20 +361,13 @@ void aur_delay(int cycles) {
 }
 
 int aur_load_sound(const char *path) {
-  static FATFS fs;
-  static int mounted;
   WavInfo info;
   AurSound *s;
   u32 at;
 
   aur_check_home();
-  if (aur_sound_count >= AUR_SOUNDS || !aur_audio_ready())
+  if (aur_sound_count >= AUR_SOUNDS || !aur_audio_ready() || !aur_mount())
     return -1;
-  if (!mounted) {
-    if (f_mount(&fs, "", 1) != FR_OK)
-      return -1;
-    mounted = 1;
-  }
   at = (aur_pool_used + 3u) & ~3u;
   if (at >= AUDIO_PCM_MAX)
     return -1;
@@ -384,4 +423,110 @@ void aur_stop_sounds(void) {
   aur_check_home();
   if (aur_voices_started)
     aur_audio_post(AUDIO_CMD_VOICE_STOP, AUR_SFX_MASK, 0, 0, 0);
+}
+
+/* The ARM11 core samples the touchscreen into TouchShared and touch_read()
+ * converts the raw values. The OS's calibration lives in its own image, which
+ * the app replaced, so it is read back from USER.dat. */
+static int aur_touch;        /* 0 not set up yet, 1 usable, -1 not */
+static int aur_touch_ignore; /* a touch from before the first poll */
+static int aur_touch_was;    /* touched at the previous poll */
+static int aur_touch_px = -1, aur_touch_py = -1;
+/* Touches begun and ended as every poll saw them, so touch_down() and
+ * touch_up() catch an edge whichever touch built-in happened to see it. */
+static u32 aur_touch_began, aur_touch_ended;
+
+static s16 aur_get16(const u8 *p) { return (s16)(p[0] | (p[1] << 8)); }
+
+static void aur_touch_cal_load(void) {
+  static FIL f;
+  u8 d[USER_DAT_TOUCH + 9];
+  UINT got = 0;
+  TouchCal cal;
+
+  if (!aur_mount() || f_open(&f, USER_DAT_PATH, FA_READ) != FR_OK)
+    return;
+  if (f_read(&f, d, sizeof(d), &got) == FR_OK && got == sizeof(d) &&
+      d[0] == 'A' && d[1] == 'D' && d[2] == 'A' && d[3] == 'T' &&
+      d[USER_DAT_TOUCH]) {
+    cal.x_min = aur_get16(d + USER_DAT_TOUCH + 1);
+    cal.x_max = aur_get16(d + USER_DAT_TOUCH + 3);
+    cal.y_min = aur_get16(d + USER_DAT_TOUCH + 5);
+    cal.y_max = aur_get16(d + USER_DAT_TOUCH + 7);
+    touch_cal_set(&cal); /* keeps the default if these cannot be one */
+  }
+  f_close(&f);
+}
+
+static int aur_touch_poll(void) {
+  int x, y, now;
+
+  if (!aur_touch) {
+    aur_touch = aur_core_ready(0) ? 1 : -1;
+    if (aur_touch > 0)
+      aur_touch_cal_load();
+    aur_touch_ignore = 1;
+  }
+  if (aur_touch < 0)
+    return 0;
+  now = touch_read(&x, &y, 0, 0);
+  if (!now)
+    aur_touch_ignore = 0;
+  else if (aur_touch_ignore)
+    now = 0;
+  if (now) {
+    aur_touch_px = x;
+    aur_touch_py = y;
+  }
+  if (now && !aur_touch_was)
+    aur_touch_began++;
+  if (!now && aur_touch_was)
+    aur_touch_ended++;
+  aur_touch_was = now;
+  return now;
+}
+
+int aur_touch_held(void) {
+  aur_check_home();
+  return aur_touch_poll();
+}
+
+int aur_touch_down(void) {
+  static u32 seen;
+
+  aur_check_home();
+  aur_touch_poll();
+  if (seen == aur_touch_began)
+    return 0;
+  seen = aur_touch_began;
+  return 1;
+}
+
+int aur_touch_up(void) {
+  static u32 seen;
+
+  aur_check_home();
+  aur_touch_poll();
+  if (seen == aur_touch_ended)
+    return 0;
+  seen = aur_touch_ended;
+  return 1;
+}
+
+int aur_touch_x(void) {
+  aur_check_home();
+  aur_touch_poll();
+  return aur_touch_px;
+}
+
+int aur_touch_y(void) {
+  aur_check_home();
+  aur_touch_poll();
+  return aur_touch_py;
+}
+
+int aur_touch_in(int x, int y, int w, int h) {
+  aur_check_home();
+  aur_touch_poll();
+  return aur_touch_px >= 0 && touch_in(aur_touch_px, aur_touch_py, x, y, w, h);
 }

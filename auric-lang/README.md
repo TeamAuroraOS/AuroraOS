@@ -25,7 +25,7 @@ fn main() {
    v
  hello.c                       generated freestanding C
    |  arm-none-eabi-gcc        AuroraOS's exact ARM9 flags (from ../Makefile)
-   |  + runtime/ + ../src/screen.c, i2c.c, os/Gpu9.c and the SD/WAV stack
+   |  + runtime/ + ../src/screen.c, i2c.c, os/Gpu9.c, os/Touch9.c, SD/WAV stack
    v
  hello.elf  ->  objcopy -O binary  ->  hello.payload.bin
    |  tools/aur_pack.py
@@ -37,8 +37,10 @@ The generated program is linked at `0x22000000` and run in place, exactly like
 AuroraOS's own payload (`src/os/os.ld`). The runtime shim maps the Auric
 built-ins onto AuroraOS's own API, reusing the real `src/screen.c` for drawing,
 `src/i2c.c` for the HOME button, `src/os/Gpu9.c` so that a buffered app
-presents each frame with a GPU blit instead of a full-screen CPU copy, and
-`src/wavload.c` with FatFs and the SD driver for `load_sound()`.
+presents each frame with a GPU blit instead of a full-screen CPU copy,
+`src/os/Touch9.c` to turn the touchscreen's readings into pixels, and
+`src/wavload.c` with FatFs and the SD driver for `load_sound()` (and for the
+touch calibration in `USER.dat`).
 
 ## Prerequisites
 
@@ -148,8 +150,8 @@ auric-lang/
   runtime/     C shim (built-ins -> AuroraOS API), crt0 (auric_start.s), linker script
   tools/       aur_pack.py | AUR1 container packer/inspector (forked from aos_pack.py)
                sound_prep.py | small mono WAV copies for an app's sound folder
-  examples/    hello.aur, demo.aur
-  docs/        language.md | the full v0.3 language reference
+  examples/    hello.aur, demo.aur, paint.aur (both screens and touch)
+  docs/        language.md | the full v0.4 language reference
   tests/       unittest suite for every compiler stage + end-to-end build
   packaging/   PyInstaller spec + build_exe.py for the standalone aurc.exe
 ```
@@ -163,8 +165,10 @@ See [`docs/language.md`](docs/language.md) for the complete reference. In brief:
 * Types `int` / `float` / `bool` / `string`, with no implicit conversions.
 * Arithmetic, comparison, logical, and bitwise operators (`& | ^ << >>`), at C's
   precedence.
-* Built-ins for drawing (`print`, `print_int`, `clear`, `fill_rect`), input
-  (`keys_down`, `keys_held`, `wait_key`), frame control (`buffered`, `present`),
+* Built-ins for drawing on either screen (`screen`, `print`, `print_int`,
+  `clear`, `fill_rect`), buttons (`keys_down`, `keys_held`, `wait_key`), touch
+  on the bottom screen (`touch_down`, `touch_held`, `touch_up`, `touch_x`,
+  `touch_y`, `touch_in`), frame control (`buffered`, `present`),
   timing (`millis`, `rand`, `delay`), and sound from the SD card
   (`load_sound`, `play_sound`, `play_music`, `stop_music`, `stop_sounds`).
 

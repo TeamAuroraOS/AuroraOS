@@ -3,8 +3,11 @@
 #ifndef AURIC_RUNTIME_H
 #define AURIC_RUNTIME_H
 
+/* screen(which): where the drawing built-ins draw from now on, AUR_TOP
+ * (400x240, the default) or AUR_BOTTOM (320x240). */
+void aur_screen(int which);
 void aur_print(const char *text, int x, int y, int color);
-/* clear(color): fill the top screen and remember `color` as the text bg. */
+/* clear(color): fill the selected screen and remember `color` as its text bg. */
 void aur_clear(int color);
 void aur_fill_rect(int x, int y, int w, int h, int color);
 /* wait_key(button): block until `button` is newly pressed. */
@@ -18,7 +21,7 @@ int aur_keys_down(void);
 int aur_keys_held(void);
 /* buffered(on): when on, drawing accumulates off-screen until present(). */
 void aur_buffered(int on);
-/* present(): push the off-screen frame to the panel. */
+/* present(): push each screen drawn on since the last present() to its panel. */
 void aur_present(void);
 /* rand(n): pseudo-random integer in [0, n). */
 int aur_rand(int n);
@@ -38,6 +41,23 @@ void aur_stop_music(void);
 /* stop_sounds(): silence every effect voice; the music keeps playing. */
 void aur_stop_sounds(void);
 
+/* Touch on the bottom screen, in its pixels (x 0..319, y 0..239), calibrated
+ * as in Settings > Touch Calibration. Needs the ARM11 core, so an app booted
+ * without the Home Menu never sees a touch. A touch already on the screen when
+ * the app first asks is ignored until the stylus lifts. */
+/* touch_down(): a new touch began since the last call (edge). */
+int aur_touch_down(void);
+/* touch_held(): the screen is being touched (level). */
+int aur_touch_held(void);
+/* touch_up(): the stylus lifted since the last call (edge). */
+int aur_touch_up(void);
+/* touch_x(), touch_y(): where the stylus is, or where it last was; -1 before
+ * the first touch. */
+int aur_touch_x(void);
+int aur_touch_y(void);
+/* touch_in(x, y, w, h): that position lies inside the rectangle. */
+int aur_touch_in(int x, int y, int w, int h);
+
 /* Poll the HOME button; if pressed (and launched from the Home Menu), returns
  * control to AuroraOS and never comes back. Called from every built-in. */
 void aur_check_home(void);
@@ -54,6 +74,9 @@ void aur_check_home(void);
 #define AUR_AURORA    0x64E8C8
 #define AUR_GRAY      0xA0A0A0
 #define AUR_DARK_GRAY 0x505050
+
+#define AUR_TOP    0
+#define AUR_BOTTOM 1
 
 #define AUR_KEY_A      (1 << 0)
 #define AUR_KEY_B      (1 << 1)
