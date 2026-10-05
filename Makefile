@@ -168,7 +168,9 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_termcmds.o $(BUILD_DIR)/os_anim.o \
            $(BUILD_DIR)/os_store.o \
            $(BUILD_DIR)/os_aes.o $(BUILD_DIR)/os_nand.o \
-           $(BUILD_DIR)/os_fwdump.o
+           $(BUILD_DIR)/os_fwdump.o \
+           $(BUILD_DIR)/os_account.o $(BUILD_DIR)/os_qr.o \
+           $(BUILD_DIR)/os_http.o
 
 CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o $(BUILD_DIR)/Net11.o $(BUILD_DIR)/Wpa11.o $(BUILD_DIR)/Crypto.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o $(BUILD_DIR)/Stereo11.o $(BUILD_DIR)/P3d11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
@@ -308,6 +310,18 @@ $(BUILD_DIR)/os_nand.o: $(OS_DIR)/Nand.c $(wildcard $(INC_DIR)/*.h) | dirs
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_fwdump.o: $(OS_DIR)/FwDump.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_account.o: $(OS_DIR)/Account.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_qr.o: $(OS_DIR)/Qr.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_http.o: $(OS_DIR)/Http.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 

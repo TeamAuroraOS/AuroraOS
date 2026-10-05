@@ -25,7 +25,8 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.3.**
 | File Explorer | working | browse the card, per-type icons, TXT/LOG viewer, hex editor; see [`docs/files.md`](docs/files.md) |
 | File operations | working | copy, move, rename, delete and new folder, with long file names |
 | Screenshots | working | L+R saves both screens as a BMP; see [`docs/input.md`](docs/input.md) |
-| aShop (store) | demo | browse sections, apps and news, app pages, search and downloads into `SD:/Aurora/Apps`; no download server yet, so a download installs from `SD:/Aurora/Store/Packages` or only shows its progress; see [`docs/store.md`](docs/store.md) |
+| aShop (store) | working on the PC; needs the server deployed | the apps and games published on the Aurora Network: sections, news, app pages, search, and downloads into `SD:/Aurora/Apps`, checked by SHA-256. Needs a linked Aurora account (it offers to link one) and keeps the catalogue on the card for offline browsing. Apps are published at account.aurora3ds.xyz/developer; see [`docs/store.md`](docs/store.md) |
+| Aurora Account | working | Settings > Aurora Account (and the setup wizard's Account step) links the console to an account on account.aurora3ds.xyz: the console shows a code and a QR code, the person approves it on a phone or computer, and the token is kept in `SD:/Aurora/account.txt`. Create an account sends the person to sign up first. Works on a New 3DS (2026-10-04); see [`docs/account.md`](docs/account.md) |
 | Terminal | working | **X** on the Home Menu: a Linux-style shell with a touch keyboard, file commands, `ping` over Wi-Fi, `systemctl`, `info` and app launching; see [`docs/terminal.md`](docs/terminal.md) |
 | Images | working | BMP, PNG and baseline JPEG, scaled to fit |
 | WAV playback | working | 8/16-bit PCM, mono or stereo (MP3 not yet) |
@@ -43,8 +44,8 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta v0.1.3.**
 | Clock + battery | working | MCU over I2C, with Aurora's own clock offset in Settings > Clock (the RTC is never written); see [`docs/power.md`](docs/power.md) |
 | Console model | working | New/Old from CFG11_SOCINFO; "N" in the status bar |
 | Crash handler | working | register dump plus a three-beep error tone on a fault |
-| Apps ([Auric](auric-lang/README.md)) | working | sound from the SD card; see [`docs/apps.md`](docs/apps.md) |
-| Wi-Fi | working | Settings > Wi-Fi searches, saves a network and joins it: open and WPA2-PSK networks, the password typed on the console, an address over DHCP (New 3DS, 2026-10-03). The terminal's `ping` looks up names and pings any address. The firmware is copied from the console's own NAND the first time (read only; untested on hardware yet). Not yet: WPA3, and anything beyond ping (no TCP): [`docs/wifi.md`](docs/wifi.md) |
+| Apps ([Auric](auric-lang/README.md)) | working | sound from the SD card; drawing on the bottom screen and touch input are new (PC-tested, not yet on hardware); see [`docs/apps.md`](docs/apps.md) |
+| Wi-Fi | working | Settings > Wi-Fi searches, saves a network and joins it: open and WPA2-PSK networks, the password typed on the console, an address over DHCP (New 3DS, 2026-10-03). The terminal's `ping` looks up names and pings any address. The firmware is copied from the console's own NAND the first time (read only; works on hardware). Core 114 adds a small TCP client for one HTTP exchange at a time, which Aurora accounts use (works on hardware, 2026-10-04). Not yet: WPA3, TLS: [`docs/wifi.md`](docs/wifi.md) |
 
 The UI renders into a cached FCRAM backbuffer and the GPU moves each finished
 screen to the panel in one blit, rather than rasterising straight into uncached
@@ -61,7 +62,7 @@ ARM9 runs the OS; the ARM11 handles the hardware the ARM9 cannot reach.
 |-----------|------|-------|
 | Audio (codec output, CSND) | `src/os/Audio9.c` | `src/os/Audio11.c` |
 | Touchscreen | `src/os/Touch9.c` | `src/os/Touch11.c` |
-| Wi-Fi | `src/os/WiFi9.c`, `src/os/Crypto.c` (the PMK) | `src/os/WiFi11.c`, `src/os/Wpa11.c` (WPA2), `src/os/Net11.c` (DHCP, ARP, DNS, ping) |
+| Wi-Fi | `src/os/WiFi9.c`, `src/os/Crypto.c` (the PMK) | `src/os/WiFi11.c`, `src/os/Wpa11.c` (WPA2), `src/os/Net11.c` (DHCP, ARP, DNS, ping, TCP) |
 | GPU | `src/os/Gpu9.c` | `src/os/Gpu11.c` |
 | GPU 3D pipeline (P3D) | `src/os/P3d9.c` (command lists) | `src/os/P3d11.c` (runs them) |
 | Stereoscopic top screen | `src/os/Stereo9.c` (slider, model) | `src/os/Stereo11.c` (mode, barrier) |
@@ -79,7 +80,9 @@ operations in `src/os/FileOps.c`, screenshots in `src/os/Screenshot.c`, touch
 calibration in `src/os/TouchCal.c`, the terminal in `src/os/Terminal.c` with its
 commands in `src/os/TermCmds.c`, the render test in `src/os/RenderTest.c`, and
 the Home Menu in `src/os/HomeMenu.c` with its arrangement in
-`src/os/HomeLayout.c`, the aShop store in `src/os/Store.c`, the Wi-Fi
+`src/os/HomeLayout.c`, the aShop store in `src/os/Store.c`, Aurora accounts
+in `src/os/Account.c` with the QR encoder in `src/os/Qr.c` and the HTTP
+client both use in `src/os/Http.c`, the Wi-Fi
 firmware copy in `src/os/FwDump.c` (with the read-only NAND reader in
 `src/os/Nand.c` and the AES engine in `src/os/Aes.c`), the 3D Model screen in `src/os/Model3D.c` with its GLB loader in
 `src/os/Glb.c` and JSON tokenizer in `src/os/Json.c`, and the software 3D
@@ -100,7 +103,8 @@ loaded at boot by `src/assets.c`. Run `make assets` after changing either.
 * [`docs/terminal.md`](docs/terminal.md): the terminal, its keys and every command
 * [`docs/gpu.md`](docs/gpu.md): PICA200 driver and the rendering path
 * [`docs/home.md`](docs/home.md): the Home Menu: pages, folders, moving apps, the layout file
-* [`docs/store.md`](docs/store.md): aShop, the store: screens, the catalogue format, downloads, what is still a demo
+* [`docs/store.md`](docs/store.md): aShop, the store: opening it, screens, downloads, the catalogue, publishing apps
+* [`docs/account.md`](docs/account.md): Aurora accounts: linking and creating one, the token file, the console's HTTP and TCP client
 * [`docs/glb.md`](docs/glb.md): the 3D Model screen and the GLB loader: what it reads, limits, textures, memory
 * [`docs/soft3d.md`](docs/soft3d.md): the software 3D renderer, the model viewer's fallback
 * [`docs/stereo3d.md`](docs/stereo3d.md): the 3D screen, the parallax barrier and the PICA200's 3D pipeline
@@ -137,7 +141,7 @@ distribution; it is kept as-is and recorded here and in `docs/assets.md`.
 - Copy the built `Aurora\assets.pak` to the card as `SD:\Aurora\assets.pak`
   (optional: without it the UI falls back to its built-in icons and font)
 - Optional: copy the `Aurora\Store` folder to `SD:\Aurora\Store` for aShop's
-  banners; see [`docs/store.md`](docs/store.md)
+  banners and welcome art; see [`docs/store.md`](docs/store.md)
 - Optional: copy apps such as `Games/Tetris.BIN` to `SD:\Aurora\Apps\`. Tetris
   plays sounds from `SD:\Aurora\Apps\TETRIS\` when they are there; see
   [`docs/apps.md`](docs/apps.md)
