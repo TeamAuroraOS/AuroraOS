@@ -9,8 +9,10 @@
 #define STORE_ARENA_ADDR 0x26E00000u
 #define STORE_ARENA_SIZE 0x00200000u
 
-/* aShop, until the user backs out. Returns how many apps it put into
+/* aShop, until the user backs out. It needs a linked Aurora account and
+ * offers to link one; `owner` is the console owner's name from USER.dat, for
+ * the name the console links under. Returns how many apps it put into
  * SD:/Aurora/Apps, so the caller knows to rescan them. */
-int store_screen(void);
+int store_screen(const char *owner);
 
 #endif

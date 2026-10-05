@@ -254,6 +254,10 @@ enum {
   WIFI_NETOP_DNS,        /* name -> ip, from the DHCP-given DNS server    */
   WIFI_NETOP_PING,       /* one echo to ip with seq; rtt_us, ttl, bytes   */
   WIFI_NETOP_LEAVE,      /* disconnect                                    */
+  WIFI_NETOP_HTTP,       /* one HTTP exchange over TCP with ip:port: the
+                            request at WIFI_HTTP_REQ goes out, the reply
+                            comes back at WIFI_HTTP_RESP until the server
+                            closes or its Content-Length is in            */
 };
 
 enum {
@@ -267,7 +271,24 @@ enum {
   WIFI_NETS_ICMPERR,  /* ping: unreachable or time exceeded; see icmp  */
   WIFI_NETS_NOSEND,   /* the frame could not be sent (no credit)       */
   WIFI_NETS_BUSY,     /* ARM9: the core did not take or finish it      */
+  WIFI_NETS_REFUSED,  /* HTTP: the server reset the connection (RST)   */
+  WIFI_NETS_TOOBIG,   /* HTTP: the request or the reply does not fit   */
 };
+
+/* HTTP stages, how far WIFI_NETOP_HTTP got (WifiNetIo.stage). */
+enum {
+  WIFI_HTTP_CONNECT = 1, /* SYN sent                                      */
+  WIFI_HTTP_SEND,        /* connected, the request going out              */
+  WIFI_HTTP_WAIT,        /* the request acknowledged, waiting for a reply */
+  WIFI_HTTP_DONE,        /* the reply is in                               */
+};
+
+/* The request and the reply of WIFI_NETOP_HTTP, between WifiNetIo and
+ * GpuShared. */
+#define WIFI_HTTP_REQ      0x233B9000u
+#define WIFI_HTTP_REQ_MAX  0x800u
+#define WIFI_HTTP_RESP     0x233B9800u
+#define WIFI_HTTP_RESP_MAX 0x2000u
 
 typedef struct {
   volatile uint32_t status;     /* WIFI_NETS_* */
@@ -281,6 +302,11 @@ typedef struct {
   volatile uint32_t icmp;       /* PING: type << 8 | code of an ICMP error */
   volatile uint32_t dns_rcode;  /* DNS: the answer's RCODE */
   volatile char name[256];      /* DNS: the host name */
+  volatile uint32_t port;       /* HTTP: the server's TCP port */
+  volatile uint32_t req_len;    /* HTTP: bytes at WIFI_HTTP_REQ */
+  volatile uint32_t resp_len;   /* HTTP: bytes at WIFI_HTTP_RESP */
+  volatile uint32_t stage;      /* HTTP: WIFI_HTTP_* */
+  volatile uint32_t resent;     /* HTTP: segments sent again */
 } WifiNetIo;
 
 /* How far the scan got (WifiShared.wmi_stage). */
@@ -369,6 +395,15 @@ typedef struct {
 uint32_t wifi_net(uint32_t op, uint32_t ip, uint32_t seq, const char *name,
                   uint32_t timeout_ms, WifiNetResult *r,
                   void (*tick)(uint32_t ms));
+
+/* One HTTP exchange (WIFI_NETOP_HTTP) with ip:port: `req` goes out as it
+ * is, and up to `max` bytes of the reply come back in `resp`, *got of them.
+ * timeout_ms bounds the whole exchange (at most 20 s). Returns WIFI_NETS_*;
+ * *stage says how far it got. */
+uint32_t wifi_http(uint32_t ip, uint32_t port, const char *req,
+                   uint32_t req_len, char *resp, uint32_t max, uint32_t *got,
+                   uint32_t *stage, uint32_t timeout_ms,
+                   void (*tick)(uint32_t ms));
 
 /* os_main.c: joins the network saved in Settings > Wi-Fi and keeps it up for
  * wifi_net. 1 when it is up; otherwise `why` says what stopped it. Staging

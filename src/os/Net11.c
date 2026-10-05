@@ -2,13 +2,14 @@
 /* LICENSE: GPL-2.0, part of the Wi-Fi driver. See docs/wifi.md "License and
  * credits".
  *
- * DHCP (RFC 2131/2132), ARP (RFC 826), DNS (RFC 1035) and ICMP echo (RFC
- * 792), from the RFCs. */
+ * DHCP (RFC 2131/2132), ARP (RFC 826), DNS (RFC 1035), ICMP echo (RFC 792)
+ * and a TCP client (RFC 9293), from the RFCs. */
 #include "net11.h"
 
 #define ETH_IP  0x0800u
 #define ETH_ARP 0x0806u
 #define IP_ICMP 1u
+#define IP_TCP  6u
 #define IP_UDP  17u
 
 #define BOOTP_LEN 300u /* the minimum size BOOTP relays and servers expect */
@@ -176,20 +177,27 @@ uint32_t net_ping(NetState *n, uint8_t *f, uint32_t dst, const uint8_t *dmac,
   return 14u + 20u + 8u + NET_PING_DATA;
 }
 
-/* The UDP checksum over the pseudo header and the datagram at `u`. */
-static uint32_t udp_csum(uint32_t src, uint32_t dst, const uint8_t *u,
-                         uint32_t len) {
+/* The one's complement sum of the pseudo header and the UDP or TCP segment
+ * at `s`, folded to 16 bits. A segment carrying a right checksum sums to
+ * 0xFFFF. */
+static uint32_t l4_sum(uint32_t proto, uint32_t src, uint32_t dst,
+                       const uint8_t *s, uint32_t len) {
   uint8_t ph[12];
-  uint32_t s = 0;
+  uint32_t v;
   put32(ph, src);
   put32(ph + 4, dst);
   ph[8] = 0;
-  ph[9] = IP_UDP;
+  ph[9] = (uint8_t)proto;
   put16(ph + 10, len);
-  s = (~csum(ph, 12) & 0xFFFFu) + (~csum(u, len) & 0xFFFFu);
-  while (s >> 16)
-    s = (s & 0xFFFFu) + (s >> 16);
-  s = ~s & 0xFFFFu;
+  v = (~csum(ph, 12) & 0xFFFFu) + (~csum(s, len) & 0xFFFFu);
+  while (v >> 16)
+    v = (v & 0xFFFFu) + (v >> 16);
+  return v;
+}
+
+static uint32_t udp_csum(uint32_t src, uint32_t dst, const uint8_t *u,
+                         uint32_t len) {
+  uint32_t s = ~l4_sum(IP_UDP, src, dst, u, len) & 0xFFFFu;
   return s ? s : 0xFFFFu; /* 0 would mean "no checksum" */
 }
 
@@ -276,6 +284,174 @@ static uint32_t dns_answer(NetState *n, const uint8_t *d, uint32_t len) {
     if (type == 1u && cls == 1u && rdlen == 4u)
       return get32(d + off);
     off += rdlen;
+  }
+  return 0;
+}
+
+void net_tcp_open(NetState *n, uint32_t ip_, uint16_t lport, uint16_t rport,
+                  uint32_t iss, uint8_t *rx, uint32_t rx_cap) {
+  n->tcp_state = NET_TCP_SYN_SENT;
+  n->tcp_ip = ip_;
+  n->tcp_lport = lport;
+  n->tcp_rport = rport;
+  n->tcp_iss = iss;
+  n->snd_una = iss;
+  n->snd_nxt = iss + 1u; /* the SYN takes a sequence number */
+  n->rcv_nxt = 0;
+  n->tcp_mss = 536; /* until the server says otherwise */
+  n->tcp_wnd = 0;
+  n->tcp_fin = 0;
+  n->tcp_rx = rx;
+  n->tcp_rx_cap = rx_cap;
+  n->tcp_rx_len = 0;
+}
+
+uint32_t net_tcp_seg(NetState *n, uint8_t *f, const uint8_t *dmac,
+                     uint32_t flags, uint32_t seq, const uint8_t *data,
+                     uint32_t len) {
+  uint8_t *t = f + 14 + 20;
+  uint32_t hl = flags & NET_TCP_SYN ? 24u : 20u;
+  uint32_t room = n->tcp_rx_cap - n->tcp_rx_len;
+  if (len > NET_TCP_SEG)
+    len = NET_TCP_SEG;
+  eth(f, dmac, n->mac, ETH_IP);
+  put16(t, n->tcp_lport);
+  put16(t + 2, n->tcp_rport);
+  put32(t + 4, seq);
+  put32(t + 8, flags & NET_TCP_ACK ? n->rcv_nxt : 0u);
+  t[12] = (uint8_t)(hl << 2);
+  t[13] = (uint8_t)flags;
+  put16(t + 14, room > 0xFFFFu ? 0xFFFFu : room);
+  put16(t + 16, 0);
+  put16(t + 18, 0);
+  if (hl == 24u) {
+    t[20] = 2; /* MSS */
+    t[21] = 4;
+    put16(t + 22, NET_TCP_MSS);
+  }
+  copy(t + hl, data, len);
+  put16(t + 16, ~l4_sum(IP_TCP, n->ip, n->tcp_ip, t, hl + len) & 0xFFFFu);
+  ip(f, IP_TCP, n->ip, n->tcp_ip, hl + len);
+  return 14u + 20u + hl + len;
+}
+
+/* The MSS option of a SYN, from the options at `o`. */
+static uint32_t tcp_mss_opt(const uint8_t *o, uint32_t len) {
+  uint32_t i = 0;
+  while (i < len && o[i] != 0) {
+    if (o[i] == 1) {
+      i++;
+      continue;
+    }
+    if (i + 1u >= len || o[i + 1] < 2u || i + o[i + 1] > len)
+      break;
+    if (o[i] == 2 && o[i + 1] == 4)
+      return get16(o + i + 2);
+    i += o[i + 1];
+  }
+  return 536;
+}
+
+/* A segment of our connection at `t`, `len` bytes, checksum still to check.
+ * Data that continues the stream is kept; anything with data or a FIN, or
+ * that does not continue the stream, is answered with an ACK of rcv_nxt. */
+static int tcp_rx(NetState *n, const uint8_t *f, const uint8_t *t,
+                  uint32_t len, uint8_t *reply, uint32_t *reply_len,
+                  uint32_t *value) {
+  uint32_t off = (uint32_t)(t[12] >> 4) * 4u, fl = t[13];
+  if (off < 20u || off > len || get16(t) != n->tcp_rport ||
+      get16(t + 2) != n->tcp_lport ||
+      l4_sum(IP_TCP, n->tcp_ip, n->ip, t, len) != 0xFFFFu)
+    return NET_RX_OTHER;
+  uint32_t seq = get32(t + 4), ack = get32(t + 8), wnd = get16(t + 14);
+  const uint8_t *d = t + off;
+  uint32_t dl = len - off;
+  *value = fl;
+
+  if (fl & NET_TCP_RST) {
+    if (n->tcp_state == NET_TCP_SYN_SENT
+            ? (fl & NET_TCP_ACK) && ack == n->snd_nxt
+            : seq - n->rcv_nxt <= n->tcp_rx_cap - n->tcp_rx_len)
+      n->tcp_state = NET_TCP_RESET;
+    return NET_RX_TCP;
+  }
+
+  if (n->tcp_state == NET_TCP_SYN_SENT) {
+    if ((fl & (NET_TCP_SYN | NET_TCP_ACK)) != (NET_TCP_SYN | NET_TCP_ACK) ||
+        ack != n->snd_nxt)
+      return NET_RX_OTHER;
+    n->rcv_nxt = seq + 1u;
+    n->snd_una = ack;
+    n->tcp_wnd = wnd;
+    n->tcp_mss = tcp_mss_opt(t + 20, off - 20u);
+    n->tcp_state = NET_TCP_OPEN;
+    *reply_len = net_tcp_seg(n, reply, f + 6, NET_TCP_ACK, n->snd_nxt, 0, 0);
+    return NET_RX_TCP;
+  }
+  if (n->tcp_state != NET_TCP_OPEN)
+    return NET_RX_OTHER;
+
+  if ((fl & NET_TCP_ACK) && ack - n->snd_una <= n->snd_nxt - n->snd_una) {
+    n->snd_una = ack;
+    n->tcp_wnd = wnd;
+  }
+  if (fl & NET_TCP_SYN) { /* the SYN-ACK again: our ACK of it was lost */
+    *reply_len = net_tcp_seg(n, reply, f + 6, NET_TCP_ACK, n->snd_nxt, 0, 0);
+    return NET_RX_TCP;
+  }
+  if (!dl && !(fl & NET_TCP_FIN))
+    return NET_RX_TCP;
+
+  /* A resent segment that starts before rcv_nxt but runs past it. */
+  uint32_t behind = n->rcv_nxt - seq;
+  if (behind && behind < 0x80000000u && behind < dl) {
+    d += behind;
+    dl -= behind;
+    seq = n->rcv_nxt;
+  }
+  if (seq == n->rcv_nxt && !n->tcp_fin) {
+    uint32_t room = n->tcp_rx_cap - n->tcp_rx_len, take = dl < room ? dl : room;
+    copy(n->tcp_rx + n->tcp_rx_len, d, take);
+    n->tcp_rx_len += take;
+    n->rcv_nxt += take;
+    if ((fl & NET_TCP_FIN) && take == dl) {
+      n->rcv_nxt++;
+      n->tcp_fin = 1;
+    }
+  }
+  *reply_len = net_tcp_seg(n, reply, f + 6, NET_TCP_ACK, n->snd_nxt, 0, 0);
+  return NET_RX_TCP;
+}
+
+static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+
+int net_http_done(const uint8_t *b, uint32_t len) {
+  static const char cl[] = "content-length:";
+  uint32_t end = 0;
+  for (uint32_t i = 0; i + 3u < len; i++)
+    if (b[i] == '\r' && b[i + 1] == '\n' && b[i + 2] == '\r' &&
+        b[i + 3] == '\n') {
+      end = i + 4u;
+      break;
+    }
+  if (!end)
+    return 0;
+  for (uint32_t i = 0; i + sizeof(cl) < end; i++) {
+    if (i && b[i - 1] != '\n')
+      continue;
+    uint32_t k = 0;
+    while (cl[k] && lower(b[i + k]) == cl[k])
+      k++;
+    if (cl[k])
+      continue;
+    uint32_t p = i + k, v = 0, digits = 0;
+    while (p < end && (b[p] == ' ' || b[p] == '\t'))
+      p++;
+    while (p < end && b[p] >= '0' && b[p] <= '9' && v < 100000000u) {
+      v = v * 10u + (uint32_t)(b[p++] - '0');
+      digits++;
+    }
+    return digits && len - end >= v;
   }
   return 0;
 }
@@ -404,6 +580,12 @@ int net_rx(NetState *n, const uint8_t *f, uint32_t len, uint8_t *reply,
     *value = dns_answer(n, d, dl);
     return NET_RX_DNS;
   }
+
+  /* Fragments (MF or an offset) are not put back together. */
+  if (proto == IP_TCP && n->tcp_state != NET_TCP_CLOSED && n->ip &&
+      dst == n->ip && src == n->tcp_ip && plen >= 20u &&
+      !(get16(h + 6) & 0x3FFFu))
+    return tcp_rx(n, f, p, plen, reply, reply_len, value);
 
   if (proto == IP_ICMP && plen >= 8u && n->ip && dst == n->ip) {
     if (p[0] == 0 && get16(p + 4) == n->ping_id) {

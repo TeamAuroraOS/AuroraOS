@@ -23,4 +23,15 @@ const char *nand_error(int err);
 
 void sha256(const void *data, u32 len, u8 out[32]);
 
+/* The same over data that comes in pieces, as aShop's downloads do. */
+typedef struct {
+  u32 st[8];
+  u8 buf[64];
+  u32 n, len;
+} Sha256;
+
+void sha256_init(Sha256 *s);
+void sha256_update(Sha256 *s, const void *data, u32 len);
+void sha256_final(Sha256 *s, u8 out[32]);
+
 #endif

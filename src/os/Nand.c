@@ -148,30 +148,57 @@ static void sha_block(u32 *st, const u8 *b) {
   st[4] += e; st[5] += f; st[6] += g; st[7] += hh;
 }
 
-void sha256(const void *data, u32 len, u8 out[32]) {
-  u32 st[8] = {0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-               0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19};
-  const u8 *p = (const u8 *)data;
-  u8 tail[128];
-  u32 n = len, rest, pad;
+void sha256_init(Sha256 *s) {
+  static const u32 iv[8] = {0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
+                            0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19};
+  memcpy(s->st, iv, sizeof(iv));
+  s->n = 0;
+  s->len = 0;
+}
 
-  while (n >= 64) {
-    sha_block(st, p);
-    p += 64;
-    n -= 64;
+void sha256_update(Sha256 *s, const void *data, u32 len) {
+  const u8 *p = (const u8 *)data;
+  s->len += len;
+  if (s->n) {
+    u32 take = 64u - s->n < len ? 64u - s->n : len;
+    memcpy(s->buf + s->n, p, take);
+    s->n += take;
+    p += take;
+    len -= take;
+    if (s->n < 64u)
+      return;
+    sha_block(s->st, s->buf);
+    s->n = 0;
   }
-  rest = n;
-  memcpy(tail, p, rest);
+  while (len >= 64u) {
+    sha_block(s->st, p);
+    p += 64;
+    len -= 64u;
+  }
+  memcpy(s->buf, p, len);
+  s->n = len;
+}
+
+void sha256_final(Sha256 *s, u8 out[32]) {
+  u8 tail[128];
+  u32 rest = s->n, pad = rest < 56u ? 64u : 128u, len = s->len;
+  memcpy(tail, s->buf, rest);
   tail[rest] = 0x80;
-  pad = rest < 56 ? 64 : 128;
   memset(tail + rest + 1, 0, pad - rest - 1);
   for (int i = 0; i < 4; i++) { /* the length in bits, big-endian */
     tail[pad - 1 - i] = (u8)((len << 3) >> (8 * i));
     tail[pad - 5 - i] = (u8)(i ? 0 : len >> 29);
   }
-  sha_block(st, tail);
-  if (pad == 128)
-    sha_block(st, tail + 64);
+  sha_block(s->st, tail);
+  if (pad == 128u)
+    sha_block(s->st, tail + 64);
   for (int i = 0; i < 32; i++)
-    out[i] = (u8)(st[i / 4] >> (24 - 8 * (i % 4)));
+    out[i] = (u8)(s->st[i / 4] >> (24 - 8 * (i % 4)));
+}
+
+void sha256(const void *data, u32 len, u8 out[32]) {
+  Sha256 s;
+  sha256_init(&s);
+  sha256_update(&s, data, len);
+  sha256_final(&s, out);
 }

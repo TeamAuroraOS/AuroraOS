@@ -1,4 +1,5 @@
 #include "statusbar.h"
+#include "account.h"
 #include "aurora.h"
 #include "anim.h"
 #include "ui.h"
@@ -20,6 +21,7 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_LANGUAGE     */ {"Language", "Idioma", "Langue"},
     /* STR_NETWORK      */ {"Network", "Red", "R\u00E9seau"},
     /* STR_DETAILS      */ {"Details", "Datos", "Profil"},
+    /* STR_ACCOUNT      */ {"Account", "Cuenta", "Compte"},
     /* STR_PERSONAL     */ {"Personal", "Color", "Couleur"},
     /* STR_WELCOME      */ {"Welcome", "Listo", "Pr\u00EAt"},
     /* STR_GET_STARTED  */ {"Get started", "Comenzar", "Commencer"},
@@ -738,43 +740,14 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     {"is on the Home Menu",
      "ya est\u00E1 en el men\u00FA de inicio",
      "est dans le menu d'accueil"},
-    /* STR_ST_UP_TO_DATE*/ {"Up to date", "Actualizada", "\u00C0 jour"},
-    /* STR_ST_DEMO1     */
-    {"This demo had no package, so",
-     "Esta demo no ten\u00EDa paquete, as\u00ED que",
-     "Cette d\u00E9mo n'avait pas de paquet :"},
-    /* STR_ST_DEMO2     */
-    {"the app on the card is unchanged",
-     "la app de la tarjeta no cambia",
-     "l'app sur la carte n'a pas chang\u00E9"},
-    /* STR_ST_DL_DONE   */
-    {"Download finished",
-     "Descarga terminada",
-     "T\u00E9l\u00E9chargement termin\u00E9"},
-    /* STR_ST_DEMO3     */
-    {"This demo had no package to install:",
-     "Esta demo no ten\u00EDa paquete que instalar:",
-     "Cette d\u00E9mo n'avait aucun paquet \u00E0 installer :"},
-    /* STR_ST_DEMO4     */
-    {"put one in /Aurora/Store/Packages",
-     "pon uno en /Aurora/Store/Packages",
-     "mettez-en un dans /Aurora/Store/Packages"},
     /* STR_ST_E_NOSD    */
     {"There is no SD card",
      "No hay tarjeta SD",
      "Pas de carte SD"},
-    /* STR_ST_E_NOTAPP  */
-    {"The package is not an Aurora app",
-     "El paquete no es una app de Aurora",
-     "Le paquet n'est pas une app Aurora"},
     /* STR_ST_E_INSTALL */
     {"Could not install the app",
      "No se pudo instalar la app",
      "Impossible d'installer l'app"},
-    /* STR_ST_E_READ    */
-    {"Could not read the package",
-     "No se pudo leer el paquete",
-     "Impossible de lire le paquet"},
     /* STR_ST_E_FULL    */
     {"The SD card is full",
      "La tarjeta SD est\u00E1 llena",
@@ -803,14 +776,6 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     {"Catalogue reloaded",
      "Cat\u00E1logo recargado",
      "Catalogue recharg\u00E9"},
-    /* STR_ST_FROM_SD   */
-    {"From the SD card",
-     "Desde la tarjeta SD",
-     "Depuis la carte SD"},
-    /* STR_ST_BUILTIN   */
-    {"The built-in demo catalogue",
-     "El cat\u00E1logo de demo integrado",
-     "Le catalogue de d\u00E9mo int\u00E9gr\u00E9"},
     /* STR_ST_CHECK     */
     {"Check for updates",
      "Buscar actualizaciones",
@@ -834,31 +799,287 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
      "aShop est l'endroit o\u00F9 trouver et t\u00E9l\u00E9charger des apps "
      "pour Aurora."},
     /* STR_ST_AB_CAT    */ {"Catalogue: ", "Cat\u00E1logo: ", "Catalogue : "},
-    /* STR_ST_AB_CARD   */
-    {"/Aurora/Store/catalog.txt on the SD card",
-     "/Aurora/Store/catalog.txt en la tarjeta SD",
-     "/Aurora/Store/catalog.txt sur la carte SD"},
-    /* STR_ST_AB_DEMO   */
-    {"the built-in demo",
-     "la demo integrada",
-     "la d\u00E9mo int\u00E9gr\u00E9e"},
     /* STR_ST_AB_WITH   */ {", with ", ", con ", ", avec "},
     /* STR_ST_AB_APP    */ {" app and ", " app y ", " app et "},
     /* STR_ST_AB_APPS   */ {" apps and ", " apps y ", " apps et "},
     /* STR_ST_AB_NEWS1  */ {" news item.", " noticia.", " actualit\u00E9."},
     /* STR_ST_AB_NEWSN  */ {" news items.", " noticias.", " actualit\u00E9s."},
-    /* STR_ST_AB_SERVER */
-    {"There is no download server yet. A download copies the app from "
-     "/Aurora/Store/Packages when it is there; otherwise only the progress "
-     "runs. Apps go to /Aurora/Apps and appear on the Home Menu.",
-     "A\u00FAn no hay servidor de descargas. Una descarga copia la app de "
-     "/Aurora/Store/Packages si est\u00E1 all\u00ED; si no, solo avanza la "
-     "barra. Las apps van a /Aurora/Apps y aparecen en el men\u00FA de "
-     "inicio.",
-     "Il n'y a pas encore de serveur. Un t\u00E9l\u00E9chargement copie "
-     "l'app depuis /Aurora/Store/Packages si elle s'y trouve ; sinon seule "
-     "la progression s'affiche. Les apps vont dans /Aurora/Apps et "
-     "apparaissent dans le menu d'accueil."},
+    /* STR_ST_E_NET     */
+    {"The connection was lost",
+     "Se perdi\u00F3 la conexi\u00F3n",
+     "La connexion a \u00E9t\u00E9 perdue"},
+    /* STR_ST_E_DAMAGED */
+    {"The download was damaged",
+     "La descarga est\u00E1 da\u00F1ada",
+     "Le t\u00E9l\u00E9chargement est endommag\u00E9"},
+    /* STR_ST_E_SERVER  */
+    {"aShop did not send the app",
+     "aShop no envi\u00F3 la app",
+     "aShop n'a pas envoy\u00E9 l'app"},
+    /* STR_ST_FROM_SERVER*/
+    {"Up to date with aShop",
+     "Al d\u00EDa con aShop",
+     "\u00C0 jour avec aShop"},
+    /* STR_ST_FROM_CARD */
+    {"Offline: the copy saved on this console",
+     "Sin conexi\u00F3n: la copia guardada en la consola",
+     "Hors ligne : la copie enregistr\u00E9e sur la console"},
+    /* STR_ST_AB_ONLINE */ {"from aShop", "de aShop", "depuis aShop"},
+    /* STR_ST_AB_OFFLINE*/
+    {"the copy saved on this console",
+     "la copia guardada en la consola",
+     "la copie enregistr\u00E9e sur la console"},
+    /* STR_ST_AB_HOW    */
+    {"Apps come from the Aurora Network over Wi-Fi. Each download is "
+     "checked against the catalogue before it goes to /Aurora/Apps, "
+     "where the Home Menu shows it. To publish an app, go to "
+     "account.aurora3ds.xyz/developer.",
+     "Las apps llegan desde Aurora Network por Wi-Fi. Cada descarga se "
+     "comprueba con el cat\u00E1logo antes de ir a /Aurora/Apps, donde "
+     "aparece en el men\u00FA de inicio. Para publicar una app, ve a "
+     "account.aurora3ds.xyz/developer.",
+     "Les apps viennent d'Aurora Network par Wi-Fi. Chaque "
+     "t\u00E9l\u00E9chargement est v\u00E9rifi\u00E9 avec le catalogue "
+     "avant d'aller dans /Aurora/Apps, o\u00F9 le menu d'accueil "
+     "l'affiche. Pour publier une app, allez sur "
+     "account.aurora3ds.xyz/developer."},
+    /* STR_ST_OFFLINE_TAG*/
+    {" (offline)",
+     " (sin conexi\u00F3n)",
+     " (hors ligne)"},
+    /* STR_ST_NEED_TITLE*/
+    {"Aurora account required",
+     "Se necesita una cuenta Aurora",
+     "Compte Aurora requis"},
+    /* STR_ST_NEED_L1   */
+    {"aShop needs an Aurora account.",
+     "aShop necesita una cuenta Aurora.",
+     "aShop a besoin d'un compte Aurora."},
+    /* STR_ST_NEED_L2   */
+    {"Link this console to yours, or",
+     "Vincula esta consola a tu cuenta,",
+     "Liez cette console \u00E0 votre compte,"},
+    /* STR_ST_NEED_L3   */
+    {"create one, to download apps.",
+     "o crea una, para descargar apps.",
+     "ou cr\u00E9ez-en un, pour les apps."},
+    /* STR_ST_CONNECTING*/
+    {"Connecting to aShop...",
+     "Conectando con aShop...",
+     "Connexion \u00E0 aShop..."},
+    /* STR_ST_ICONS     */
+    {"Getting icons",
+     "Obteniendo iconos",
+     "R\u00E9cup\u00E9ration des ic\u00F4nes"},
+    /* STR_ST_NO_REACH  */
+    {"Could not reach aShop",
+     "Sin conexi\u00F3n con aShop",
+     "aShop injoignable"},
+    /* STR_ST_SAVED     */
+    {"Showing the apps saved here",
+     "Se muestran las apps guardadas",
+     "Apps enregistr\u00E9es ici"},
+    /* STR_AC_TITLE     */ {"Aurora Account", "Cuenta Aurora", "Compte Aurora"},
+    /* STR_AC_NOT_LINKED*/ {"Not linked", "Sin vincular", "Non li\u00E9"},
+    /* STR_AC_NONE_L1   */
+    {"No account is linked to this console.",
+     "No hay ninguna cuenta vinculada.",
+     "Aucun compte n'est li\u00E9 \u00E0 cette console."},
+    /* STR_AC_NONE_L2   */
+    {"Link one to use online features.",
+     "Vincula una para las funciones en l\u00EDnea.",
+     "Liez-en un pour les fonctions en ligne."},
+    /* STR_AC_NONE_L3   */
+    {"No account yet? You can create one.",
+     "\u00BFA\u00FAn sin cuenta? Puedes crear una.",
+     "Pas encore de compte ? Cr\u00E9ez-en un."},
+    /* STR_AC_LINK      */
+    {"Link an account",
+     "Vincular una cuenta",
+     "Lier un compte"},
+    /* STR_AC_CREATE    */
+    {"Create an account",
+     "Crear una cuenta",
+     "Cr\u00E9er un compte"},
+    /* STR_AC_SIGNED_IN */
+    {"Signed in as ",
+     "Sesi\u00F3n iniciada como ",
+     "Connect\u00E9 en tant que "},
+    /* STR_AC_LINKED_L2 */
+    {"This console is linked to your account.",
+     "Esta consola est\u00E1 vinculada a tu cuenta.",
+     "Cette console est li\u00E9e \u00E0 votre compte."},
+    /* STR_AC_CHECK     */
+    {"Check account",
+     "Comprobar la cuenta",
+     "V\u00E9rifier le compte"},
+    /* STR_AC_UNLINK    */
+    {"Unlink this console",
+     "Desvincular esta consola",
+     "D\u00E9lier cette console"},
+    /* STR_AC_HINT      */
+    {"A: Select   B: Back",
+     "A: Elegir   B: Atr\u00E1s",
+     "A : Choisir   B : Retour"},
+    /* STR_AC_GO_TO     */
+    {"On a phone or computer, go to",
+     "En un m\u00F3vil u ordenador, ve a",
+     "Sur t\u00E9l\u00E9phone ou ordinateur, allez sur"},
+    /* STR_AC_ENTER     */
+    {"and enter this code:",
+     "e introduce este c\u00F3digo:",
+     "et saisissez ce code :"},
+    /* STR_AC_CREATE_AT */
+    {"On a phone or computer, create an account at",
+     "En un m\u00F3vil u ordenador, crea una cuenta en",
+     "Sur t\u00E9l\u00E9phone ou ordinateur, cr\u00E9ez un compte sur"},
+    /* STR_AC_THEN_LINK */
+    {"then choose Link a console and enter:",
+     "luego elige Link a console e introduce:",
+     "puis choisissez Link a console et saisissez :"},
+    /* STR_AC_WAITING   */
+    {"Waiting for you to approve it...",
+     "Esperando tu aprobaci\u00F3n...",
+     "En attente de votre approbation..."},
+    /* STR_AC_RETRYING  */
+    {"Connection problem. Trying again...",
+     "Problema de conexi\u00F3n. Reintentando...",
+     "Probl\u00E8me de connexion. Nouvel essai..."},
+    /* STR_AC_EXPIRES   */
+    {"Code expires in ",
+     "El c\u00F3digo caduca en ",
+     "Le code expire dans "},
+    /* STR_AC_SCAN      */
+    {"Or scan this with your phone's camera",
+     "O escan\u00E9alo con la c\u00E1mara del m\u00F3vil",
+     "Ou scannez-le avec votre t\u00E9l\u00E9phone"},
+    /* STR_AC_CANCEL_HINT*/ {"B: Cancel", "B: Cancelar", "B : Annuler"},
+    /* STR_AC_CONNECTING*/
+    {"Connecting to Aurora...",
+     "Conectando con Aurora...",
+     "Connexion \u00E0 Aurora..."},
+    /* STR_AC_JOINING   */
+    {"Joining your Wi-Fi network...",
+     "Conectando a tu red Wi-Fi...",
+     "Connexion \u00E0 votre r\u00E9seau Wi-Fi..."},
+    /* STR_AC_FINISHING */ {"Finishing...", "Terminando...", "Finalisation..."},
+    /* STR_AC_LINK_DONE */
+    {"This console is now linked.",
+     "La consola ya est\u00E1 vinculada.",
+     "La console est maintenant li\u00E9e."},
+    /* STR_AC_DENIED    */
+    {"The link was declined.",
+     "Se rechaz\u00F3 la vinculaci\u00F3n.",
+     "La liaison a \u00E9t\u00E9 refus\u00E9e."},
+    /* STR_AC_DENIED2   */
+    {"Deny was chosen on the website.",
+     "Se eligi\u00F3 Deny en la web.",
+     "Deny a \u00E9t\u00E9 choisi sur le site."},
+    /* STR_AC_EXPIRED   */
+    {"The code expired.",
+     "El c\u00F3digo caduc\u00F3.",
+     "Le code a expir\u00E9."},
+    /* STR_AC_NO_NET    */
+    {"Could not connect to Wi-Fi",
+     "No se pudo conectar al Wi-Fi",
+     "Connexion Wi-Fi impossible"},
+    /* STR_AC_NO_SERVER */
+    {"Could not reach Aurora",
+     "No se pudo contactar con Aurora",
+     "Aurora est injoignable"},
+    /* STR_AC_TRY_LATER */
+    {"Check the connection and try again.",
+     "Comprueba la conexi\u00F3n e int\u00E9ntalo de nuevo.",
+     "V\u00E9rifiez la connexion et r\u00E9essayez."},
+    /* STR_AC_BUSY_SRV  */
+    {"Too many tries. Wait a while.",
+     "Demasiados intentos. Espera un poco.",
+     "Trop d'essais. Patientez un peu."},
+    /* STR_AC_REVOKED   */
+    {"This console was unlinked.",
+     "Esta consola se desvincul\u00F3.",
+     "Cette console a \u00E9t\u00E9 d\u00E9li\u00E9e."},
+    /* STR_AC_REVOKED2  */
+    {"Link it again to sign in.",
+     "Vuelve a vincularla para iniciar sesi\u00F3n.",
+     "Liez-la \u00E0 nouveau pour vous connecter."},
+    /* STR_AC_UNLINK_Q  */
+    {"Unlink this console?",
+     "\u00BFDesvincular esta consola?",
+     "D\u00E9lier cette console ?"},
+    /* STR_AC_UNLINK_SUB*/
+    {"This console forgets the account.",
+     "La consola olvidar\u00E1 la cuenta.",
+     "La console oubliera le compte."},
+    /* STR_AC_UNLINKED  */
+    {"Console unlinked.",
+     "Consola desvinculada.",
+     "Console d\u00E9li\u00E9e."},
+    /* STR_AC_REVOKE_WEB*/
+    {"To remove it from the account too, go to",
+     "Para quitarla tambi\u00E9n de la cuenta, ve a",
+     "Pour la retirer aussi du compte, allez sur"},
+    /* STR_AC_CHECKED   */
+    {"Account checked just now.",
+     "Cuenta comprobada.",
+     "Compte v\u00E9rifi\u00E9."},
+    /* STR_AC_SD_FAIL   */
+    {"Could not write to the SD card.",
+     "No se pudo escribir en la SD.",
+     "\u00C9criture sur la carte SD impossible."},
+    /* STR_AC_SITE      */
+    {"Accounts are made and managed at",
+     "Las cuentas se crean y gestionan en",
+     "Les comptes se cr\u00E9ent et se g\u00E8rent sur"},
+    /* STR_AC_SITE_LINKED*/
+    {"Manage your account and consoles at",
+     "Gestiona tu cuenta y tus consolas en",
+     "G\u00E9rez votre compte et vos consoles sur"},
+    /* STR_AC_E_NOLINK  */
+    {"The Wi-Fi connection dropped.",
+     "Se perdi\u00F3 la conexi\u00F3n Wi-Fi.",
+     "La connexion Wi-Fi a \u00E9t\u00E9 perdue."},
+    /* STR_AC_E_TIMEOUT */
+    {"The server did not answer in time.",
+     "El servidor no respondi\u00F3 a tiempo.",
+     "Le serveur n'a pas r\u00E9pondu \u00E0 temps."},
+    /* STR_AC_E_DNS     */
+    {"The server's name was not found.",
+     "No se encontr\u00F3 el servidor.",
+     "Serveur introuvable."},
+    /* STR_AC_E_ROUTER  */
+    {"The router did not answer.",
+     "El router no respondi\u00F3.",
+     "Le routeur n'a pas r\u00E9pondu."},
+    /* STR_AC_E_CHIP    */
+    {"The Wi-Fi chip is busy.",
+     "El chip Wi-Fi est\u00E1 ocupado.",
+     "La puce Wi-Fi est occup\u00E9e."},
+    /* STR_AC_E_REFUSED */
+    {"The server refused the connection.",
+     "El servidor rechaz\u00F3 la conexi\u00F3n.",
+     "Le serveur a refus\u00E9 la connexion."},
+    /* STR_AC_E_REPLY   */
+    {"The server's reply was not understood.",
+     "No se entendi\u00F3 la respuesta.",
+     "R\u00E9ponse du serveur incomprise."},
+    /* STR_AC_SETUP_L1  */
+    {"Link an Aurora account to use online",
+     "Vincula una cuenta Aurora para usar",
+     "Liez un compte Aurora pour utiliser"},
+    /* STR_AC_SETUP_L2  */
+    {"features. You can also do it later.",
+     "funciones en l\u00EDnea. Tambi\u00E9n puedes luego.",
+     "les fonctions en ligne (ou plus tard)."},
+    /* STR_AC_SETUP_BTN */
+    {"Link or create",
+     "Vincular o crear",
+     "Lier ou cr\u00E9er"},
+    /* STR_AC_SETUP_WIFI*/
+    {"Set up Wi-Fi first to link an account.",
+     "Configura el Wi-Fi para vincular una cuenta.",
+     "Configurez le Wi-Fi pour lier un compte."},
+    /* STR_AC_PLEASE_WAIT*/ {"Please wait", "Espera un momento", "Veuillez patienter"},
 };
 
 const char *L(StringId id) {
@@ -990,7 +1211,11 @@ static void step_icon(int step, int cx, int cy, Color col) {
       disc(fb, cx, cy - 5, 4, SH_TOP, col);
       draw_filled_round_rect(fb, cx - 7, cy + 1, 14, 9, 6, SH_TOP, col);
       break;
-    case 3: /* Personalise: gear (ring + 4 teeth) */
+    case 3: /* Account: two chain links */
+      draw_round_ring(fb, cx - 11, cy - 5, 13, 10, 5, 2, SH_TOP, col);
+      draw_round_ring(fb, cx - 2, cy - 5, 13, 10, 5, 2, SH_TOP, col);
+      break;
+    case 4: /* Personalise: gear (ring + 4 teeth) */
       disc(fb, cx, cy, 8, SH_TOP, col);
       disc(fb, cx, cy, 4, SH_TOP, COLOR_HM_BG);
       draw_filled_rect(fb, cx - 2, cy - 11, 4, 4, SH_TOP, col);
@@ -998,7 +1223,7 @@ static void step_icon(int step, int cx, int cy, Color col) {
       draw_filled_rect(fb, cx - 11, cy - 2, 4, 4, SH_TOP, col);
       draw_filled_rect(fb, cx + 7, cy - 2, 4, 4, SH_TOP, col);
       break;
-    case 4: /* Welcome: check mark */
+    case 5: /* Welcome: check mark */
       thick_line(fb, cx - 7, cy, cx - 2, cy + 5, 3, SH_TOP, col);
       thick_line(fb, cx - 2, cy + 5, cx + 8, cy - 7, 3, SH_TOP, col);
       break;
@@ -1009,8 +1234,8 @@ static void step_icon(int step, int cx, int cy, Color col) {
 
 /* Labels STR_LANGUAGE..STR_WELCOME must stay consecutive. */
 static void step_bar(int active, Color accent) {
-  static const int cxs[5] = {40, 120, 200, 280, 360};
-  for (int i = 0; i < 5; i++) {
+  static const int cxs[6] = {34, 100, 167, 234, 300, 366};
+  for (int i = 0; i < 6; i++) {
     Color col =
         (i == active) ? accent : (i < active ? COLOR_WHITE : COLOR_HM_TEXT2);
     const char *lab = L((StringId)(STR_LANGUAGE + i));
@@ -1709,6 +1934,83 @@ static Nav step_user(UserConfig *cfg) {
   }
 }
 
+/* Link or create opens Settings > Aurora Account itself. It uses the network
+ * the network step saved, and links under the name the details step took. */
+static void acct_buttons(int sel, Color accent) {
+  button(NET_BX, NET_BY(0), NET_BW, NET_BH, L(STR_AC_SETUP_BTN), sel == 0,
+         accent);
+  button(NET_BX, NET_BY(1), NET_BW, NET_BH,
+         L(account_linked() ? STR_NEXT : STR_SKIP), sel == 1, accent);
+  screen_present_bottom();
+}
+
+static void acct_draw(int sel, Color accent) {
+  char line[80];
+  const char *say = line;
+  setup_top(3, L(STR_AC_SETUP_L1), L(STR_AC_SETUP_L2), accent);
+  screen_present_top();
+  clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
+  bottom_title("Home Menu");
+  if (account_linked() && account_name()[0]) {
+    char *p = line, *e = line + sizeof(line) - 1;
+    for (const char *q = L(STR_AC_SIGNED_IN); *q && p < e; q++)
+      *p++ = *q;
+    for (const char *q = account_name(); *q && p < e; q++)
+      *p++ = *q;
+    *p = '\0';
+  } else if (account_linked()) {
+    say = L(STR_AC_LINKED_L2);
+  } else if (s_wifi && !s_wifi->wifi_saved()[0]) {
+    say = L(STR_AC_SETUP_WIFI);
+  } else {
+    say = L(STR_AC_NONE_L1);
+  }
+  text_center_tr(VRAM_BOT_A, 50, BOT_SCREEN_WIDTH, SH_BOT, say,
+                 COLOR_HM_TEXT2);
+  text_center_tr(VRAM_BOT_A, BOT_SCREEN_HEIGHT - 22, BOT_SCREEN_WIDTH, SH_BOT,
+                 L(STR_NET_HINT), COLOR_HM_TEXT2);
+  acct_buttons(sel, accent);
+}
+
+static Nav step_account(UserConfig *cfg) {
+  Color accent = aurora_accent_presets[cfg->accent];
+  account_load();
+  int sel = account_linked();
+
+  acct_draw(sel, accent);
+  while (1) {
+    u32 k = get_keys_down();
+    int prev = sel, go = 0, tx, ty;
+    if (k & BUTTON_DUP)
+      sel = 0;
+    if (k & BUTTON_DDOWN)
+      sel = 1;
+    if (touch_tap(&tx, &ty))
+      for (int i = 0; i < 2; i++)
+        if (touch_in(tx, ty, NET_BX, NET_BY(i), NET_BW, NET_BH)) {
+          sel = i;
+          go = 1;
+        }
+    if (k & BUTTON_A)
+      go = 1;
+    if (go && sel == 0) {
+      anim_transition(ANIM_PUSH, ANIM_BOTH);
+      account_screen(cfg->name);
+      anim_transition(ANIM_POP, ANIM_BOTH);
+      sel = account_linked();
+      acct_draw(sel, accent);
+      continue;
+    }
+    if ((go && sel == 1) || (k & BUTTON_START))
+      return NAV_NEXT;
+    if (k & BUTTON_B)
+      return NAV_BACK;
+    if (sel != prev)
+      acct_buttons(sel, accent);
+    ui_idle();
+  }
+}
+
 #define PSW 36
 #define PGAP 10
 #define PCOLS 6
@@ -1758,7 +2060,7 @@ static void accent_update(int old_sel, int sel) {
 
 static Nav step_personalise(UserConfig *cfg) {
   int sel = cfg->accent;
-  setup_top(3, L(STR_PERS_L1), 0, aurora_accent_presets[sel]);
+  setup_top(4, L(STR_PERS_L1), 0, aurora_accent_presets[sel]);
   screen_present_top();
   accent_bottom(sel);
   while (1) {
@@ -1796,7 +2098,7 @@ static Nav step_personalise(UserConfig *cfg) {
 
     if (sel != prev) {
       cfg->accent = (u8)sel;
-      setup_top(3, L(STR_PERS_L1), 0, aurora_accent_presets[sel]);
+      setup_top(4, L(STR_PERS_L1), 0, aurora_accent_presets[sel]);
       screen_present_top();
       accent_update(prev, sel);
     }
@@ -1825,7 +2127,7 @@ static Nav step_welcome(UserConfig *cfg) {
   clear_screen(VRAM_TOP_LA, TOP_FB_SIZE, COLOR_HM_BG);
   status_bar();
   console_icon(TOP_SCREEN_WIDTH / 2, 70, COLOR_WHITE);
-  step_bar(4, accent);
+  step_bar(5, accent);
   screen_present_top();
 
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
@@ -1853,7 +2155,7 @@ void setup_run(UserConfig *cfg, const SetupWifi *wifi) {
   s_wifi = wifi;
   g_lang = cfg->language;
   int step = 0;
-  while (step < 5) {
+  while (step < 6) {
     Nav n = NAV_NEXT;
     switch (step) {
       case 0:
@@ -1867,9 +2169,12 @@ void setup_run(UserConfig *cfg, const SetupWifi *wifi) {
         n = step_user(cfg);
         break;
       case 3:
-        n = step_personalise(cfg);
+        n = step_account(cfg);
         break;
       case 4:
+        n = step_personalise(cfg);
+        break;
+      case 5:
         n = step_welcome(cfg);
         break;
     }
@@ -1879,7 +2184,7 @@ void setup_run(UserConfig *cfg, const SetupWifi *wifi) {
       anim_transition(ANIM_POP, ANIM_BOTH);
     } else {
       step++;
-      if (step < 5)
+      if (step < 6)
         anim_transition(ANIM_PUSH, ANIM_BOTH);
     }
   }

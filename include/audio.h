@@ -14,7 +14,7 @@
 
 /* audio_boot() replaces a running core whose version differs, so bump this on
  * any core change. */
-#define AUDIO_CORE_VERSION 113
+#define AUDIO_CORE_VERSION 114
 
 /* The first core that understands AUDIO_CMD_PARK. An older one can only be
  * replaced by powering the console off. */

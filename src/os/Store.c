@@ -1,24 +1,28 @@
 /* aShop: a carousel of sections on the bottom screen, lists of apps and news,
- * app pages, and downloads into SD:/Aurora/Apps. The catalogue is
- * SD:/Aurora/Store/catalog.txt when the card has one, else the demo built in
- * below; banners and the welcome art are PNGs beside it, drawn as plain tiles
- * when missing. There is no download transport yet: an app is copied from
- * SD:/Aurora/Store/Packages when its package is there, and otherwise the
- * download only runs its progress. See docs/store.md. */
+ * app pages, and downloads into SD:/Aurora/Apps. It needs a linked Aurora
+ * account: the catalogue, the icons and the apps come from the account
+ * server's 3ds host with the console's token, in byte ranges that fit the
+ * Wi-Fi core's reply buffer. The catalogue and icons are kept on the card,
+ * so aShop opens offline too. Banners and the welcome art are PNGs in
+ * SD:/Aurora/Store, drawn as plain tiles when missing. See docs/store.md. */
 
 #include "store.h"
+#include "account.h"
 #include "anim.h"
 #include "assets.h"
-#include "container.h"
 #include "ff.h"
+#include "http.h"
 #include "image.h"
+#include "json.h"
 #include "keyboard.h"
 #include "lang.h"
+#include "nand.h"
 #include "power.h"
 #include "statusbar.h"
 #include "timer.h"
 #include "touch.h"
 #include "ui.h"
+#include "wifi.h"
 #include <string.h>
 
 #define TW    TOP_SCREEN_WIDTH
@@ -27,28 +31,31 @@
 #define BSH   BOT_SCREEN_HEIGHT
 #define BAR_H STATUS_APP_HEIGHT
 
-#define ST_DIR      "0:/Aurora/Store"
-#define ST_CATALOG  ST_DIR "/catalog.txt"
-#define ST_RECORDS  ST_DIR "/installed.txt"
-#define ST_PACKAGES ST_DIR "/Packages"
-#define ST_APPS     "0:/Aurora/Apps"
-#define ST_PATH     160
+#define ST_DIR     "0:/Aurora/Store"
+#define ST_CATALOG ST_DIR "/catalog.json"
+#define ST_TAG     ST_DIR "/catalog.tag"
+#define ST_ICONS   ST_DIR "/icons"
+#define ST_RECORDS ST_DIR "/installed.txt"
+#define ST_APPS    "0:/Aurora/Apps"
+#define ST_PATH    160
 
 #define MAX_SECS  8
-#define MAX_APPS  48
+#define MAX_APPS  64
 #define MAX_NEWS  16
 #define MAX_ITEMS (MAX_APPS + MAX_NEWS)
-#define CAT_MAX   (32 * 1024)
-#define POOL_MAX  (24 * 1024)
+#define CAT_MAX   (96 * 1024)
+#define POOL_MAX  (64 * 1024)
+#define TOK_MAX   2560
 #define FILE_MAX  64
 #define VER_MAX   16
 #define LINES_MAX 200 /* of a page's text, wrapped */
 
-/* Downloads without a network: the bytes per millisecond a simulated link
- * moves, and the shortest a download may take, so its screen can be seen. */
-#define DEMO_RATE   3072u
-#define DEMO_MIN_MS 2500u
-#define CHUNK       (16 * 1024)
+/* Each reply has to fit the core's 8 KB buffer with Cloudflare's headers
+ * (about 1 KB), so bodies come 6 KB at a time. */
+#define PIECE     6144u
+#define REPLY_MAX 8192u
+#define ICON_MAX  (16 * 1024)
+#define TRIES     3 /* for one piece, before a download gives up */
 
 static const Color c_bar = {0x10, 0x37, 0x28};
 static const Color c_bg = {0x1A, 0x1A, 0x1A};
@@ -90,6 +97,7 @@ typedef struct {
 
 typedef struct {
   const char *id, *name, *dev, *version, *file, *icon, *in, *text;
+  const char *sha; /* SHA-256 of the file, 64 hex digits */
   u32 size;
   int state;
   u8 *icon_lg, *icon_sm;
@@ -104,169 +112,6 @@ typedef struct {
 #define NEWS_OF(it) (~(it))
 #define ITEM_ABOUT  (~MAX_NEWS)
 
-static const char demo_catalog[] =
-    "# The aShop demo. SD:/Aurora/Store/catalog.txt replaces it; the format\n"
-    "# is in docs/store.md.\n"
-    "\n"
-    "[section news]\n"
-    "title=News\n"
-    "banner=news.png\n"
-    "kind=news\n"
-    "color=2F8FE0\n"
-    "\n"
-    "[section featured]\n"
-    "title=Featured Software\n"
-    "banner=featured.png\n"
-    "color=2EC48A\n"
-    "\n"
-    "[section apps]\n"
-    "title=Apps\n"
-    "banner=apps.png\n"
-    "color=9B3FE0\n"
-    "\n"
-    "[section games]\n"
-    "title=Games\n"
-    "banner=games.png\n"
-    "color=E8702A\n"
-    "\n"
-    "[section new3ds]\n"
-    "title=Better on New 3DS\n"
-    "banner=new3ds.png\n"
-    "color=3AB57E\n"
-    "\n"
-    "[section updates]\n"
-    "title=Download updates\n"
-    "banner=updates.png\n"
-    "kind=updates\n"
-    "color=1E5E45\n"
-    "\n"
-    "[app tetris]\n"
-    "name=Tetris\n"
-    "dev=Aurora\n"
-    "version=1.1\n"
-    "size=28616\n"
-    "file=Tetris.bin\n"
-    "in=featured games\n"
-    "text=The falling-block classic, written in Auric, Aurora's own app "
-    "language.\n"
-    "text=\n"
-    "text=Left and Right move, Down drops softly, Up drops at once, and A or B "
-    "turns the piece. START starts again after a game over, and HOME goes back "
-    "to the Home Menu.\n"
-    "text=\n"
-    "text=Sounds play from SD:/Aurora/Apps/TETRIS when you put them there.\n"
-    "\n"
-    "[app rainbow]\n"
-    "name=Rainbow\n"
-    "dev=Aurora\n"
-    "version=1.0\n"
-    "size=1344\n"
-    "file=Rainbow.bin\n"
-    "in=apps\n"
-    "text=The Auric sample app: seven bands of colour across the top screen.\n"
-    "text=\n"
-    "text=It is the smallest complete Aurora app, with its own Home Menu icon, "
-    "and the place to start if you want to make one.\n"
-    "\n"
-    "[app appname]\n"
-    "name=App name thing\n"
-    "dev=aShop demo\n"
-    "version=0.9\n"
-    "size=4M\n"
-    "in=featured apps\n"
-    "text=App name thing's description goes here. The description can be as "
-    "long as you like, and later you will even be able to add pictures to "
-    "this page!\n"
-    "text=\n"
-    "text=Up and Down on the D-pad, or the Circle Pad, scroll a long page like "
-    "this one.\n"
-    "\n"
-    "[app application]\n"
-    "name=Application Name\n"
-    "dev=aShop demo\n"
-    "version=2.0\n"
-    "size=100M\n"
-    "in=featured new3ds\n"
-    "text=A large download, to watch the download screen at work. It takes "
-    "about half a minute, and B or Cancel stops it.\n"
-    "\n"
-    "[app notes]\n"
-    "name=Pixel Notes\n"
-    "dev=aShop demo\n"
-    "version=1.3\n"
-    "size=512K\n"
-    "in=apps\n"
-    "text=Jot notes and lists on the touchscreen and keep them on the SD "
-    "card.\n"
-    "\n"
-    "[app painter]\n"
-    "name=Sky Painter\n"
-    "dev=aShop demo\n"
-    "version=1.0\n"
-    "size=6M\n"
-    "in=apps new3ds\n"
-    "text=Paint with the stylus on the bottom screen and watch the picture "
-    "take shape on the top one.\n"
-    "\n"
-    "[app synth]\n"
-    "name=Pocket Synth\n"
-    "dev=aShop demo\n"
-    "version=0.4\n"
-    "size=3M\n"
-    "in=apps featured\n"
-    "text=A small synthesizer: notes on the touchscreen, tone and echo on the "
-    "buttons.\n"
-    "\n"
-    "[app garden]\n"
-    "name=Block Garden\n"
-    "dev=aShop demo\n"
-    "version=1.2\n"
-    "size=12M\n"
-    "in=games new3ds\n"
-    "text=Grow a garden one block at a time. Plant, water and wait.\n"
-    "\n"
-    "[app courier]\n"
-    "name=Star Courier\n"
-    "dev=aShop demo\n"
-    "version=1.0\n"
-    "size=24M\n"
-    "in=games new3ds\n"
-    "text=Fly parcels between the stars before the clock runs out. Made for "
-    "the 3D screen.\n"
-    "\n"
-    "[app chess]\n"
-    "name=Chess Club\n"
-    "dev=aShop demo\n"
-    "version=2.1\n"
-    "size=2M\n"
-    "in=games\n"
-    "text=Chess against the console, or pass it to a friend.\n"
-    "\n"
-    "[news welcome]\n"
-    "title=Welcome to aShop\n"
-    "date=Oct 2026\n"
-    "text=aShop is where apps for Aurora will be found and downloaded.\n"
-    "text=\n"
-    "text=This is a demo. The catalogue is built in, and a download copies "
-    "the app from /Aurora/Store/Packages on the SD card when it is there; "
-    "otherwise only the progress runs. Downloaded apps go to /Aurora/Apps and "
-    "appear on the Home Menu.\n"
-    "\n"
-    "[news auric]\n"
-    "title=Make your own apps\n"
-    "date=Oct 2026\n"
-    "text=Aurora apps are written in Auric, a small language that compiles to "
-    "an app the Home Menu can launch.\n"
-    "text=\n"
-    "text=From auric-lang, run: python -m compiler.aurc build app.aur --icon "
-    "app.icon -o APP.BIN, then copy APP.BIN to /Aurora/Apps.\n"
-    "\n"
-    "[news shots]\n"
-    "title=Tip: screenshots\n"
-    "date=Oct 2026\n"
-    "text=Press L and R together anywhere to save both screens as one picture "
-    "in /Aurora/Screenshots.\n";
-
 static char cat[CAT_MAX + 1];
 static char pool[POOL_MAX];
 static int pool_used;
@@ -274,7 +119,11 @@ static Section secs[MAX_SECS];
 static App apps[MAX_APPS];
 static News news[MAX_NEWS];
 static int nsecs, napps, nnews;
-static int cat_on_card;
+
+/* Where the catalogue shown came from. */
+enum { CAT_NONE, CAT_SERVER, CAT_CARD };
+static int cat_from;
+static char cat_tag[24]; /* its ETag */
 
 static char rec_file[MAX_APPS][FILE_MAX];
 static char rec_ver[MAX_APPS][VER_MAX];
@@ -286,7 +135,7 @@ static int installs;
 static u8 *bag;
 static u8 *arena_at;
 
-static char status_text[40];
+static char status_text[48];
 static int bar_lit = -1;
 
 /* The lines of the text last wrapped for a page, kept while it is shown. */
@@ -297,6 +146,14 @@ static const char *wrapped;
 
 static char lower(char c) {
   return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+}
+
+static int same(const char *a, const char *b) {
+  while (*a && *a == *b) {
+    a++;
+    b++;
+  }
+  return *a == *b;
 }
 
 static int same_ci(const char *a, const char *b) {
@@ -394,36 +251,6 @@ static void wait_ms(u32 ms) {
     ui_idle();
 }
 
-/* Text lines join into one string, a line break between them. A record's lines
- * are the newest thing in the pool while it is read, so each adds on. */
-static void text_add(const char **field, const char *v) {
-  int n = (int)strlen(v);
-  if (pool_used + n + 2 > POOL_MAX)
-    return;
-  if (*field) {
-    if (*field + strlen(*field) + 1 != pool + pool_used)
-      return;
-    pool[pool_used - 1] = '\n';
-  } else {
-    *field = pool + pool_used;
-  }
-  memcpy(pool + pool_used, v, (size_t)n);
-  pool_used += n;
-  pool[pool_used++] = 0;
-}
-
-static const char *pool_join(const char *a, const char *b) {
-  int na = (int)strlen(a), nb = (int)strlen(b);
-  char *s = pool + pool_used;
-  if (pool_used + na + nb + 1 > POOL_MAX)
-    return "";
-  memcpy(s, a, (size_t)na);
-  memcpy(s + na, b, (size_t)nb);
-  s[na + nb] = 0;
-  pool_used += na + nb + 1;
-  return s;
-}
-
 static int hex(char c) {
   c = lower(c);
   if (c >= '0' && c <= '9')
@@ -443,18 +270,6 @@ static Color parse_color(const char *s, Color dflt) {
   return c;
 }
 
-/* "28616", "512K" or "100M". */
-static u32 parse_size(const char *s) {
-  u32 v = 0;
-  while (*s >= '0' && *s <= '9')
-    v = v * 10u + (u32)(*s++ - '0');
-  if (lower(*s) == 'k')
-    v <<= 10;
-  else if (lower(*s) == 'm')
-    v <<= 20;
-  return v;
-}
-
 static char *trim(char *s) {
   char *e;
   while (*s == ' ' || *s == '\t')
@@ -464,8 +279,6 @@ static char *trim(char *s) {
     *--e = 0;
   return s;
 }
-
-enum { R_NONE, R_SECTION, R_APP, R_NEWS };
 
 /* A file name alone: the catalogue must not reach outside its folders. */
 static int plain_name(const char *v) {
@@ -477,131 +290,136 @@ static int plain_name(const char *v) {
   return 1;
 }
 
-static void assign(int kind, int i, const char *k, const char *v) {
-  if (kind == R_SECTION) {
-    Section *s = &secs[i];
-    if (same_ci(k, "title"))
-      s->title = v;
-    else if (same_ci(k, "banner") && plain_name(v))
-      s->banner = v;
-    else if (same_ci(k, "kind"))
-      s->kind = same_ci(v, "news") ? K_NEWS
-                : same_ci(v, "updates") ? K_UPDATES : K_APPS;
-    else if (same_ci(k, "color"))
-      s->color = parse_color(v, s->color);
-  } else if (kind == R_APP) {
-    App *a = &apps[i];
-    if (same_ci(k, "name"))
-      a->name = v;
-    else if (same_ci(k, "dev"))
-      a->dev = v;
-    else if (same_ci(k, "version"))
-      a->version = v;
-    else if (same_ci(k, "size"))
-      a->size = parse_size(v);
-    else if (same_ci(k, "file") && plain_name(v) && strlen(v) < FILE_MAX - 6)
-      a->file = v;
-    else if (same_ci(k, "icon") && plain_name(v))
-      a->icon = v;
-    else if (same_ci(k, "in"))
-      a->in = v;
-    else if (same_ci(k, "text"))
-      text_add(&a->text, v);
-  } else if (kind == R_NEWS) {
-    News *n = &news[i];
-    if (same_ci(k, "title"))
-      n->title = v;
-    else if (same_ci(k, "date"))
-      n->date = v;
-    else if (same_ci(k, "text"))
-      text_add(&n->text, v);
-  }
+/* Exactly n lower-case hex digits, as the server names files and icons. */
+static int hex_name(const char *s, int n) {
+  int i = 0;
+  while (i < n && ((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')))
+    i++;
+  return i == n && !s[n];
 }
 
-static void parse(char *s) {
+static Json cj;
+static JsonTok ctok[TOK_MAX];
+
+/* A string of the catalogue, copied into the pool: text keeps its line
+ * breaks and accented letters. "" when it is missing or the pool is full. */
+static const char *take(int obj, const char *key, int text) {
+  int t = json_get(&cj, obj, key);
+  char *s = pool + pool_used;
+  u32 room = (u32)(POOL_MAX - pool_used);
+  if (t < 0 || room < 2u)
+    return "";
+  if (text)
+    json_text(&cj, t, s, room);
+  else
+    json_str(&cj, t, s, room);
+  pool_used += (int)strlen(s) + 1;
+  return s;
+}
+
+/* The catalogue in cat (docs/store.md "The catalogue"); what does not fit
+ * the limits, or names a file outside its folder, is left out. */
+static int parse(u32 len) {
   static const Color dflt = {0x2E, 0xC4, 0x8A};
-  int kind = R_NONE, idx = 0;
-
-  while (*s) {
-    char *line = s, *eq;
-    while (*s && *s != '\n')
-      s++;
-    if (*s)
-      *s++ = 0;
-    line = trim(line);
-    if (!*line || *line == '#')
-      continue;
-
-    if (*line == '[') {
-      char *type = line + 1, *id = type, *end;
-      while (*id && *id != ' ' && *id != ']')
-        id++;
-      if (*id == ' ')
-        *id++ = 0;
-      end = strchr(id, ']');
-      if (end)
-        *end = 0;
-      if (*type == ']')
-        *type = 0;
-      id = trim(id);
-      kind = R_NONE;
-      if (same_ci(type, "section") && nsecs < MAX_SECS) {
-        kind = R_SECTION;
-        idx = nsecs++;
-        secs[idx] = (Section){id, id, "", K_APPS, dflt, 0};
-      } else if (same_ci(type, "app") && napps < MAX_APPS) {
-        kind = R_APP;
-        idx = napps++;
-        apps[idx] = (App){id, id, "", "", 0, "", "", 0, 0, A_NEW, 0, 0};
-      } else if (same_ci(type, "news") && nnews < MAX_NEWS) {
-        kind = R_NEWS;
-        idx = nnews++;
-        news[idx] = (News){id, id, "", 0};
-      }
-      continue;
-    }
-
-    eq = strchr(line, '=');
-    if (!eq || kind == R_NONE)
-      continue;
-    *eq = 0;
-    assign(kind, idx, trim(line), trim(eq + 1));
-  }
-
-  for (int i = 0; i < napps; i++) {
-    if (!apps[i].file)
-      apps[i].file = pool_join(apps[i].id, ".bin");
-    if (!apps[i].text)
-      apps[i].text = "";
-  }
-  for (int i = 0; i < nnews; i++)
-    if (!news[i].text)
-      news[i].text = "";
-}
-
-static void catalog_load(void) {
-  static FIL f;
-  UINT br = 0;
-  int n = 0;
-
+  int s, a, n;
   nsecs = napps = nnews = 0;
   pool_used = 0;
-  cat_on_card = 0;
-  if (mounted && f_open(&f, ST_CATALOG, FA_READ) == FR_OK) {
-    if (f_read(&f, cat, CAT_MAX, &br) == FR_OK && br > 0) {
-      n = (int)br;
-      cat_on_card = 1;
-    }
+  if (!json_parse(&cj, cat, len, ctok, TOK_MAX) || ctok[0].type != JSON_OBJ)
+    return 0;
+  s = json_get(&cj, 0, "sections");
+  a = json_get(&cj, 0, "apps");
+  n = json_get(&cj, 0, "news");
+  for (u32 i = 0; i < json_count(&cj, s) && nsecs < MAX_SECS; i++) {
+    int o = json_at(&cj, s, i);
+    Section *x = &secs[nsecs];
+    const char *kind;
+    x->id = take(o, "id", 0);
+    x->title = take(o, "title", 1);
+    x->banner = take(o, "banner", 0);
+    kind = take(o, "kind", 0);
+    x->kind = same_ci(kind, "news")      ? K_NEWS
+              : same_ci(kind, "updates") ? K_UPDATES
+                                         : K_APPS;
+    x->color = parse_color(take(o, "color", 0), dflt);
+    x->art = 0;
+    if (!plain_name(x->banner))
+      x->banner = "";
+    if (x->id[0])
+      nsecs++;
+  }
+  for (u32 i = 0; i < json_count(&cj, a) && napps < MAX_APPS; i++) {
+    int o = json_at(&cj, a, i);
+    App *x = &apps[napps];
+    x->id = take(o, "id", 0);
+    x->name = take(o, "name", 1);
+    x->dev = take(o, "dev", 1);
+    x->version = take(o, "version", 0);
+    x->file = take(o, "file", 0);
+    x->icon = take(o, "icon", 0);
+    x->in = take(o, "in", 0);
+    x->text = take(o, "text", 1);
+    x->sha = take(o, "sha256", 0);
+    x->size = (u32)json_int(&cj, json_get(&cj, o, "size"), 0);
+    x->state = A_NEW;
+    x->icon_lg = x->icon_sm = 0;
+    if (!hex_name(x->icon, 16))
+      x->icon = "";
+    if (x->id[0] && plain_name(x->file) && strlen(x->file) < FILE_MAX - 6 &&
+        strlen(x->version) < VER_MAX && hex_name(x->sha, 64) && x->size)
+      napps++;
+  }
+  for (u32 i = 0; i < json_count(&cj, n) && nnews < MAX_NEWS; i++) {
+    int o = json_at(&cj, n, i);
+    News *x = &news[nnews++];
+    x->id = take(o, "id", 0);
+    x->title = take(o, "title", 1);
+    x->date = take(o, "date", 1);
+    x->text = take(o, "text", 1);
+  }
+  return 1;
+}
+
+/* The copy kept on the card, with its ETag. */
+static u32 card_catalog(void) {
+  static FIL f;
+  UINT br = 0;
+  cat_tag[0] = 0;
+  if (!mounted || f_open(&f, ST_CATALOG, FA_READ) != FR_OK)
+    return 0;
+  if (f_size(&f) > CAT_MAX || f_read(&f, cat, CAT_MAX, &br) != FR_OK)
+    br = 0;
+  f_close(&f);
+  if (br && f_open(&f, ST_TAG, FA_READ) == FR_OK) {
+    UINT n = 0;
+    if (f_read(&f, cat_tag, sizeof(cat_tag) - 1, &n) != FR_OK)
+      n = 0;
+    cat_tag[n] = 0;
+    trim(cat_tag);
     f_close(&f);
   }
-  if (!cat_on_card) {
-    n = (int)sizeof(demo_catalog) - 1;
-    if (n > CAT_MAX)
-      n = CAT_MAX;
-    memcpy(cat, demo_catalog, (size_t)n);
+  return br;
+}
+
+static void write_file(const char *path, const void *data, u32 n) {
+  static FIL f;
+  UINT bw;
+  if (f_open(&f, path, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+    return;
+  if (f_write(&f, data, n, &bw) != FR_OK || bw != n) {
+    f_close(&f);
+    f_unlink(path);
+    return;
   }
-  cat[n] = 0;
-  parse(cat);
+  f_close(&f);
+}
+
+static void card_save(u32 len) {
+  if (!mounted)
+    return;
+  f_mkdir(ST_DIR);
+  f_unlink(ST_TAG); /* no tag beside a half-written copy */
+  write_file(ST_CATALOG, cat, len);
+  write_file(ST_TAG, cat_tag, (u32)strlen(cat_tag));
 }
 
 /* SD:/Aurora/Store/installed.txt: "file version" for each app aShop put on
@@ -718,7 +536,9 @@ static int updates_count(void) {
 static void status_update(void) {
   int n = updates_count();
   char *p = put_str(status_text, "aShop");
-  if (n) {
+  if (cat_from == CAT_CARD) {
+    put_str(p, L(STR_ST_OFFLINE_TAG));
+  } else if (n) {
     p = put_str(p, " (");
     p = put_u32(p, (u32)n);
     put_str(p, L(n == 1 ? STR_ST_UPDATE1 : STR_ST_UPDATES));
@@ -804,19 +624,25 @@ static u8 *art_load(const char *name, int w, int h, int r) {
 #define BAG_W     92
 #define BAG_H     94
 
-static void store_load(void) {
+static void icon_name(char *out, const App *a) {
+  put_str(put_str(put_str(out, "icons/"), a->icon), ".png");
+}
+
+/* The catalogue's art, decoded at the sizes it is drawn. */
+static void art_all(void) {
+  char name[32];
   arena_at = (u8 *)STORE_ARENA_ADDR;
   wrapped = 0;
-  catalog_load();
-  records_load();
-  states_update();
-  status_update();
   bag = art_load("bag.png", BAG_W, BAG_H, 0);
   for (int i = 0; i < nsecs; i++)
     secs[i].art = art_load(secs[i].banner, TILE_W, TILE_H, TILE_R);
   for (int i = 0; i < napps; i++) {
-    apps[i].icon_lg = art_load(apps[i].icon, 48, 48, 10);
-    apps[i].icon_sm = apps[i].icon_lg ? art_load(apps[i].icon, 24, 24, 5) : 0;
+    apps[i].icon_lg = apps[i].icon_sm = 0;
+    if (!apps[i].icon[0])
+      continue;
+    icon_name(name, &apps[i]);
+    apps[i].icon_lg = art_load(name, 48, 48, 10);
+    apps[i].icon_sm = apps[i].icon_lg ? art_load(name, 24, 24, 5) : 0;
   }
 }
 
@@ -839,19 +665,20 @@ static const char *item_text(int it) {
 }
 
 static void about_build(void) {
-  static char text[640];
+  static char text[768];
   char *p = text;
   p = put_str(p, L(STR_ST_AB_INTRO));
   p = put_str(p, "\n\n");
   p = put_str(p, L(STR_ST_AB_CAT));
-  p = put_str(p, L(cat_on_card ? STR_ST_AB_CARD : STR_ST_AB_DEMO));
+  p = put_str(p, L(cat_from == CAT_SERVER ? STR_ST_AB_ONLINE
+                                          : STR_ST_AB_OFFLINE));
   p = put_str(p, L(STR_ST_AB_WITH));
   p = put_u32(p, (u32)napps);
   p = put_str(p, L(napps == 1 ? STR_ST_AB_APP : STR_ST_AB_APPS));
   p = put_u32(p, (u32)nnews);
   p = put_str(p, L(nnews == 1 ? STR_ST_AB_NEWS1 : STR_ST_AB_NEWSN));
   p = put_str(p, "\n\n");
-  put_str(p, L(STR_ST_AB_SERVER));
+  put_str(p, L(STR_ST_AB_HOW));
   about = (News){"about", L(STR_ST_ABOUT), AURORA_VERSION, text};
   wrapped = 0;
 }
@@ -1544,131 +1371,205 @@ static void paint_page(void) {
   }
 }
 
+static char reply[REPLY_MAX + 1];
+static char why[64];
+
+/* bytes [from, from + n) of `path`, with the console's token. */
+static int get_piece(const char *path, u32 from, u32 n, const char *if_none,
+                     HttpReply *r, void (*tick)(u32 ms)) {
+  char extra[96], *p = put_str(extra, "Range: bytes=");
+  p = put_u32(p, from);
+  *p++ = '-';
+  p = put_u32(p, from + n - 1u);
+  p = put_str(p, "\r\n");
+  if (if_none && if_none[0] && strlen(if_none) < 40) {
+    p = put_str(p, "If-None-Match: ");
+    p = put_str(p, if_none);
+    put_str(p, "\r\n");
+  }
+  return http_call("GET", path, account_token(), extra, 0, reply, REPLY_MAX, r,
+                   tick);
+}
+
+/* The server no longer takes this console's token: it was unlinked on the
+ * website. Forgetting it unmounts the card, so it is mounted again. */
+static void token_revoked(void) {
+  account_forget();
+  mounted = f_mount(&fs, "", 1) == FR_OK;
+}
+
+/* The joined network, joined first when the console is not on one. Joining
+ * mounts and unmounts the card itself, which would leave aShop's mount gone,
+ * so the card is let go for it and mounted again after. Files open on the
+ * card stop working across a join. */
+static int online(void (*tick)(u32 ms)) {
+  static char ssid[33];
+  int ok;
+  if (http_online())
+    return 1;
+  if (mounted)
+    f_mount(NULL, "", 0);
+  ok = wifi_net_join(ssid, sizeof(ssid), why, sizeof(why), tick);
+  mounted = f_mount(&fs, "", 1) == FR_OK;
+  return ok;
+}
+
 enum { DL_RUN, DL_DONE, DL_FAILED, DL_CANCELLED };
 
 static struct {
   App *app;
-  int real, existed, state;
-  u32 done, total, t0, phase;
+  int open, state, cancel, tries;
+  u32 done, total, phase, t0;
   const char *title, *line1, *line2;
-  char dst[ST_PATH], tmp[ST_PATH + 6];
+  char dst[ST_PATH], tmp[ST_PATH + 6], path[96];
+  Sha256 sha;
 } dl;
 
-static FIL dl_src, dl_dst;
-static u8 dl_buf[CHUNK];
+static FIL dl_file;
 
 static void dl_close(int remove) {
-  if (!dl.real)
+  if (!dl.open)
     return;
-  f_close(&dl_src);
-  f_close(&dl_dst);
+  f_close(&dl_file);
   if (remove)
     f_unlink(dl.tmp);
-  dl.real = 0;
+  dl.open = 0;
 }
 
-static void dl_fail(const char *why) {
+/* <file>.part again after a join, to carry on at dl.done. Gone when it is
+ * not dl.done bytes long. */
+static int dl_reopen(void) {
+  if (!mounted ||
+      f_open(&dl_file, dl.tmp, FA_WRITE | FA_OPEN_APPEND) != FR_OK) {
+    f_unlink(dl.tmp);
+    return 0;
+  }
+  dl.open = 1;
+  if (f_size(&dl_file) != dl.done) {
+    dl_close(1);
+    return 0;
+  }
+  return 1;
+}
+
+static void dl_fail(const char *line1, const char *line2) {
   dl_close(1);
   dl.state = DL_FAILED;
   dl.title = L(STR_ST_DL_FAILED);
-  dl.line1 = why;
-  dl.line2 = "";
+  dl.line1 = line1;
+  dl.line2 = line2 ? line2 : "";
 }
 
+/* The download goes to <file>.part, which the Home Menu ignores, and is
+ * renamed over any old copy only once its SHA-256 matches the catalogue's,
+ * so a cancelled or failed download leaves the old app as it was. */
 static void dl_start(App *a) {
-  char src[ST_PATH];
-  aos_header_t h;
-
   dl.app = a;
-  dl.real = 0;
+  dl.open = 0;
   dl.done = 0;
   dl.state = DL_RUN;
+  dl.cancel = 0;
+  dl.tries = 0;
   dl.phase = 0;
-  dl.existed = app_on_card(a);
-  dl.total = a->size ? a->size : (1u << 20);
   dl.t0 = timer_ticks();
+  dl.total = a->size;
   if (!mounted) {
-    dl_fail(L(STR_ST_E_NOSD));
+    dl_fail(L(STR_ST_E_NOSD), 0);
     return;
   }
-  path2(src, ST_PACKAGES, a->file);
-  if (f_open(&dl_src, src, FA_READ) != FR_OK)
-    return;
-  if (aurora_parse_header(&dl_src, &h) != AURORA_OK ||
-      f_lseek(&dl_src, 0) != FR_OK) {
-    f_close(&dl_src);
-    dl_fail(L(STR_ST_E_NOTAPP));
+  if (!account_token()) {
+    dl_fail(L(STR_AC_REVOKED), L(STR_AC_REVOKED2));
     return;
   }
-  dl.total = f_size(&dl_src);
+  put_str(put_str(put_str(dl.path, "/v1/store/files/"), a->sha), ".bin");
   f_mkdir(ST_APPS);
   path2(dl.dst, ST_APPS, a->file);
   put_str(put_str(dl.tmp, dl.dst), ".part");
-  if (f_open(&dl_dst, dl.tmp, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) {
-    f_close(&dl_src);
-    dl_fail(L(STR_FD_E_WRITE));
+  if (f_open(&dl_file, dl.tmp, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) {
+    dl_fail(L(STR_FD_E_WRITE), 0);
     return;
   }
-  dl.real = 1;
+  dl.open = 1;
+  sha256_init(&dl.sha);
 }
 
 static void dl_finish(void) {
   App *a = dl.app;
-  int real = dl.real;
-  dl.state = DL_DONE;
-  if (real) {
-    dl_close(0);
-    f_unlink(dl.dst);
-    if (f_rename(dl.tmp, dl.dst) != FR_OK) {
-      f_unlink(dl.tmp);
-      dl_fail(L(STR_ST_E_INSTALL));
-      return;
-    }
-    installs++;
-    dl.title = L(STR_ST_INSTALLED);
-    dl.line1 = a->name;
-    dl.line2 = L(STR_ST_ON_HOME);
-  } else if (dl.existed) {
-    dl.title = L(STR_ST_UP_TO_DATE);
-    dl.line1 = L(STR_ST_DEMO1);
-    dl.line2 = L(STR_ST_DEMO2);
-  } else {
-    dl.title = L(STR_ST_DL_DONE);
-    dl.line1 = L(STR_ST_DEMO3);
-    dl.line2 = L(STR_ST_DEMO4);
+  u8 d[32];
+  char got[65];
+  sha256_final(&dl.sha, d);
+  for (int i = 0; i < 32; i++) {
+    got[2 * i] = "0123456789abcdef"[d[i] >> 4];
+    got[2 * i + 1] = "0123456789abcdef"[d[i] & 15];
   }
-  if (real || dl.existed)
-    record_set(a->file, a->version);
+  got[64] = 0;
+  dl_close(0);
+  if (!same(got, a->sha)) {
+    f_unlink(dl.tmp);
+    dl_fail(L(STR_ST_E_DAMAGED), 0);
+    return;
+  }
+  f_unlink(dl.dst);
+  if (f_rename(dl.tmp, dl.dst) != FR_OK) {
+    f_unlink(dl.tmp);
+    dl_fail(L(STR_ST_E_INSTALL), 0);
+    return;
+  }
+  dl.state = DL_DONE;
+  installs++;
+  dl.title = L(STR_ST_INSTALLED);
+  dl.line1 = a->name;
+  dl.line2 = L(STR_ST_ON_HOME);
+  record_set(a->file, a->version);
   states_update();
   status_update();
 }
 
-static void dl_step(void) {
-  u32 ms = timer_us_since(dl.t0) / 1000u, dur = dl.total / DEMO_RATE, want;
-  if (dur < DEMO_MIN_MS)
-    dur = DEMO_MIN_MS;
-  if (ms >= dur) {
-    want = dl.total;
-  } else {
-    /* total * ms / dur in 32 bits: the elapsed share in 1/4096ths. */
-    u32 f = ms * 4096u / dur;
-    want = (dl.total >> 12) * f + (((dl.total & 4095u) * f) >> 12);
-  }
+static void dl_tick(u32 ms);
 
-  for (int n = 0; dl.real && dl.done < want && n < 4; n++) {
-    UINT len = want - dl.done > CHUNK ? CHUNK : want - dl.done, br, bw;
-    if (f_read(&dl_src, dl_buf, len, &br) != FR_OK || br != len) {
-      dl_fail(L(STR_ST_E_READ));
+/* One piece: a request and its reply, about a second and a half. A piece
+ * that does not come is asked for again, TRIES times. */
+static void dl_step(void) {
+  HttpReply r;
+  u32 n = dl.total - dl.done < PIECE ? dl.total - dl.done : PIECE;
+  UINT bw;
+  int st;
+  if (!http_online()) {
+    int ok;
+    dl_close(0); /* see online() */
+    ok = online(dl_tick);
+    if (!dl_reopen()) {
+      dl_fail(L(STR_FD_E_WRITE), 0);
       return;
     }
-    if (f_write(&dl_dst, dl_buf, len, &bw) != FR_OK || bw != len) {
-      dl_fail(L(STR_ST_E_FULL));
+    if (!ok) {
+      dl_fail(L(STR_AC_NO_NET), why);
       return;
     }
-    dl.done += len;
   }
-  if (!dl.real)
-    dl.done = want;
+  st = get_piece(dl.path, dl.done, n, 0, &r, dl_tick);
+  if (st == 401 || st == 403) {
+    dl_close(1);
+    if (st == 401)
+      token_revoked();
+    dl_fail(L(STR_AC_REVOKED), L(STR_AC_REVOKED2));
+    return;
+  }
+  if (!r.body || !((st == 206 && r.from == dl.done && r.len == n) ||
+                   (st == 200 && !dl.done && r.len == dl.total))) {
+    http_why(&r, why);
+    if ((st >= 400 && st < 500) || (st == 206 && r.total != dl.total) ||
+        ++dl.tries >= TRIES)
+      dl_fail(L(st ? STR_ST_E_SERVER : STR_ST_E_NET), why);
+    return;
+  }
+  dl.tries = 0;
+  if (f_write(&dl_file, r.body, r.len, &bw) != FR_OK || bw != r.len) {
+    dl_fail(L(STR_ST_E_FULL), 0);
+    return;
+  }
+  sha256_update(&dl.sha, r.body, r.len);
+  dl.done += r.len;
   if (dl.done >= dl.total)
     dl_finish();
 }
@@ -1764,8 +1665,33 @@ static void paint_dl(void) {
   buttons(run ? cancel : ok, 1);
 }
 
+/* The floor moves with time, so frames drawn during a piece and between
+ * pieces agree. */
+static void dl_phase(void) {
+  dl.phase = (timer_us_since(dl.t0) / 1000u * 50u) & 0x1FFFFu;
+}
+
+/* While a piece comes in the core is busy and cannot present (see
+ * wifi_direct_on), so the top screen's frames are drawn in its backbuffer and
+ * copied to the framebuffer on show by the CPU. B is read straight from the
+ * pad: touch is the core's too. */
+static void dl_tick(u32 ms) {
+  volatile u8 *keep = g_fb_top;
+  const u32 *s = (const u32 *)VRAM_TOP_BACK;
+  volatile u32 *d = (volatile u32 *)VRAM_TOP_PHYS;
+  (void)ms;
+  if (get_keys() & BUTTON_B)
+    dl.cancel = 1;
+  dl_phase();
+  g_blit_src = 0;
+  g_fb_top = VRAM_TOP_BACK;
+  dl_top();
+  g_fb_top = keep;
+  for (u32 i = 0; i < TOP_FB_SIZE / 4u; i++)
+    d[i] = s[i];
+}
+
 static void download_screen(App *a) {
-  u32 frame_at = 0;
   int last_pct = -1, tx, ty;
 
   anim_transition(ANIM_PUSH, ANIM_BOTH);
@@ -1779,25 +1705,23 @@ static void download_screen(App *a) {
 
   while (dl.state == DL_RUN) {
     u32 k = get_keys_down();
-    int ms;
-    if ((k & BUTTON_B) || (tapped(&tx, &ty) && ty >= BB_Y - 4)) {
+    int p;
+    if ((k & BUTTON_B) || dl.cancel || (tapped(&tx, &ty) && ty >= BB_Y - 4)) {
       flash(paint_dl, 0);
       dl_close(1);
       dl.state = DL_CANCELLED;
       break;
     }
     dl_step();
-    ms = anim_frame(&frame_at);
-    if (ms) {
-      int show = ANIM_TOP, p = dl_pct();
-      dl.phase = (dl.phase + (u32)ms * 50u) & 0x1FFFFu;
-      dl_top();
-      if (p != last_pct || dl.state != DL_RUN) {
-        last_pct = p;
-        paint_dl();
-        show |= ANIM_BOT;
-      }
-      anim_present(show);
+    p = dl_pct();
+    dl_phase();
+    dl_top();
+    if (p != last_pct || dl.state != DL_RUN) {
+      last_pct = p;
+      paint_dl();
+      anim_present(ANIM_BOTH);
+    } else {
+      anim_present(ANIM_TOP);
     }
     clock_poll(1);
     ui_idle();
@@ -2136,28 +2060,306 @@ static int first_section(void) {
   return 0;
 }
 
-static void main_options(void) {
+/* The screens while aShop talks to the server: the welcome screen with the
+ * step on its card, and a spinner on the bottom, which is all that is drawn
+ * while the core works. */
+#define SPIN_Y 116
+
+static void spin(u32 ms) {
+  static const s8 dx[8] = {0, 14, 20, 14, 0, -14, -20, -14};
+  static const s8 dy[8] = {-20, -14, 0, 14, 20, 14, 0, -14};
+  volatile u8 *fb = VRAM_BOT_A;
+  int lit = (int)(ms / 100u) % 8;
+  draw_filled_rect(fb, BW / 2 - 26, SPIN_Y - 26, 52, 52, BSH, c_bg);
+  for (int i = 0; i < 8; i++) {
+    int age = (lit - i + 8) % 8;
+    Color c = age == 0 ? c_ring : age < 3 ? COLOR_HM_TEXT2 : c_btn_lit;
+    draw_filled_round_rect(fb, BW / 2 + dx[i] - 3, SPIN_Y + dy[i] - 3, 7, 7, 3,
+                           BSH, c);
+  }
+  screen_present_bottom();
+}
+
+static void busy(const char *step) {
+  volatile u8 *fb = VRAM_BOT_A;
+  top_home(step, 0);
+  screen_present_top();
+  draw_filled_rect(fb, 0, 0, BW, BSH, BSH, c_bg);
+  draw_filled_round_rect(fb, TC_X, TC_Y, TC_W, TC_H, 9, BSH, c_card);
+  ui_text_mid(fb, BW / 2, TC_Y + (TC_H - ui_th(&ui_bold)) / 2, BSH, "aShop",
+              COLOR_WHITE, c_card, &ui_bold);
+  ui_text_mid_fit(fb, BW / 2, 200, BSH, L(STR_AC_PLEASE_WAIT), BW - 24,
+                  COLOR_HM_TEXT2, c_bg, &ui_small);
+  spin(0);
+}
+
+enum { GOT_OK, GOT_SAME, GOT_DENIED, GOT_FAIL };
+
+/* A whole body into dst, a piece at a time. Every piece must be of the
+ * version the first was (its ETag); when it changed meanwhile, it starts
+ * again. With `have`, the ETag of a copy already kept, an unchanged body is
+ * GOT_SAME and is not sent. */
+static int fetch(const char *path, char *dst, u32 max, u32 *len,
+                 const char *have, char *tag, HttpReply *r) {
+  u32 got = 0;
+  int tries = 0;
+  for (;;) {
+    int st = get_piece(path, got, PIECE, got ? 0 : have, r, spin), bad;
+    if (st == 304 && !got)
+      return GOT_SAME;
+    if (st == 401 || st == 403)
+      return GOT_DENIED;
+    if (st == 200 && !got && r->body) {
+      if (r->len > max)
+        return GOT_FAIL;
+      memcpy(dst, r->body, r->len);
+      *len = r->len;
+      put_str(tag, r->etag);
+      return GOT_OK;
+    }
+    bad = st != 206 || !r->body || !r->len || !r->total || r->total > max ||
+          r->from != got;
+    if (!bad && got && !same(r->etag, tag)) {
+      got = 0;
+      bad = 1;
+    }
+    if (bad) {
+      if ((st >= 400 && st < 500) || (st == 206 && r->total > max) ||
+          ++tries > TRIES)
+        return GOT_FAIL;
+      continue;
+    }
+    if (!got)
+      put_str(tag, r->etag);
+    memcpy(dst + got, r->body, r->len);
+    got += r->len;
+    if (got >= r->total) {
+      *len = r->total;
+      return GOT_OK;
+    }
+  }
+}
+
+static u8 icon_buf[ICON_MAX];
+
+static int icon_kept(const App *a) {
+  static FILINFO fno;
+  char name[32], path[ST_PATH];
+  icon_name(name, a);
+  path2(path, ST_DIR, name);
+  return f_stat(path, &fno) == FR_OK;
+}
+
+/* The icons the card does not have yet. Each is named by its content, so a
+ * new icon is a new file. */
+static void icons_fetch(void) {
+  char name[32], path[ST_PATH], line[64], tag[24];
+  char where[48];
+  int need = 0, done = 0;
+  HttpReply r;
+  if (!mounted)
+    return;
+  for (int i = 0; i < napps; i++)
+    need += apps[i].icon[0] && !icon_kept(&apps[i]);
+  if (!need)
+    return;
+  f_mkdir(ST_ICONS);
+  for (int i = 0; i < napps; i++) {
+    u32 len;
+    char *p;
+    if (!apps[i].icon[0] || icon_kept(&apps[i]))
+      continue;
+    p = put_str(put_str(line, L(STR_ST_ICONS)), " (");
+    p = put_u32(p, (u32)++done);
+    *p++ = '/';
+    put_str(put_u32(p, (u32)need), ")");
+    busy(line);
+    icon_name(name, &apps[i]);
+    path2(path, ST_DIR, name);
+    put_str(put_str(put_str(where, "/v1/store/icons/"), apps[i].icon), ".png");
+    if (fetch(where, (char *)icon_buf, ICON_MAX, &len, 0, tag, &r) == GOT_OK)
+      write_file(path, icon_buf, len);
+    else if (!r.status)
+      break; /* the network is gone: the rest would fail too */
+  }
+}
+
+enum { SYNC_OK, SYNC_UNLINKED, SYNC_NONE };
+
+/* The catalogue from aShop, else the copy on the card (cat_from says which),
+ * then the icons it names. SYNC_NONE when there is neither, the reason in
+ * `why`. */
+static int sync(void) {
+  static char tag[24];
+  HttpReply r;
+  u32 len = 0, card = card_catalog();
+  int got = GOT_FAIL;
+  why[0] = 0;
+  r.status = 0;
+  busy(L(STR_ST_CONNECTING));
+  if (online(spin)) {
+    got = fetch("/v1/store/catalog", cat, CAT_MAX, &len, card ? cat_tag : 0,
+                tag, &r);
+    if (got == GOT_FAIL)
+      http_why(&r, why);
+  }
+  if (got == GOT_DENIED) {
+    if (r.status == 401)
+      token_revoked();
+    return SYNC_UNLINKED;
+  }
+  if (got == GOT_OK && parse(len)) {
+    put_str(cat_tag, tag);
+    card_save(len);
+    cat_from = CAT_SERVER;
+  } else if (card && (len = card_catalog()) && parse(len)) {
+    cat_from = got == GOT_SAME ? CAT_SERVER : CAT_CARD;
+  } else {
+    if (!why[0])
+      put_str(why, L(STR_AC_E_REPLY));
+    nsecs = napps = nnews = 0;
+    cat_from = CAT_NONE;
+    return SYNC_NONE;
+  }
+  if (cat_from == CAT_SERVER)
+    icons_fetch();
+  return SYNC_OK;
+}
+
+static const Btn need_btns[2] = {{STR_BACK, UI_NO_ASSET, 1},
+                                 {STR_AC_LINK, UI_NO_ASSET, 0}};
+
+static void paint_need(void) {
+  volatile u8 *fb = VRAM_BOT_A;
+  draw_filled_rect(fb, 0, 0, BW, BSH, BSH, c_bg);
+  draw_filled_round_rect(fb, 8, 8, BW - 16, 196, 12, BSH, c_card);
+  ui_icon(fb, (BW - 48) / 2, 20, 48, BSH, ASSET_ICON_USER_48, 0, COLOR_WHITE);
+  ui_text_mid_fit(fb, BW / 2, 78, BSH, L(STR_ST_NEED_TITLE), BW - 40,
+                  COLOR_WHITE, c_card, &ui_bold);
+  for (int i = 0; i < 3; i++)
+    ui_text_mid_fit(fb, BW / 2, 108 + i * 20, BSH,
+                    L((StringId)(STR_ST_NEED_L1 + i)), BW - 40,
+                    COLOR_HM_TEXT2, c_card, &ui_font);
+  ui_text_mid(fb, BW / 2, 176, BSH, ACCOUNT_SITE, COLOR_WHITE, c_card,
+              &ui_small);
+  buttons(need_btns, 2);
+}
+
+/* aShop without an account says so and offers to link one (Settings >
+ * Aurora Account's screen). 1 when the console is linked on return. */
+static int need_account(const char *owner) {
+  int tx, ty;
+  anim_transition(ANIM_PUSH, ANIM_BOTH);
+  for (;;) {
+    int b;
+    bar_draw(0);
+    top_home(L(STR_ST_WELCOME), 0);
+    screen_present_top();
+    paint_need();
+    screen_present_bottom();
+    touch_arm();
+    for (;;) {
+      u32 k = get_keys_down();
+      b = (k & (BUTTON_B | BUTTON_START)) ? 0 : (k & BUTTON_A) ? 1 : -1;
+      if (b < 0 && tapped(&tx, &ty))
+        b = btn_at(need_btns, 2, tx, ty);
+      if (b >= 0)
+        break;
+      ui_idle();
+    }
+    flash(paint_need, b);
+    settle();
+    if (b == 0) {
+      anim_transition(ANIM_POP, ANIM_BOTH);
+      return 0;
+    }
+    anim_transition(ANIM_PUSH, ANIM_BOTH);
+    account_screen(owner);
+    anim_transition(ANIM_POP, ANIM_BOTH);
+    if (account_linked())
+      return 1;
+  }
+}
+
+/* What stopped aShop, on a card like a download's result, with OK. */
+static const char *nt_title, *nt_line;
+
+static void paint_notice(void) {
+  static const Btn ok[1] = {{STR_OK, UI_NO_ASSET, 0}};
+  volatile u8 *fb = VRAM_BOT_A;
+  draw_filled_rect(fb, 0, 0, BW, BSH, BSH, c_bg);
+  draw_filled_round_rect(fb, 8, 8, BW - 16, 196, 12, BSH, c_card);
+  ui_icon(fb, (BW - 48) / 2, 24, 48, BSH, ASSET_ICON_GLOBE_48, 0, COLOR_WHITE);
+  ui_text_mid_fit(fb, BW / 2, 86, BSH, nt_title, BW - 48, c_ring, c_card,
+                  &ui_bold);
+  ui_text_mid_fit(fb, BW / 2, 116, BSH, nt_line, BW - 48, COLOR_HM_TEXT2,
+                  c_card, &ui_font);
+  buttons(ok, 1);
+}
+
+static void notice(const char *title, const char *line) {
+  int tx, ty;
+  nt_title = title;
+  nt_line = line;
+  anim_transition(ANIM_FADE, ANIM_BOTH);
+  top_home(title, 0);
+  screen_present_top();
+  paint_notice();
+  screen_present_bottom();
+  touch_arm();
+  for (;;) {
+    u32 k = get_keys_down();
+    if ((k & (BUTTON_A | BUTTON_B)) || (tapped(&tx, &ty) && ty >= BB_Y - 4)) {
+      flash(paint_notice, 0);
+      break;
+    }
+    ui_idle();
+  }
+  settle();
+}
+
+/* Options: the catalogue again from aShop. 0 when aShop has to close, the
+ * console having been unlinked. */
+static int refresh(void) {
+  int res;
+  anim_transition(ANIM_FADE, ANIM_BOTH);
+  res = sync();
+  if (res == SYNC_UNLINKED) {
+    notice(L(STR_AC_REVOKED), L(STR_AC_REVOKED2));
+    return 0;
+  }
+  if (res == SYNC_NONE)
+    notice(L(STR_ST_NO_REACH), why);
+  records_load();
+  states_update();
+  status_update();
+  art_all();
+  m_sel = first_section();
+  anim_jump(&m_scroll, m_sel * TILE_STEP);
+  anim_transition(ANIM_FADE, ANIM_BOTH);
+  draw_main();
+  return 1;
+}
+
+/* 0 when aShop has to close. */
+static int main_options(void) {
   int pick;
   flash(paint_main, 2);
   pick = options_menu();
   if (pick == 0) {
-    records_load();
-    states_update();
-    status_update();
-    bar_draw(0);
-    paint_main();
+    if (!refresh())
+      return 0;
     updates_list();
   } else if (pick == 1) {
-    store_load();
-    m_sel = first_section();
-    anim_jump(&m_scroll, m_sel * TILE_STEP);
-    paint_main();
+    if (!refresh())
+      return 0;
     message(L(STR_ST_RELOADED),
-            L(cat_on_card ? STR_ST_FROM_SD : STR_ST_BUILTIN));
+            L(cat_from == CAT_SERVER ? STR_ST_FROM_SERVER : STR_ST_FROM_CARD));
   } else if (pick == 2) {
     about_build();
     page_screen(ITEM_ABOUT, 1);
   }
+  return 1;
 }
 
 static void main_screen(void) {
@@ -2169,6 +2371,11 @@ static void main_screen(void) {
   anim_jump(&m_scroll, m_sel * TILE_STEP);
   m_title_t0 = 0;
   draw_main();
+  if (cat_from == CAT_CARD) {
+    message(L(STR_ST_NO_REACH), L(STR_ST_SAVED));
+    paint_main();
+    screen_present_bottom();
+  }
   drawn = anim_px(&m_scroll);
   drawn_sel = m_sel;
   touch_arm();
@@ -2241,8 +2448,8 @@ static void main_screen(void) {
       } else if (act == 0) {
         flash(paint_main, 0);
         search_screen();
-      } else if (act == 2) {
-        main_options();
+      } else if (act == 2 && !main_options()) {
+        break;
       }
       draw_main();
       touch_arm();
@@ -2265,12 +2472,42 @@ static void main_screen(void) {
   settle();
 }
 
-int store_screen(void) {
+int store_screen(const char *owner) {
+  int res;
   installs = 0;
+  cat_from = CAT_NONE;
+  nsecs = napps = nnews = 0;
+  status_update();
+  account_load();
+  /* The bag first, for the screens before the catalogue. Account screens
+   * mount the card themselves, so it is not left mounted for them. */
   mounted = f_mount(&fs, "", 1) == FR_OK;
-  anim_transition(ANIM_PUSH, ANIM_BOTH);
-  store_load();
-  main_screen();
+  arena_at = (u8 *)STORE_ARENA_ADDR;
+  bag = art_load("bag.png", BAG_W, BAG_H, 0);
+  if (!account_linked()) {
+    f_mount(NULL, "", 0);
+    mounted = 0;
+    if (!need_account(owner))
+      return 0;
+    mounted = f_mount(&fs, "", 1) == FR_OK;
+  } else {
+    anim_transition(ANIM_PUSH, ANIM_BOTH);
+  }
+  bar_draw(0);
+  res = sync();
+  if (res == SYNC_OK) {
+    records_load();
+    states_update();
+    status_update();
+    art_all();
+    anim_transition(ANIM_FADE, ANIM_BOTH);
+    main_screen();
+  } else if (res == SYNC_UNLINKED) {
+    notice(L(STR_AC_REVOKED), L(STR_AC_REVOKED2));
+  } else {
+    notice(L(STR_ST_NO_REACH), why);
+  }
+  wifi_direct_off();
   if (mounted)
     f_mount(NULL, "", 0);
   mounted = 0;

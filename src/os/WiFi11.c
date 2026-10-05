@@ -1523,8 +1523,8 @@ static void wifi_pump(WifiShared *w, uint32_t ms, volatile int *stop) {
  * data to the firmware: the data prefix (802.3 data, priority 0), then the
  * frame as 802.3 with an LLC/SNAP header carrying the type. */
 static int wifi_data_send(WifiShared *w, const uint8_t *f, uint32_t len) {
-  static uint8_t b[2u + NET_FRAME_MAX + 8u];
-  if (len < 14u || len > NET_FRAME_MAX || g_fw_asserted)
+  static uint8_t b[2u + NET_TX_MAX + 8u];
+  if (len < 14u || len > NET_TX_MAX || g_fw_asserted)
     return -1;
   if (!w->htc_credit) {
     return -1;
@@ -2526,6 +2526,122 @@ static void wifi_op_ping(WifiShared *w, WifiNetIo *io, uint32_t ms) {
   }
 }
 
+/* Whether the connection is over: the reply in (or the server closed), the
+ * server reset it, or the reply filled the buffer. Sets io->status. */
+static int http_over(NetState *n, WifiNetIo *io) {
+  if (n->tcp_state == NET_TCP_RESET) {
+    io->status = WIFI_NETS_REFUSED;
+    return 1;
+  }
+  if (n->tcp_state != NET_TCP_OPEN)
+    return 0;
+  if (n->tcp_fin || net_http_done(n->tcp_rx, n->tcp_rx_len)) {
+    io->status = WIFI_NETS_OK;
+    io->stage = WIFI_HTTP_DONE;
+    return 1;
+  }
+  if (n->tcp_rx_len >= n->tcp_rx_cap) {
+    io->status = WIFI_NETS_TOOBIG;
+    return 1;
+  }
+  return 0;
+}
+
+/* The request goes out in segments as the server's window allows. Unanswered
+ * for the retransmission timeout (1 s, doubling to 4 s), everything from the
+ * first unacknowledged byte goes again. Once the reply is in, a FIN ends the
+ * connection, and the server's own FIN is waited for briefly. */
+static void wifi_op_http(WifiShared *w, WifiNetIo *io, uint32_t ms) {
+  static uint8_t f[NET_TX_MAX];
+  NetState *n = &g_net;
+  const uint8_t *req = (const uint8_t *)WIFI_HTTP_REQ;
+  uint32_t len = io->req_len, t0 = wifi_now(), rto = 1000000u, base, last, una;
+  uint8_t mac[6];
+  io->resp_len = 0;
+  io->stage = 0;
+  io->resent = 0;
+  if (!len || len > WIFI_HTTP_REQ_MAX || !io->port || io->port > 0xFFFFu) {
+    io->status = WIFI_NETS_TOOBIG;
+    return;
+  }
+  if (!wifi_mac_for(w, io->ip, mac, ms)) {
+    io->status = WIFI_NETS_NOHOST;
+    return;
+  }
+  uint32_t r = wifi_now() ^ w->wmi_mac0;
+  net_tcp_open(n, io->ip, (uint16_t)(0xC000u | ((r >> 3) & 0x3FFFu)),
+               (uint16_t)io->port, r * 2654435761u, (uint8_t *)WIFI_HTTP_RESP,
+               WIFI_HTTP_RESP_MAX);
+  base = n->tcp_iss + 1u;
+  una = n->snd_una;
+  g_net_want = NET_BIT(NET_RX_TCP);
+  io->stage = WIFI_HTTP_CONNECT;
+  io->status = WIFI_NETS_TIMEOUT;
+  wifi_data_send(w, f, net_tcp_seg(n, f, mac, NET_TCP_SYN, n->tcp_iss, 0, 0));
+  last = wifi_now();
+
+  while (g_link > 0 && !g_fw_asserted && wifi_now() - t0 < ms * 1000u &&
+         !http_over(n, io)) {
+    if (n->snd_una != una) {
+      una = n->snd_una;
+      rto = 1000000u;
+      last = wifi_now();
+    }
+    if (n->snd_una != n->snd_nxt && wifi_now() - last >= rto) {
+      io->resent++;
+      rto = rto < 4000000u ? rto * 2u : rto;
+      last = wifi_now();
+      if (n->tcp_state == NET_TCP_SYN_SENT)
+        wifi_data_send(w, f,
+                       net_tcp_seg(n, f, mac, NET_TCP_SYN, n->tcp_iss, 0, 0));
+      else
+        n->snd_nxt = n->snd_una;
+    }
+    while (n->tcp_state == NET_TCP_OPEN && n->snd_nxt - base < len) {
+      uint32_t off = n->snd_nxt - base, flight = n->snd_nxt - n->snd_una;
+      uint32_t seg = len - off;
+      if (flight >= n->tcp_wnd)
+        break;
+      if (seg > n->tcp_mss)
+        seg = n->tcp_mss;
+      if (seg > NET_TCP_SEG)
+        seg = NET_TCP_SEG;
+      if (seg > n->tcp_wnd - flight)
+        seg = n->tcp_wnd - flight;
+      uint32_t fl = NET_TCP_ACK | (off + seg == len ? NET_TCP_PSH : 0u);
+      if (wifi_data_send(w, f, net_tcp_seg(n, f, mac, fl, n->snd_nxt,
+                                           req + off, seg)) != 0)
+        break;
+      n->snd_nxt += seg;
+      last = wifi_now();
+    }
+    if (n->tcp_state == NET_TCP_OPEN)
+      io->stage = n->snd_una - base >= len ? WIFI_HTTP_WAIT : WIFI_HTTP_SEND;
+    g_net_hit = 0;
+    wifi_pump(w, 100, &g_net_hit);
+  }
+
+  if (n->tcp_state == NET_TCP_OPEN && io->status == WIFI_NETS_OK) {
+    wifi_data_send(w, f, net_tcp_seg(n, f, mac, NET_TCP_FIN | NET_TCP_ACK,
+                                     n->snd_nxt, 0, 0));
+    n->snd_nxt++;
+    uint32_t t1 = wifi_now();
+    while (g_link > 0 && !(n->tcp_fin && n->snd_una == n->snd_nxt) &&
+           wifi_now() - t1 < 500000u) {
+      g_net_hit = 0;
+      wifi_pump(w, 50, &g_net_hit);
+    }
+  } else if (n->tcp_state == NET_TCP_OPEN) {
+    wifi_data_send(w, f, net_tcp_seg(n, f, mac, NET_TCP_RST | NET_TCP_ACK,
+                                     n->snd_nxt, 0, 0));
+  }
+  g_net_want = 0;
+  n->tcp_state = NET_TCP_CLOSED;
+  io->resp_len = n->tcp_rx_len;
+  if (g_link <= 0 && io->status == WIFI_NETS_TIMEOUT)
+    io->status = WIFI_NETS_NOLINK;
+}
+
 /* One AUDIO_CMD_WIFI_NET operation on the session a WIFI_OPT_STAY join left.
  * Nothing reads the chip between commands, so what queued up meanwhile is
  * taken first: a DISCONNECT there ends the session. */
@@ -2533,8 +2649,8 @@ static void wifi_net_op(uint32_t op) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
   WifiNetIo *io = (WifiNetIo *)WIFI_NET_ADDR;
   wifi_timer_start();
-  uint32_t ms = io->timeout_ms;
-  ms = ms < 100u ? 2000u : ms > 10000u ? 10000u : ms;
+  uint32_t ms = io->timeout_ms, cap = op == WIFI_NETOP_HTTP ? 20000u : 10000u;
+  ms = ms < 100u ? 2000u : ms > cap ? cap : ms;
   io->status = WIFI_NETS_NOLINK;
   io->rtt_us = 0;
   io->ttl = 0;
@@ -2560,6 +2676,8 @@ static void wifi_net_op(uint32_t op) {
       wifi_op_dns(w, io, ms);
     } else if (op == WIFI_NETOP_PING) {
       wifi_op_ping(w, io, ms);
+    } else if (op == WIFI_NETOP_HTTP) {
+      wifi_op_http(w, io, ms);
     } else if (op == WIFI_NETOP_LEAVE) {
       uint8_t c[2] = {0, 0};
       g_disc = 0;

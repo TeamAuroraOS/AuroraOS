@@ -45,5 +45,8 @@ int json_is(const Json *j, int t, const char *s);
 /* The string, escapes resolved and anything outside ASCII as '?', cut to fit
  * `max` bytes with its terminator. */
 void json_str(const Json *j, int t, char *out, u32 max);
+/* The same for text to show: line breaks kept, and letters up to U+00FF (what
+ * the UI fonts draw) as UTF-8. */
+void json_text(const Json *j, int t, char *out, u32 max);
 
 #endif

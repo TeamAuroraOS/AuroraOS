@@ -258,3 +258,66 @@ void json_str(const Json *j, int t, char *out, u32 max) {
     }
   out[o] = 0;
 }
+
+static int hex4(const char *s) {
+  int v = 0;
+  for (int i = 0; i < 4; i++) {
+    char c = s[i];
+    int d = c >= '0' && c <= '9'   ? c - '0'
+            : c >= 'a' && c <= 'f' ? c - 'a' + 10
+            : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                   : -1;
+    if (d < 0)
+      return -1;
+    v = v * 16 + d;
+  }
+  return v;
+}
+
+void json_text(const Json *j, int t, char *out, u32 max) {
+  u32 a, o = 0;
+  if (!max)
+    return;
+  if (t >= 0 && j->tok[t].type == JSON_STR) {
+    u32 e = j->tok[t].end;
+    for (a = j->tok[t].start; a < e && o + 1 < max; a++) {
+      u32 c = (unsigned char)j->src[a];
+      if (c == '\\' && a + 1 < e) {
+        c = (unsigned char)j->src[++a];
+        if (c == 'n')
+          c = '\n';
+        else if (c == 't')
+          c = ' ';
+        else if (c == 'r' || c == 'b' || c == 'f')
+          continue;
+        else if (c == 'u') {
+          int v = a + 4 < e ? hex4(j->src + a + 1) : -1;
+          a += 4;
+          /* the second half of a surrogate pair adds nothing to the '?' */
+          if (v >= 0xDC00 && v < 0xE000)
+            continue;
+          c = v == '\n' ? '\n' : v >= 0x20 && v <= 0xFF && v != 0x7F ? (u32)v
+                                                                     : '?';
+        }
+      } else if (c >= 0x80) {
+        u32 lead = c;
+        c = '?';
+        if ((lead == 0xC2 || lead == 0xC3) && a + 1 < e &&
+            ((unsigned char)j->src[a + 1] & 0xC0) == 0x80)
+          c = ((lead & 0x1Fu) << 6) | ((unsigned char)j->src[++a] & 0x3Fu);
+        else
+          while (a + 1 < e && ((unsigned char)j->src[a + 1] & 0xC0) == 0x80)
+            a++;
+      }
+      if (c >= 0x80) {
+        if (o + 2 >= max)
+          break;
+        out[o++] = (char)(0xC0u | (c >> 6));
+        out[o++] = (char)(0x80u | (c & 0x3Fu));
+      } else {
+        out[o++] = (char)c;
+      }
+    }
+  }
+  out[o] = 0;
+}

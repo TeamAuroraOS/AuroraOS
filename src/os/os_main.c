@@ -1,4 +1,5 @@
 #include "aurora.h"
+#include "account.h"
 #include "assets.h"
 #include "ui.h"
 #include "anim.h"
@@ -149,6 +150,7 @@ static void settings_header(u32 asset, const unsigned char *icon,
 
 typedef enum {
   SET_WIFI = 0,
+  SET_ACCOUNT,
   SET_ACCENT,
   SET_CLOCK,
   SET_BRIGHTNESS,
@@ -184,6 +186,15 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
       *icon = icon_wifi_bits; *name = L(STR_WIFI); *value = L(STR_OFF);
       if (wifi_saved_ssid[0]) {
         ui_fit(ssid, sizeof(ssid), &ui_font, wifi_saved_ssid, ROW_W - 150);
+        *value = ssid;
+      }
+      break;
+    case SET_ACCOUNT:
+      *asset = ASSET_ICON_USER_32;
+      *icon = 0; *name = L(STR_AC_TITLE); *value = L(STR_AC_NOT_LINKED);
+      if (account_linked()) {
+        ui_fit(ssid, sizeof(ssid), &ui_font,
+               account_name()[0] ? account_name() : "?", ROW_W - 190);
         *value = ssid;
       }
       break;
@@ -2674,8 +2685,11 @@ static void touch_cal_screen(void) {
   }
 }
 
+static void account_open(void) { account_screen(g_cfg.name); }
+
 static void settings_open(void) {
   wifi_saved_load();
+  account_load();
   settings_header(ASSET_ICON_SETTINGS_64, icon_settings_bits,
                   L(STR_SETTINGS), COLOR_WHITE);
   int sel = 0;
@@ -2713,6 +2727,7 @@ static void settings_open(void) {
       void (*sub)(void) = 0;
       switch (sel) {
         case SET_WIFI:     sub = wifi_screen; break;
+        case SET_ACCOUNT:  sub = account_open; break;
         case SET_ACCENT:   sub = accent_screen; break;
         case SET_CLOCK:    sub = clock_screen; break;
         case SET_TOUCHCAL: sub = touch_cal_screen; break;
@@ -3284,7 +3299,7 @@ static void home_open(const HomeApp *app) {
     files_screen(os_launch_app);
   else if (app->action == ACT_CUBE)
     open_screen(model_screen);
-  else if (app->action == ACT_STORE && store_screen() > 0) {
+  else if (app->action == ACT_STORE && store_screen(g_cfg.name) > 0) {
     scan_apps();
     build_home();
     home_reload(home_apps, home_count);
