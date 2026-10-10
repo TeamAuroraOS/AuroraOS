@@ -1,0 +1,3 @@
+# Built apps; the repository's own rules already cover *.bin, *.elf, build/.
+*.3dsx
+*.smdh
