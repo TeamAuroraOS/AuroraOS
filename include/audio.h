@@ -14,11 +14,15 @@
 
 /* audio_boot() replaces a running core whose version differs, so bump this on
  * any core change. */
-#define AUDIO_CORE_VERSION 114
+#define AUDIO_CORE_VERSION 116
 
 /* The first core that understands AUDIO_CMD_PARK. An older one can only be
  * replaced by powering the console off. */
 #define AUDIO_PARK_VERSION 83
+
+/* The first core that runs AUDIO_CMD_RUN11, and takes AUDIO_CMD_N3DS mode 0
+ * (back to 268 MHz). */
+#define AUDIO_RUN11_VERSION 116
 
 /* AUDIO_CMD_PARK copies the mailbox wait here and runs it, clear of the core
  * image so the ARM9 can load a new core over the old one. */
@@ -53,6 +57,8 @@ enum {
   AUDIO_CMD_PARK = 11,       /* silence, then wait on the mailbox for a core  */
   AUDIO_CMD_WIFI_NET = 12,   /* arg0 = WIFI_NETOP_*, on the joined network;   */
                              /* in and out through WifiNetIo (wifi.h)         */
+  AUDIO_CMD_RUN11 = 13,      /* arg0 = ARM11 code in FCRAM, called with arg1, */
+                             /* caches and VFP on meanwhile (Run11.c)         */
 };
 
 enum {

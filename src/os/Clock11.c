@@ -173,8 +173,10 @@ void clock11_set(AudioCtrl *ct, uint32_t mode) {
   ct->n3ds_before = clk;
   ct->n3ds_after = clk;
 
+  /* Mode 0 is the 268 MHz every model starts in. */
   if (!((mode == 3u && (info & SOCINFO_LGR1)) ||
-        ((mode == 1u || mode == 5u) && (info & SOCINFO_LGR2)))) {
+        ((mode == 1u || mode == 5u) && (info & SOCINFO_LGR2)) ||
+        (mode == 0u && (info & (SOCINFO_LGR1 | SOCINFO_LGR2))))) {
     ct->n3ds_status = AUDIO_N3DS_UNSUPPORTED;
     return;
   }
@@ -191,10 +193,12 @@ void clock11_set(AudioCtrl *ct, uint32_t mode) {
   }
 
   cnt = MMIO16(CFG11_MPCORE_CNT);
-  MMIO16(CFG11_MPCORE_CNT) = (info & SOCINFO_LGR2)
-                                 ? (MPCORE_CNT_L2C | MPCORE_CNT_QTM)
-                                 : MPCORE_CNT_QTM;
-  spin(2000); /* both references wait briefly after this write */
+  if (mode) {
+    MMIO16(CFG11_MPCORE_CNT) = (info & SOCINFO_LGR2)
+                                   ? (MPCORE_CNT_L2C | MPCORE_CNT_QTM)
+                                   : MPCORE_CNT_QTM;
+    spin(2000); /* both references wait briefly after this write */
+  }
 
   MMIO32(TIMER_LOAD) = SLICE_TICKS;
   MMIO32(TIMER_CNT) = TIMER_IRQ | TIMER_RELOAD | TIMER_EN;
@@ -222,7 +226,8 @@ void clock11_set(AudioCtrl *ct, uint32_t mode) {
   clk = MMIO32(CFG11_MPCORE_CLKCNT);
 
   if (flag || CLKCNT_CUR(clk) == mode) {
-    MMIO8(CFG11_GPU_N3DS_CNT) = GPU_N3DS_BITS;
+    if (mode)
+      MMIO8(CFG11_GPU_N3DS_CNT) = GPU_N3DS_BITS;
     status = AUDIO_N3DS_APPLIED;
   } else {
     /* Put back the request that was there before, which is the mode in

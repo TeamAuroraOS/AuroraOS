@@ -32,6 +32,15 @@ void rtc_format_date(const RtcTime *t, char *out);
 
 /* Battery charge as a percentage (0-100), or -1 if the MCU did not answer. */
 int battery_percent(void);
+/* The same in tenths of a percent (0-1000), with the MCU's fraction, or -1. */
+int battery_tenths(void);
+
+/* The battery's temperature in degrees C, the only temperature the MCU
+ * reports (there is no CPU sensor), or BATTERY_TEMP_UNKNOWN. */
+#define BATTERY_TEMP_UNKNOWN (-1000)
+int battery_temperature(void);
+/* System voltage, measured on the load side, in millivolts, or -1. */
+int battery_millivolts(void);
 
 /* 1 while the charger is supplying power, 0 when it is not, -1 on failure. */
 int battery_charging(void);

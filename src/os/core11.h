@@ -121,4 +121,8 @@ void stereo11_off(void);
  * ct->n3ds_before, n3ds_after and n3ds_status. */
 void clock11_set(AudioCtrl *ct, uint32_t mode);
 
+/* AUDIO_CMD_RUN11: calls `entry` (FCRAM, ARM code) with `arg`, with the MMU,
+ * the L1 caches, branch prediction and the VFP on until it returns. */
+void run11(AudioCtrl *ct, uint32_t entry, uint32_t arg);
+
 #endif

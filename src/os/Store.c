@@ -1,5 +1,6 @@
 /* aShop: a carousel of sections on the bottom screen, lists of apps and news,
- * app pages, and downloads into SD:/Aurora/Apps. It needs a linked Aurora
+ * app pages, and downloads into SD:/Aurora/Apps (apps in C into
+ * SD:/Aurora/Apps/C, labelled "C SDK"). It needs a linked Aurora
  * account: the catalogue, the icons and the apps come from the account
  * server's 3ds host with the console's token, in byte ranges that fit the
  * Wi-Fi core's reply buffer. The catalogue and icons are kept on the card,
@@ -37,6 +38,7 @@
 #define ST_ICONS   ST_DIR "/icons"
 #define ST_RECORDS ST_DIR "/installed.txt"
 #define ST_APPS    "0:/Aurora/Apps"
+#define ST_APPS_C  ST_APPS "/C"
 #define ST_PATH    160
 
 #define MAX_SECS  8
@@ -50,10 +52,13 @@
 #define VER_MAX   16
 #define LINES_MAX 200 /* of a page's text, wrapped */
 
-/* Each reply has to fit the core's 8 KB buffer with Cloudflare's headers
- * (about 1 KB), so bodies come 6 KB at a time. */
-#define PIECE     6144u
-#define REPLY_MAX 8192u
+/* Bodies come in pieces sized from the speed the last one came at, to take
+ * about PIECE_MS each: a slow link still answers within Http.c's timeout, and
+ * a fast one spends its time on data rather than on connections. A reply
+ * stays in the core's buffer (WIFI_HTTP_RESP_MAX, headers included). */
+#define PIECE_MIN (16u * 1024u)
+#define PIECE_MAX (512u * 1024u)
+#define PIECE_MS  3000u
 #define ICON_MAX  (16 * 1024)
 #define TRIES     3 /* for one piece, before a download gives up */
 
@@ -99,6 +104,7 @@ typedef struct {
   const char *id, *name, *dev, *version, *file, *icon, *in, *text;
   const char *sha; /* SHA-256 of the file, 64 hex digits */
   u32 size;
+  int c; /* written in C (an AURC file): goes in Apps/C */
   int state;
   u8 *icon_lg, *icon_sm;
 } App;
@@ -360,6 +366,7 @@ static int parse(u32 len) {
     x->text = take(o, "text", 1);
     x->sha = take(o, "sha256", 0);
     x->size = (u32)json_int(&cj, json_get(&cj, o, "size"), 0);
+    x->c = same_ci(take(o, "lang", 0), "c");
     x->state = A_NEW;
     x->icon_lg = x->icon_sm = 0;
     if (!hex_name(x->icon, 16))
@@ -502,24 +509,32 @@ static void record_set(const char *file, const char *ver) {
   records_save();
 }
 
+static const char *app_dir(const App *a) { return a->c ? ST_APPS_C : ST_APPS; }
+
+/* 1 when the app is in its folder, 2 when it is only in the other one (its
+ * new version is in the other language), else 0. */
 static int app_on_card(const App *a) {
   static FILINFO fno;
   char path[ST_PATH];
   if (!mounted)
     return 0;
-  path2(path, ST_APPS, a->file);
-  return f_stat(path, &fno) == FR_OK;
+  path2(path, app_dir(a), a->file);
+  if (f_stat(path, &fno) == FR_OK)
+    return 1;
+  path2(path, a->c ? ST_APPS : ST_APPS_C, a->file);
+  return f_stat(path, &fno) == FR_OK ? 2 : 0;
 }
 
 /* An app on the card that aShop did not record, or recorded at another
- * version, has an update. */
+ * version, or that is in the other folder, has an update. */
 static void states_update(void) {
   for (int i = 0; i < napps; i++) {
     App *a = &apps[i];
     const char *rec = record_of(a->file);
-    if (!app_on_card(a))
+    int on = app_on_card(a);
+    if (!on)
       a->state = A_NEW;
-    else if (!a->version[0] || (rec && same_ci(rec, a->version)))
+    else if (on == 1 && (!a->version[0] || (rec && same_ci(rec, a->version))))
       a->state = A_INSTALLED;
     else
       a->state = A_UPDATE;
@@ -1094,9 +1109,18 @@ static void page_top(int it, int scroll) {
                 COLOR_HM_TEXT2, COLOR_BLACK, &ui_small);
     sw += 12;
   }
-  ui_text_fit(fb, PG_X + 15, y0 + (PG_CARD_H - ui_th(&ui_bold)) / 2, TSH,
-              item_title(it), PG_W - 30 - sw, COLOR_WHITE, COLOR_BLACK,
-              &ui_bold);
+  if (!IS_NEWS(it) && apps[it].c) {
+    int th = ui_th(&ui_bold);
+    int ty = y0 + (PG_CARD_H - th - ui_th(&ui_small)) / 2;
+    ui_text_fit(fb, PG_X + 15, ty, TSH, item_title(it), PG_W - 30 - sw,
+                COLOR_WHITE, COLOR_BLACK, &ui_bold);
+    ui_text(fb, PG_X + 15, ty + th, TSH, "C SDK", c_ring, COLOR_BLACK,
+            &ui_small);
+  } else {
+    ui_text_fit(fb, PG_X + 15, y0 + (PG_CARD_H - ui_th(&ui_bold)) / 2, TSH,
+                item_title(it), PG_W - 30 - sw, COLOR_WHITE, COLOR_BLACK,
+                &ui_bold);
+  }
 
   for (int i = 0; i < nlines; i++) {
     int y = PG_TEXT_Y - scroll + i * lh;
@@ -1330,13 +1354,19 @@ static int page_btns(int it, Btn *b) {
 
 static void paint_page(void) {
   volatile u8 *fb = VRAM_BOT_A;
-  int it = pg_item;
+  int it = pg_item, ty = 24, sy = 50;
   draw_filled_rect(fb, 0, 0, BW, BSH, BSH, c_bg);
   draw_filled_round_rect(fb, 8, 8, BW - 16, 196, 12, BSH, c_card);
   item_icon(fb, 22, 22, 48, BSH, it);
-  ui_text_fit(fb, 82, 24, BSH, item_title(it), BW - 104, COLOR_WHITE, c_card,
+  if (!IS_NEWS(it) && apps[it].c) {
+    ty = 14;
+    ui_text(fb, 82, ty + ui_th(&ui_title), BSH, "C SDK", c_ring, c_card,
+            &ui_small);
+    sy = ty + ui_th(&ui_title) + ui_th(&ui_small) + 2;
+  }
+  ui_text_fit(fb, 82, ty, BSH, item_title(it), BW - 104, COLOR_WHITE, c_card,
               &ui_title);
-  ui_text_fit(fb, 82, 50, BSH, item_side(it), BW - 104, COLOR_HM_TEXT2,
+  ui_text_fit(fb, 82, sy, BSH, item_side(it), BW - 104, COLOR_HM_TEXT2,
               c_card, &ui_font);
   draw_filled_rect(fb, 22, 84, BW - 44, 1, BSH, c_line);
 
@@ -1371,13 +1401,16 @@ static void paint_page(void) {
   }
 }
 
-static char reply[REPLY_MAX + 1];
 static char why[64];
+static u32 piece = PIECE_MIN;
 
-/* bytes [from, from + n) of `path`, with the console's token. */
+/* bytes [from, from + n) of `path`, with the console's token. The body stays
+ * in the core's buffer until the next request. */
 static int get_piece(const char *path, u32 from, u32 n, const char *if_none,
                      HttpReply *r, void (*tick)(u32 ms)) {
   char extra[96], *p = put_str(extra, "Range: bytes=");
+  u32 t0 = timer_ticks(), us;
+  int st;
   p = put_u32(p, from);
   *p++ = '-';
   p = put_u32(p, from + n - 1u);
@@ -1387,8 +1420,17 @@ static int get_piece(const char *path, u32 from, u32 n, const char *if_none,
     p = put_str(p, if_none);
     put_str(p, "\r\n");
   }
-  return http_call("GET", path, account_token(), extra, 0, reply, REPLY_MAX, r,
-                   tick);
+  st = http_call("GET", path, account_token(), extra, 0, 0, 0, r, tick);
+  us = timer_us_since(t0);
+  if (!st) {
+    piece = piece / 2u < PIECE_MIN ? PIECE_MIN : piece / 2u;
+  } else if (r->body && r->len && us) {
+    u32 next = (u32)((u64)r->len * PIECE_MS * 1000u / us) & ~0xFFFu;
+    if (next > piece * 4u)
+      next = piece * 4u;
+    piece = next < PIECE_MIN ? PIECE_MIN : next > PIECE_MAX ? PIECE_MAX : next;
+  }
+  return st;
 }
 
 /* The server no longer takes this console's token: it was unlinked on the
@@ -1422,6 +1464,7 @@ static struct {
   u32 done, total, phase, t0;
   const char *title, *line1, *line2;
   char dst[ST_PATH], tmp[ST_PATH + 6], path[96];
+  char old[ST_PATH]; /* the copy in the other folder, removed once installed */
   Sha256 sha;
 } dl;
 
@@ -1483,8 +1526,13 @@ static void dl_start(App *a) {
   }
   put_str(put_str(put_str(dl.path, "/v1/store/files/"), a->sha), ".bin");
   f_mkdir(ST_APPS);
-  path2(dl.dst, ST_APPS, a->file);
+  if (a->c)
+    f_mkdir(ST_APPS_C);
+  path2(dl.dst, app_dir(a), a->file);
   put_str(put_str(dl.tmp, dl.dst), ".part");
+  dl.old[0] = 0;
+  if (app_on_card(a) == 2)
+    path2(dl.old, a->c ? ST_APPS : ST_APPS_C, a->file);
   if (f_open(&dl_file, dl.tmp, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) {
     dl_fail(L(STR_FD_E_WRITE), 0);
     return;
@@ -1515,6 +1563,8 @@ static void dl_finish(void) {
     dl_fail(L(STR_ST_E_INSTALL), 0);
     return;
   }
+  if (dl.old[0])
+    f_unlink(dl.old);
   dl.state = DL_DONE;
   installs++;
   dl.title = L(STR_ST_INSTALLED);
@@ -1527,11 +1577,11 @@ static void dl_finish(void) {
 
 static void dl_tick(u32 ms);
 
-/* One piece: a request and its reply, about a second and a half. A piece
- * that does not come is asked for again, TRIES times. */
+/* One piece: a request and its reply, about PIECE_MS. A piece that does not
+ * come is asked for again, TRIES times. */
 static void dl_step(void) {
   HttpReply r;
-  u32 n = dl.total - dl.done < PIECE ? dl.total - dl.done : PIECE;
+  u32 n = dl.total - dl.done < piece ? dl.total - dl.done : piece;
   UINT bw;
   int st;
   if (!http_online()) {
@@ -1656,6 +1706,14 @@ static void paint_dl(void) {
     draw_filled_round_rect(fb, 40, 140, 240, 6, 3, BSH, c_track);
     if (fill >= 6)
       draw_filled_round_rect(fb, 40, 140, fill, 6, 3, BSH, c_ring);
+    u32 us = timer_us_since(dl.t0);
+    if (dl.done && us) {
+      char speed[16];
+      fmt_size(speed, (u32)((u64)dl.done * 1000000u / us));
+      put_str(speed + strlen(speed), "/s");
+      ui_text_mid(fb, BW / 2, 158, BSH, speed, COLOR_HM_TEXT2, c_card,
+                  &ui_font);
+    }
   } else {
     ui_text_mid_fit(fb, BW / 2, 80, BSH, dl.line1, BW - 48, COLOR_HM_TEXT2,
                     c_card, &ui_font);
@@ -2104,7 +2162,7 @@ static int fetch(const char *path, char *dst, u32 max, u32 *len,
   u32 got = 0;
   int tries = 0;
   for (;;) {
-    int st = get_piece(path, got, PIECE, got ? 0 : have, r, spin), bad;
+    int st = get_piece(path, got, piece, got ? 0 : have, r, spin), bad;
     if (st == 304 && !got)
       return GOT_SAME;
     if (st == 401 || st == 403)
@@ -2198,8 +2256,9 @@ static int sync(void) {
   r.status = 0;
   busy(L(STR_ST_CONNECTING));
   if (online(spin)) {
-    got = fetch("/v1/store/catalog", cat, CAT_MAX, &len, card ? cat_tag : 0,
-                tag, &r);
+    /* c=1: this OS runs apps in C, which older ones are not offered */
+    got = fetch("/v1/store/catalog?c=1", cat, CAT_MAX, &len,
+                card ? cat_tag : 0, tag, &r);
     if (got == GOT_FAIL)
       http_why(&r, why);
   }

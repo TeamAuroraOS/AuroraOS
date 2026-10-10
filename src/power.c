@@ -1,9 +1,11 @@
 /* MCU (I2C device 3, address 0x4A): RTC at 0x30..0x36 as packed BCD, battery at
- * 0x0B and 0x0F. */
+ * 0x0A..0x0D and 0x0F. */
 #include "power.h"
 #include "i2c.h"
 
-#define MCU_REG_BATTERY 0x0Bu /* charge percentage, 0-100                    */
+#define MCU_REG_TEMP    0x0Au /* battery temperature, degrees C              */
+#define MCU_REG_BATTERY 0x0Bu /* charge percentage, 0-100, then its fraction */
+#define MCU_REG_VOLTAGE 0x0Du /* system voltage, x 5/256 V                   */
 #define MCU_REG_STATUS  0x0Fu /* power / charger flags                       */
 #define MCU_REG_RTC     0x30u /* 7 BCD bytes: sec,min,hour,wday,day,mon,year */
 
@@ -129,6 +131,32 @@ int battery_percent(void) {
   if (!I2C_readRegBuf(I2C_DEV_MCU, MCU_REG_BATTERY, &v, 1))
     return -1;
   return v > 100 ? 100 : (int)v;
+}
+
+int battery_tenths(void) {
+  uint8_t v[2];
+
+  if (!I2C_readRegBuf(I2C_DEV_MCU, MCU_REG_BATTERY, v, 2))
+    return -1;
+  if (v[0] >= 100)
+    return 1000;
+  return v[0] * 10 + v[1] * 10 / 256;
+}
+
+int battery_temperature(void) {
+  uint8_t v;
+
+  if (!I2C_readRegBuf(I2C_DEV_MCU, MCU_REG_TEMP, &v, 1))
+    return BATTERY_TEMP_UNKNOWN;
+  return (int8_t)v;
+}
+
+int battery_millivolts(void) {
+  uint8_t v;
+
+  if (!I2C_readRegBuf(I2C_DEV_MCU, MCU_REG_VOLTAGE, &v, 1))
+    return -1;
+  return v * 5000 / 256;
 }
 
 int power_status_raw(void) {

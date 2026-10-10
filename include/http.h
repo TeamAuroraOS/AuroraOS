@@ -5,10 +5,10 @@
 
 /* HTTP/1.0 exchanges with the account server's console host (ACCOUNT_HOST,
  * account.h) over the joined Wi-Fi network: one WIFI_NETOP_HTTP each, so a
- * reply has to fit the core's 8 KB buffer, headers included. Larger bodies
- * are fetched in byte ranges. See docs/account.md and docs/store.md. */
+ * reply has to fit the core's buffer (WIFI_HTTP_RESP_MAX), headers included.
+ * Larger bodies are fetched in byte ranges. See docs/account.md and
+ * docs/store.md. */
 
-/* What the server answered. */
 typedef struct {
   u32 net;       /* WIFI_NETS_* */
   u32 stage;     /* WIFI_HTTP_* */
@@ -26,7 +26,8 @@ int http_online(void);
 
 /* One request: `method` `path` with the Authorization of `token` when it is
  * not 0, the `extra` header lines (each ending in \r\n) and a form body. The
- * reply goes into `buf` (`max` bytes and one more for the NUL). Looks the
+ * reply goes into `buf` (`max` bytes and one more for the NUL), or with `buf`
+ * 0 stays in the core's buffer until the next request. Looks the
  * host up first when needed. Returns the HTTP status, 0 when no reply came
  * (r->net says why). `tick` is called while the core works, with the screens
  * drawn directly (wifi_direct_on). */

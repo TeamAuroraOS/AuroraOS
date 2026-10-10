@@ -28,6 +28,11 @@ typedef struct {
 /* Call once at OS startup. */
 void crash_init(void);
 
+/* Set by a native app's runtime (sdk/runtime): polled through the power-off
+ * countdown, it does not return once the user asks to go back to the Home
+ * Menu, and the countdown then says HOME does that. The OS leaves it unset. */
+extern void (*g_crash_poll)(void);
+
 /* Never returns. */
 void crash_handle(CrashDump *d);
 

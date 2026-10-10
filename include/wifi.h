@@ -207,6 +207,13 @@ typedef struct {
   volatile uint32_t wpa_m1, wpa_m3, wpa_g1, wpa_bad_mic;
   volatile uint32_t wpa_variant;
   volatile uint32_t wpa_keys;
+  /* The bus in network operations (from core 115): the SDIO clock divider
+   * (CLKCTL bits 7:0; 0x20 is the 523 kHz it starts at, 0x01 is 16.8 MHz),
+   * 1 while frames are read a block per CMD53 rather than a byte per CMD52,
+   * and the commands that failed since the core started. */
+  volatile uint32_t bus_div;
+  volatile uint32_t bus_rx53;
+  volatile uint32_t bus_errs;
 } WifiShared;
 
 /* How far joining got (WifiShared.conn_stage). */
@@ -283,12 +290,13 @@ enum {
   WIFI_HTTP_DONE,        /* the reply is in                               */
 };
 
-/* The request and the reply of WIFI_NETOP_HTTP, between WifiNetIo and
- * GpuShared. */
+/* The request of WIFI_NETOP_HTTP, between WifiNetIo and GpuShared, and its
+ * reply, between the core's stack top and AudioCtrl: aShop's downloads come
+ * in pieces of up to 512 KB. */
 #define WIFI_HTTP_REQ      0x233B9000u
 #define WIFI_HTTP_REQ_MAX  0x800u
-#define WIFI_HTTP_RESP     0x233B9800u
-#define WIFI_HTTP_RESP_MAX 0x2000u
+#define WIFI_HTTP_RESP     0x23200000u
+#define WIFI_HTTP_RESP_MAX 0xFF000u
 
 typedef struct {
   volatile uint32_t status;     /* WIFI_NETS_* */
@@ -371,9 +379,22 @@ void wifi_get(WifiShared *out); /* Invalidates the cache first. */
 int wifi_done(void);
 /* 1 while a WIFI_OPT_STAY join is up, as the core last said. */
 int wifi_online(void);
+
+/* On the SD card: the firmware Settings > Wi-Fi copies from NAND, and the
+ * network it saves ("ssid=" and "password=" lines). */
+#define WIFI_FW_DIR   "Aurora/wifi"
+#define WIFI_NET_FILE "Aurora/wifi/network.txt"
+
+/* WiFiJoin.c, which apps link too. */
+/* Stages the firmware blobs at WIFI_FW_ADDR from the mounted card; 1 when all
+ * four were read. */
+int wifi_fw_stage(uint32_t main_type);
 /* WifiReq for the next boot with WIFI_OPT_CONNECT; pass may be NULL. */
 void wifi_request(const char *ssid, const char *pass);
 void wifi_request_clear(void);
+/* Why a join of `ssid` did not end in a session, as one line. */
+void wifi_join_why(const WifiShared *w, const char *ssid, char *out,
+                   uint32_t size);
 
 /* While the core runs a Wi-Fi command it cannot present frames, so the
  * screens are drawn straight into the framebuffers on show. wifi_direct_off
@@ -397,7 +418,8 @@ uint32_t wifi_net(uint32_t op, uint32_t ip, uint32_t seq, const char *name,
                   void (*tick)(uint32_t ms));
 
 /* One HTTP exchange (WIFI_NETOP_HTTP) with ip:port: `req` goes out as it
- * is, and up to `max` bytes of the reply come back in `resp`, *got of them.
+ * is, and up to `max` bytes of the reply come back in `resp`, *got of them
+ * (with `resp` 0 they stay at WIFI_HTTP_RESP, until the next exchange).
  * timeout_ms bounds the whole exchange (at most 20 s). Returns WIFI_NETS_*;
  * *stage says how far it got. */
 uint32_t wifi_http(uint32_t ip, uint32_t port, const char *req,

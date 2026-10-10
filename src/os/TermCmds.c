@@ -3,6 +3,7 @@
 
 #include "term.h"
 #include "audio.h"
+#include "container.h"
 #include "files.h"
 #include "gpu.h"
 #include "image.h"
@@ -15,8 +16,9 @@
 #include "wifi.h"
 #include <string.h>
 
-#define APPS_DIR  "0:/Aurora/Apps"
-#define MUSIC_DIR "0:/Aurora/Music"
+#define APPS_DIR   "0:/Aurora/Apps"
+#define C_APPS_DIR "0:/" AURORA_C_APPS_DIR
+#define MUSIC_DIR  "0:/Aurora/Music"
 
 static char *t_num(char *p, u32 v) {
   char tmp[12];
@@ -897,13 +899,7 @@ static void info_file(const char *arg, const char *path, const FILINFO *fno) {
   }
   memset(hdr, 0, sizeof(hdr));
   got = info_read(&f, 0, hdr, sizeof(hdr));
-  magic = 0;
-  if (got >= 4 && hdr[0] == 'A' && hdr[1] == 'O' && hdr[2] == 'S' &&
-      hdr[3] == '1')
-    magic = 'A';
-  if (got >= 4 && hdr[0] == 'A' && hdr[1] == 'U' && hdr[2] == 'R' &&
-      hdr[3] == '1')
-    magic = 'U';
+  magic = got >= 4 ? aurora_magic_kind((const char *)hdr) : 0;
   firm = got >= 4 && !memcmp(hdr, "FIRM", 4);
   if (magic)
     kind = FKIND_AURORA;
@@ -913,7 +909,9 @@ static void info_file(const char *arg, const char *path, const FILINFO *fno) {
 
   switch (kind) {
     case FKIND_AURORA:
-      p = t_cpy(v, magic == 'U' ? "Aurora app (AUR1)" : "AuroraOS image (AOS1)");
+      p = t_cpy(v, magic == 'U'   ? "Aurora app (AUR1)"
+                   : magic == 'C' ? "Aurora app in C (AURC)"
+                                  : "AuroraOS image (AOS1)");
       break;
     case FKIND_IMAGE:
       p = t_cpy(v, (ext[0] | 32) == 'p'   ? "PNG image"
@@ -991,13 +989,16 @@ static void info_file(const char *arg, const char *path, const FILINFO *fno) {
     info_row("ARM11:", v, TC_TEXT);
     info_row("Icon:", icon ? "yes" : "no: the Home Menu draws a plain tile",
              TC_TEXT);
+    v[0] = '/';
+    if (magic == 'C' && aurora_c_data_dir(path, v + 1, sizeof(v) - 1))
+      info_row("Data:", v, TC_TEXT);
 
     if (!sane) {
       info_row("Execute:", "no: the header points past the end of the file",
                TC_ERR);
     } else {
       p = t_cpy(v, "yes: type ");
-      if (in_dir(path, APPS_DIR)) {
+      if (in_dir(path, APPS_DIR) || in_dir(path, C_APPS_DIR)) {
         int n = (int)strlen(b);
         if (n > 4 && !t_icmp(b + n - 4, ".bin"))
           n -= 4;
@@ -1090,8 +1091,8 @@ static void info_file(const char *arg, const char *path, const FILINFO *fno) {
     info_row("Execute:",
              firm ? "no: boot a FIRM from Luma's chainloader (hold START at "
                     "power-on)"
-             : kind == FKIND_BIN ? "no: not an Aurora app (no AOS1 or AUR1 "
-                                   "header)"
+             : kind == FKIND_BIN ? "no: not an Aurora app (no AOS1, AUR1 or "
+                                   "AURC header)"
                                  : "no",
              TC_DIM);
     info_row("Open:", "only as hex, in the File Explorer", TC_WARN);
@@ -1168,6 +1169,21 @@ static void sh_err(const char *what, const char *msg) {
   t_line(msg, TC_ERR);
 }
 
+/* The app `name` or `name`.bin in `dir`. */
+static int app_in(char *path, const char *dir, const char *name,
+                  FILINFO *fno) {
+  if (!t_join(path, dir, name))
+    return 0;
+  if (t_stat(path, fno) != FR_OK || (fno->fattrib & AM_DIR)) {
+    if (strlen(path) + 4u >= T_PATH)
+      return 0;
+    t_cpy(path + strlen(path), ".bin");
+    if (t_stat(path, fno) != FR_OK || (fno->fattrib & AM_DIR))
+      return 0;
+  }
+  return t_container(path);
+}
+
 int t_exec(int argc, char **argv) {
   static char path[T_PATH];
   static FILINFO fno;
@@ -1175,17 +1191,10 @@ int t_exec(int argc, char **argv) {
   (void)argc;
 
   if (!strchr(a, '/')) {
-    /* Like $PATH: a bare name runs the app of that name in /Aurora/Apps. */
-    if (!t_need_sd(0) || !t_join(path, APPS_DIR, a))
-      return 0;
-    if (t_stat(path, &fno) != FR_OK || (fno.fattrib & AM_DIR)) {
-      if (strlen(path) + 4u >= T_PATH)
-        return 0;
-      t_cpy(path + strlen(path), ".bin");
-      if (t_stat(path, &fno) != FR_OK || (fno.fattrib & AM_DIR))
-        return 0;
-    }
-    if (!t_container(path))
+    /* Like $PATH: a bare name runs the app of that name in /Aurora/Apps, or
+     * in /Aurora/Apps/C, where C apps go. */
+    if (!t_need_sd(0) || (!app_in(path, APPS_DIR, a, &fno) &&
+                          !app_in(path, C_APPS_DIR, a, &fno)))
       return 0;
   } else {
     FRESULT r;
@@ -1315,7 +1324,23 @@ static int unit_state(int u, const char **sub, char *note) {
       wifi_get(&w);
       *sub = "running";
       p = t_cpy(p, "joined, address ");
-      t_ip(p, w.ip);
+      p = t_ip(p, w.ip);
+      /* The SDIO clock is the 67 MHz bus clock over 4 x the divider. */
+      if (w.bus_div && w.bus_div <= 0x20u) {
+        u32 khz = 67028u / (w.bus_div * 4u);
+        p = t_cpy(p, ", SDIO ");
+        if (khz >= 1000u) {
+          p = t_num(p, khz / 1000u);
+          p = t_cpy(p, ".");
+          p = t_num(p, khz % 1000u / 100u);
+          p = t_cpy(p, " MHz");
+        } else {
+          p = t_num(p, khz);
+          p = t_cpy(p, " kHz");
+        }
+        if (!w.bus_rx53)
+          t_cpy(p, ", byte reads");
+      }
       return 1;
     }
     case U_SD: {
@@ -1946,7 +1971,8 @@ static void cmd_help(int argc, char **argv) {
     t_wrap(t_cmds[i].about, 12, TC_TEXT);
   }
   t_wrap("Run an app by its path (./Tetris.bin) or by its name in "
-         "/Aurora/Apps (Tetris). Tab completes names; * and ? match them.",
+         "/Aurora/Apps or /Aurora/Apps/C (Tetris). Tab completes names; * "
+         "and ? match them.",
          0, TC_DIM);
   t_wrap("Keys: A Enter, B Del, Y Tab, L Shift, R symbols, Up and Down for "
          "history, Left and Right to move, SELECT cancels, START closes.",
@@ -1970,8 +1996,9 @@ const TermCmd t_cmds[] = {
     {"help", cmd_help, "help [COMMAND]", "list the commands, or explain one",
      0},
     {"info", cmd_info, "info FILE...", "what Aurora can do with a file",
-     "Whether Aurora can execute it (an AOS1 or AUR1 app) and what opens it, "
-     "with picture sizes, sound formats and app headers."},
+     "Whether Aurora can execute it (an AOS1, AUR1 or AURC app) and what "
+     "opens it, with picture sizes, sound formats and app headers; for a C "
+     "app, its data folder."},
     {"ls", cmd_ls, "ls [-la1] [PATH]...", "list a folder",
      "-l long listing, -a hidden files too, -1 one per line. Folders are "
      "blue, apps green, pictures magenta and sound cyan."},

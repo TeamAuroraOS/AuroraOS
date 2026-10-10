@@ -38,17 +38,6 @@ static u32 len_of(const char *s) {
   return n;
 }
 
-/* "Beta v0.1.4" -> "0.1.4", for the User-Agent. */
-static char *put_version(char *p) {
-  const char *v = AURORA_VERSION;
-  while (*v && !(*v >= '0' && *v <= '9'))
-    v++;
-  while ((*v >= '0' && *v <= '9') || *v == '.')
-    *p++ = *v++;
-  *p = 0;
-  return p;
-}
-
 /* Host even with 1.0, a User-Agent, Connection: close, and a form body with
  * its length. Returns the length; 0 when it does not fit. */
 static u32 build(const char *method, const char *path, const char *token,
@@ -61,9 +50,9 @@ static u32 build(const char *method, const char *path, const char *token,
   char *p = put(req, method);
   p = put(p, " ");
   p = put(p, path);
-  p = put(p, " HTTP/1.0\r\nHost: " ACCOUNT_HOST "\r\nUser-Agent: AuroraOS/");
-  p = put_version(p);
-  p = put(p, "\r\nConnection: close\r\n");
+  p = put(p, " HTTP/1.0\r\nHost: " ACCOUNT_HOST
+             "\r\nUser-Agent: AuroraOS/" AURORA_VERSION_NUM
+             "\r\nConnection: close\r\n");
   if (token) {
     p = put(p, "Authorization: Bearer ");
     p = put(p, token);
@@ -198,12 +187,14 @@ int http_call(const char *method, const char *path, const char *token,
     r->net = WIFI_NETS_TOOBIG;
     return 0;
   }
+  if (!buf)
+    max = WIFI_HTTP_RESP_MAX - 1u;
   r->net = wifi_http(host_ip, 80, req, len, buf, max, &got, &r->stage,
                      HTTP_TIMEOUT_MS, tick);
   for (u32 i = 0; i < len; i++) /* the token was in it */
     ((volatile char *)req)[i] = 0;
   if (r->net == WIFI_NETS_OK)
-    parse(buf, got, r);
+    parse(buf ? buf : (char *)WIFI_HTTP_RESP, got, r);
   else if (r->stage <= WIFI_HTTP_CONNECT)
     host_ip = 0; /* Cloudflare's addresses can change: look it up again */
   return r->status;

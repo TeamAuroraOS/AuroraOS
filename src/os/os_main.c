@@ -92,15 +92,18 @@ static UserConfig g_cfg;
 
 enum { ACT_LAUNCH, ACT_MUSIC, ACT_FILES, ACT_CUBE, ACT_STORE };
 
-/* A long name is cut for display, but the path always holds all of it. */
+/* A long name is cut for display, but the path always holds all of it. C apps
+ * go in their own folder (sdk/). */
 #define APPS_DIR     "Aurora/Apps"
+#define C_APPS_DIR   AURORA_C_APPS_DIR
 #define MAX_APPS     160
 #define APP_NAME_MAX 64
-#define APP_PATH_MAX (sizeof(APPS_DIR) + FF_LFN_BUF + 1)
+#define APP_PATH_MAX (sizeof(C_APPS_DIR) + FF_LFN_BUF + 1)
 static char app_name[MAX_APPS][APP_NAME_MAX]; /* file name minus ".bin"  */
 static char app_path[MAX_APPS][APP_PATH_MAX]; /* "Aurora/Apps/Name.bin"  */
 static unsigned char app_icon[MAX_APPS][ICON_SIZE * ICON_ROW_BYTES];
 static int  app_has_icon[MAX_APPS];
+static char app_kind[MAX_APPS]; /* aurora_magic_kind(): 'C' for a C app */
 static int  app_count;
 
 /* The SD apps, then the built-in screens. */
@@ -622,50 +625,15 @@ static void wifi_hex4(char *out, u32 v) {
 
 static void wifitest_draw(const WifiShared *w);
 
-/* One firmware file from SD into the staging area. */
-static int wifi_load_blob(const char *path, u32 dst, u32 maxlen,
-                          volatile u32 *len_out) {
-  static FIL f;
-  UINT br = 0;
-  *len_out = 0;
-  if (f_open(&f, path, FA_READ) != FR_OK)
-    return 0;
-  u32 sz = (u32)f_size(&f);
-  if (sz == 0 || sz > maxlen) {
-    f_close(&f);
-    return 0;
-  }
-  FRESULT fr = f_read(&f, (void *)dst, sz, &br);
-  f_close(&f);
-  *len_out = br;
-  return fr == FR_OK && br == sz;
-}
-
 static int wifi_load_firmware(u32 main_type) {
   static FATFS fwfs;
-  WifiFw *fw = (WifiFw *)WIFI_FW_ADDR;
-  fw->magic = 0;
-  fw->main_len = 0;
-  fw->main_type = 0;
+  ((WifiFw *)WIFI_FW_ADDR)->magic = 0;
   if (f_mount(&fwfs, "", 1) != FR_OK) {
     f_mount(NULL, "", 0);
     return 0;
   }
-  int ok = 1;
-  ok &= wifi_load_blob("Aurora/wifi/STUBDATA.BIN", WIFI_FW_STUBDATA, 0x1000,
-                       &fw->stubdata_len);
-  ok &= wifi_load_blob("Aurora/wifi/STUBCODE.BIN", WIFI_FW_STUBCODE, 0x1000,
-                       &fw->stubcode_len);
-  ok &= wifi_load_blob("Aurora/wifi/DATABASE.BIN", WIFI_FW_DATABASE, 0x1000,
-                       &fw->database_len);
-  ok &= wifi_load_blob(main_type == WIFI_FW_TYPE4 ? "Aurora/wifi/MAINTYP4.BIN"
-                                                  : "Aurora/wifi/MAINTYP1.BIN",
-                       WIFI_FW_MAIN, 0x60000, &fw->main_len);
+  int ok = wifi_fw_stage(main_type);
   f_mount(NULL, "", 0);
-  if (ok) {
-    fw->main_type = main_type;
-    fw->magic = WIFI_FW_MAGIC;
-  }
   return ok;
 }
 
@@ -1177,8 +1145,8 @@ static void wifi_test_screen(void) {
 
 /* Settings > Wi-Fi: search, pick a network, type a secured one's password,
  * join an open one. GPL-2.0: part of the Wi-Fi driver (docs/wifi.md "License
- * and credits"). The network is kept in SD:/Aurora/wifi/network.txt. */
-#define WIFI_NET_FILE "Aurora/wifi/network.txt"
+ * and credits"). The network is kept in SD:/Aurora/wifi/network.txt
+ * (WIFI_NET_FILE). */
 
 static FATFS wifi_fs;
 
@@ -1811,49 +1779,6 @@ static int wifi_connect(WifiShared *w, const char *ssid, const char *pass,
   return 1;
 }
 
-/* What stopped a join, in a line for the terminal. */
-static void wifi_why(const WifiShared *w, const char *ssid, char *out,
-                     int size) {
-  static char t[96];
-  char *p = t;
-  if (w->fw_assert) {
-    p = snd_cpy(p, "the Wi-Fi firmware stopped");
-  } else if (w->wmi_event != 0x1001u) {
-    p = snd_cpy(p, "the Wi-Fi chip did not start");
-  } else {
-    switch (w->conn_stage) {
-      case WIFI_CONN_NOTFOUND:
-        p = snd_cpy(snd_cpy(p, ssid), " was not found (it must be on, on 2.4 GHz)");
-        break;
-      case WIFI_CONN_SECURED:
-        p = snd_cpy(p, w->sec == WIFI_SEC_WPA2 ? "it needs a password: set it in Settings > Wi-Fi"
-                                               : "its security is not supported (WPA2 is)");
-        break;
-      case WIFI_CONN_BADPASS:
-        p = snd_cpy(p, "the network did not accept the password");
-        break;
-      case WIFI_CONN_KEYS:
-        p = snd_cpy(p, "the password check did not finish");
-        break;
-      case WIFI_CONN_FAILED:
-        p = snd_cpy(p, "the firmware could not join it, reason ");
-        snd_u32(p, w->conn_reason & 0xFFu);
-        p += wifi_len(p);
-        break;
-      case WIFI_CONN_NODHCP:
-        p = snd_cpy(p, "no address came over DHCP");
-        break;
-      case WIFI_CONN_NOPING:
-        p = snd_cpy(p, "the router did not answer");
-        break;
-      default:
-        p = snd_cpy(p, "joining stopped early");
-        break;
-    }
-  }
-  wifi_kv(t, "", out, size);
-}
-
 int wifi_net_join(char *ssid, int ssid_size, char *why, int why_size,
                   void (*tick)(u32 ms)) {
   static WifiShared w;
@@ -1886,7 +1811,7 @@ int wifi_net_join(char *ssid, int ssid_size, char *why, int why_size,
   wifi_get(&w);
   if (w.session)
     return 1;
-  wifi_why(&w, wifi_saved_ssid, why, why_size);
+  wifi_join_why(&w, wifi_saved_ssid, why, (u32)why_size);
   return 0;
 }
 
@@ -2794,9 +2719,11 @@ static int hm_name_cmp(const char *a, const char *b) {
   return (int)(unsigned char)*a - (int)(unsigned char)*b;
 }
 
-static int read_app_icon(const char *path, unsigned char *dest) {
+/* Also sets *kind to the container's aurora_magic_kind(). */
+static int read_app_icon(const char *path, unsigned char *dest, char *kind) {
   static FIL f;
   UINT br;
+  *kind = 0;
   if (f_open(&f, path, FA_READ) != FR_OK)
     return 0;
 
@@ -2805,6 +2732,7 @@ static int read_app_icon(const char *path, unsigned char *dest) {
     f_close(&f);
     return 0;
   }
+  *kind = (char)aurora_magic_kind(hdr.magic);
 
   char magic[8];
   int ok = 1;
@@ -2826,18 +2754,12 @@ static int read_app_icon(const char *path, unsigned char *dest) {
   return ok;
 }
 
-static int scan_apps(void) {
-  static FATFS scan_fs;
+static void scan_folder(const char *folder) {
   static DIR dir;
   static FILINFO fno;
-  app_count = 0;
 
-  if (f_mount(&scan_fs, "", 1) != FR_OK)
-    return 0;
-  if (f_opendir(&dir, APPS_DIR) != FR_OK) {
-    f_mount(NULL, "", 0);
-    return 0;
-  }
+  if (f_opendir(&dir, folder) != FR_OK)
+    return;
   while (app_count < MAX_APPS && f_readdir(&dir, &fno) == FR_OK &&
          fno.fname[0]) {
     if (fno.fattrib & AM_DIR)
@@ -2847,11 +2769,22 @@ static int scan_apps(void) {
     int n = (int)str_len(fno.fname) - 4; /* strip ".bin" for the display name */
     hm_copy_cut(app_name[app_count], fno.fname,
                 n < APP_NAME_MAX - 1 ? n : APP_NAME_MAX - 1);
-    char *p = hm_str_copy(app_path[app_count], APPS_DIR "/");
+    char *p = hm_str_copy(app_path[app_count], folder);
+    p = hm_str_copy(p, "/");
     hm_str_copy(p, fno.fname);
     app_count++;
   }
   f_closedir(&dir);
+}
+
+static int scan_apps(void) {
+  static FATFS scan_fs;
+  app_count = 0;
+
+  if (f_mount(&scan_fs, "", 1) != FR_OK)
+    return 0;
+  scan_folder(APPS_DIR);
+  scan_folder(C_APPS_DIR);
 
   for (int i = 1; i < app_count; i++) {
     static char tn[APP_NAME_MAX], tp[APP_PATH_MAX];
@@ -2868,7 +2801,7 @@ static int scan_apps(void) {
   }
 
   for (int i = 0; i < app_count; i++)
-    app_has_icon[i] = read_app_icon(app_path[i], app_icon[i]);
+    app_has_icon[i] = read_app_icon(app_path[i], app_icon[i], &app_kind[i]);
 
   f_mount(NULL, "", 0);
   return app_count;
@@ -2885,8 +2818,8 @@ static void build_home(void) {
   for (int i = 0; i < app_count; i++, h++) {
     *h = (HomeApp){0};
     h->name = app_name[i];
-    h->dev = "SD App";
-    h->key = app_path[i] + sizeof(APPS_DIR); /* the file name */
+    h->dev = app_kind[i] == 'C' ? "C SDK" : "SD App";
+    h->key = app_path[i] + sizeof(APPS_DIR); /* "Name.bin" or "C/Name.bin" */
     h->icon = app_has_icon[i] ? app_icon[i] : icon_boot_bits;
     h->asset_lg = h->asset_sm = h->asset_xs = h->asset_art = UI_NO_ASSET;
     if (!app_has_icon[i]) {
@@ -2952,6 +2885,22 @@ static void os_install_return(void) {
   os_cache_sync();
 }
 
+/* Tells the app where it was started from; a path too long is left out. */
+static void os_launch_info(const char *path) {
+  volatile u32 *info = (volatile u32 *)AURORA_LAUNCH_INFO_ADDR;
+  volatile char *dst = (volatile char *)(info + 1);
+  u32 n = 0;
+
+  info[0] = 0;
+  while (path[n] && n < AURORA_LAUNCH_PATH_MAX)
+    n++;
+  if (n >= AURORA_LAUNCH_PATH_MAX)
+    return;
+  for (u32 i = 0; i <= n; i++)
+    dst[i] = path[i];
+  info[0] = AURORA_LAUNCH_MAGIC;
+}
+
 /* Runs the hand-off stub from scratch memory, clear of both the staged
  * payload and the load region. Never returns. */
 static void os_run_stub(u32 src, u32 dst, u32 size, u32 entry) {
@@ -2988,7 +2937,7 @@ static void os_launch_app(const char *path) {
   aos_header_t hdr;
   aurora_status_t st = aurora_parse_header(&app_file, &hdr);
   if (st != AURORA_OK) {
-    launch_msg(st == AURORA_ERR_MAGIC ? "Not an AUR1 app.  B: back"
+    launch_msg(st == AURORA_ERR_MAGIC ? "Not an Aurora app.  B: back"
                                       : "Header read failed.  B: back",
                COLOR_RED);
     f_close(&app_file);
@@ -3005,9 +2954,12 @@ static void os_launch_app(const char *path) {
     return;
   }
   f_close(&app_file);
+  if (aurora_magic_kind(hdr.magic) == 'C')
+    aurora_c_data_make(path); /* where the app's app_dir() points */
   f_mount(NULL, "", 0);
 
   gpu_show_a(); /* the app draws to framebuffer A */
+  os_launch_info(path);
   os_install_return();
 
   os_run_stub(AURORA_APP_STAGE_ADDR, hdr.arm9_load_addr, hdr.arm9_size,

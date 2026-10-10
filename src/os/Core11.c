@@ -149,6 +149,8 @@ void audio11_main(void) {
           gpu11_run();
         else if (cmd == AUDIO_CMD_N3DS)
           clock11_set(ct, arg0);
+        else if (cmd == AUDIO_CMD_RUN11)
+          run11(ct, arg0, ct->arg1);
         else if (cmd == AUDIO_CMD_PARK)
           core11_park(ct);
       }

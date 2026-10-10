@@ -119,8 +119,12 @@ static void wifi_ctrl_init(void) {
    (((uint32_t)(addr) & 0x1FFFFu) << 9) | ((uint32_t)(data) & 0xFFu))
 #define WCMD52_WRR(func, addr, data) (WCMD52_WR(func, addr, data) | (1u << 27))
 
+/* Commands that failed (a timeout, a CRC error), since the core started. */
+static uint32_t g_bus_errs;
+
 static void wifi_note_fail(WifiShared *w, uint16_t cmd, uint32_t arg,
                            uint16_t s0, uint16_t s1) {
+  g_bus_errs++;
   if (w->fail_cmd)
     return;
   w->fail_cmd = cmd;
@@ -933,13 +937,69 @@ static void wifi_htc_trailer(WifiShared *w, const uint8_t *t, uint32_t n) {
   }
 }
 
+/* Network operations take frames a block per CMD53 on a faster clock; the
+ * boot and the join keep a byte per CMD52 at 523 kHz, about 0.3 s for a full
+ * frame. The clock goes as high as the card's registers still read right,
+ * and a command failing on it steps it down for the rest of the core's life.
+ * A CMD53 read failing on the slow clock goes back to CMD52. */
+static const uint8_t bus_divs[] = {0x01, 0x02, 0x04, 0x08}; /* 16.8 to 2.1 MHz */
+#define BUS_DIVS sizeof(bus_divs)
+#define BUS_SLOW 0x20u
+static uint32_t g_bus_step; /* into bus_divs; BUS_DIVS: BUS_SLOW only */
+static int g_net_bus;       /* in a network operation, on a 1-bit bus */
+static int g_rx53_bad;
+
+static uint32_t bus_div(void) { return WB16(WR_CLKCTL) & 0xFFu; }
+
+static int bus_fast(void) { return bus_div() != BUS_SLOW; }
+
+/* Linux's tmio driver waits 10 ms after starting the clock. */
+static void bus_clock(uint32_t div) {
+  wifi_setckl(div);
+  wifi_wait_us(10000);
+}
+
+/* A command failed on the fast clock (a failed CMD53 has already reset the
+ * controller to the slow one): the next step down, from now on. */
+static void wifi_bus_down(void) {
+  if (g_bus_step < BUS_DIVS)
+    g_bus_step++;
+  bus_clock(g_bus_step < BUS_DIVS ? bus_divs[g_bus_step] : BUS_SLOW);
+}
+
+/* The CCCR revision, bus interface and card capability, and function 1's
+ * block size (128): a clock the bus cannot take reads them wrong, or fails. */
+static uint32_t bus_sig(WifiShared *w) {
+  static const uint16_t reg[4] = {0x00, 0x07, 0x08, 0x110};
+  WifiCmd t;
+  uint32_t s = 0;
+  for (int i = 0; i < 4; i++) {
+    wifi_cmd(w, &t, WCMD52, WCMD52_RD(0, reg[i]));
+    s = (s << 8) | (t.resp & 0xFFu);
+  }
+  return s;
+}
+
+/* `total` bytes of a frame, a block per CMD53 in byte mode, as frames go out.
+ * Returns how many left the mailbox: a command that timed out never reached
+ * the chip, while after any other failure its block is gone. */
+static uint32_t wifi_htc_read53(WifiShared *w, uint8_t *frame,
+                                uint32_t total) {
+  for (uint32_t off = 0; off < total; off += HTC_BLOCK)
+    if (wifi_cmd53(w, 1, WIFI_MBOX0 + off, (uint32_t *)(frame + off),
+                   HTC_BLOCK, 0, 1, 0, 0) != 0)
+      return (g_cmd53_stat >> 16) & 0x0040u ? off : off + HTC_BLOCK;
+  return total;
+}
+
 /* Waits for a frame, then drains it from the mailbox. Returns the payload
  * length with any trailer removed, or 0 if nothing arrived. */
 static uint32_t wifi_htc_recv(WifiShared *w, uint8_t *buf, uint32_t max,
                               int polls) {
   WifiCmd t;
-  static uint8_t frame[HTC_FRAME_MAX];
-  uint32_t look = 0;
+  static uint32_t frame32[HTC_FRAME_MAX / 4];
+  uint8_t *frame = (uint8_t *)frame32;
+  uint32_t look = 0, errs = g_bus_errs, got = 0;
   int have = 0;
 
   g_htc_got = 0;
@@ -955,6 +1015,11 @@ static uint32_t wifi_htc_recv(WifiShared *w, uint8_t *buf, uint32_t max,
     else
       wifi_ms(HTC_TICK_MS);
   }
+  /* A lookahead read wrong would drain the wrong number of bytes. */
+  if (g_net_bus && g_bus_errs != errs && bus_fast()) {
+    wifi_bus_down();
+    return 0;
+  }
   if (!have)
     return 0;
 
@@ -963,9 +1028,21 @@ static uint32_t wifi_htc_recv(WifiShared *w, uint8_t *buf, uint32_t max,
   if (total > HTC_FRAME_MAX) {
     return 0; /* not a length this handshake ever produces */
   }
-  for (uint32_t i = 0; i < total; i++) {
+  int fast = bus_fast(), r53 = g_net_bus && !g_rx53_bad;
+  errs = g_bus_errs;
+  if (r53)
+    got = wifi_htc_read53(w, frame, total);
+  for (uint32_t i = got; i < total; i++) {
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, WIFI_MBOX0 + i));
     frame[i] = (uint8_t)(t.resp & 0xFFu);
+  }
+  /* ath6kl checks a frame's header against its lookahead too. */
+  if ((fast || r53) && (g_bus_errs != errs || frame32[0] != look)) {
+    if (fast)
+      wifi_bus_down();
+    else
+      g_rx53_bad = 1;
+    return 0;
   }
   w->htc_look = look;
   g_htc_got = 1;
@@ -2642,6 +2719,32 @@ static void wifi_op_http(WifiShared *w, WifiNetIo *io, uint32_t ms) {
     io->status = WIFI_NETS_NOLINK;
 }
 
+/* The faster bus for a network operation (see bus_divs): the highest clock
+ * left that reads bus_sig as the slow one does. Only on a 1-bit bus, the one a
+ * failed CMD53 resets the controller to. */
+static void wifi_bus_up(WifiShared *w) {
+  uint32_t ref, errs;
+  g_net_bus = g_style == HTC_W_BYTE || g_style == HTC_W_BLOCK;
+  if (!g_net_bus || g_bus_step >= BUS_DIVS ||
+      bus_div() == bus_divs[g_bus_step])
+    return;
+  bus_clock(BUS_SLOW);
+  errs = g_bus_errs;
+  ref = bus_sig(w);
+  if (g_bus_errs != errs)
+    return;
+  for (; g_bus_step < BUS_DIVS; g_bus_step++) {
+    bus_clock(bus_divs[g_bus_step]);
+    if (bus_sig(w) == ref && g_bus_errs == errs)
+      return;
+    bus_clock(BUS_SLOW);
+    errs = g_bus_errs;
+  }
+}
+
+/* While a network operation waits for frames, it polls this often. */
+#define NET_TICK_US 1000u
+
 /* One AUDIO_CMD_WIFI_NET operation on the session a WIFI_OPT_STAY join left.
  * Nothing reads the chip between commands, so what queued up meanwhile is
  * taken first: a DISCONNECT there ends the session. */
@@ -2659,7 +2762,8 @@ static void wifi_net_op(uint32_t op) {
   io->icmp = 0;
   io->dns_rcode = 0;
   if (g_session && !g_fw_asserted) {
-    g_tick_us = HTC_TICK_MS * 1000u;
+    g_tick_us = NET_TICK_US;
+    wifi_bus_up(w);
     for (int i = 0; i < 64 && g_link > 0; i++) {
       wifi_wmi_events(w, 0, 1, 1);
       if (!g_htc_got)
@@ -2697,8 +2801,12 @@ static void wifi_net_op(uint32_t op) {
       wpa_end(&g_wpa);
       g_wpa_on = 0;
     }
+    g_net_bus = 0;
   }
   w->session = (uint32_t)g_session;
+  w->bus_div = bus_div();
+  w->bus_rx53 = !g_rx53_bad;
+  w->bus_errs = g_bus_errs;
   dcache_clean();
   wifi_finish(w);
 }

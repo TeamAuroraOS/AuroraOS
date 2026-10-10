@@ -321,7 +321,7 @@ uint32_t net_tcp_seg(NetState *n, uint8_t *f, const uint8_t *dmac,
   put32(t + 8, flags & NET_TCP_ACK ? n->rcv_nxt : 0u);
   t[12] = (uint8_t)(hl << 2);
   t[13] = (uint8_t)flags;
-  put16(t + 14, room > 0xFFFFu ? 0xFFFFu : room);
+  put16(t + 14, room > NET_TCP_WND ? NET_TCP_WND : room);
   put16(t + 16, 0);
   put16(t + 18, 0);
   if (hl == 24u) {

@@ -101,7 +101,7 @@ void boot_aurora(void) {
     return;
   }
   if (st == AURORA_ERR_MAGIC) {
-    loader_line("Bad AOS1/AUR1 magic", COLOR_RED);
+    loader_line("Bad AOS1/AUR1/AURC magic", COLOR_RED);
     f_close(&loader_file);
     loader_wait_back();
     return;

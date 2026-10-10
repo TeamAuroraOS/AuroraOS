@@ -6,7 +6,7 @@
 /* Decided by the extension, and for .bin by the container magic. */
 typedef enum {
   FKIND_DIR = 0,
-  FKIND_AURORA, /* AOS1/AUR1 app container */
+  FKIND_AURORA, /* AOS1/AUR1/AURC app container */
   FKIND_IMAGE,  /* png, jpg, jpeg, bmp */
   FKIND_AUDIO,  /* wav, mp3, aaf */
   FKIND_BIN,    /* .bin that is not an Aurora container */

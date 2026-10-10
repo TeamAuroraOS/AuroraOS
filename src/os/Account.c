@@ -191,7 +191,6 @@ static void ac_console_name(const char *owner, char *out) {
   ac_cpy(p, model);
 }
 
-/* What the server answered. */
 typedef struct {
   u32 net;    /* WIFI_NETS_* */
   u32 stage;  /* WIFI_HTTP_* */

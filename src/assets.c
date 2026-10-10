@@ -80,9 +80,7 @@ int asset_font(uint32_t id, Font *out) {
   return 1;
 }
 
-static int fail(FATFS *fs, const char *why) {
-  f_mount(NULL, "", 0);
-  (void)fs;
+static int fail(const char *why) {
   g_err = why;
   g_ok = 0;
   return 0;
@@ -90,6 +88,19 @@ static int fail(FATFS *fs, const char *why) {
 
 int assets_load(void) {
   static FATFS fs;
+  int ok = 0;
+
+  if (g_ok)
+    return 1;
+  if (f_mount(&fs, "", 1) == FR_OK)
+    ok = assets_read();
+  else
+    fail("no SD card");
+  f_mount(NULL, "", 0);
+  return ok;
+}
+
+int assets_read(void) {
   static FIL f;
   PakHead head;
   UINT br;
@@ -98,33 +109,30 @@ int assets_load(void) {
 
   if (g_ok)
     return 1;
-
-  if (f_mount(&fs, "", 1) != FR_OK)
-    return fail(&fs, "no SD card");
   if (f_open(&f, PAK_PATH, FA_READ) != FR_OK)
-    return fail(&fs, "assets.pak not found");
+    return fail("assets.pak not found");
 
   if (f_read(&f, &head, sizeof(head), &br) != FR_OK || br != sizeof(head)) {
     f_close(&f);
-    return fail(&fs, "pack header unreadable");
+    return fail("pack header unreadable");
   }
   if (head.magic != PAK_MAGIC || head.version != PAK_VERSION) {
     f_close(&f);
-    return fail(&fs, "pack magic/version mismatch");
+    return fail("pack magic/version mismatch");
   }
   if (head.count != ASSET_COUNT) {
     f_close(&f);
-    return fail(&fs, "pack does not match this build");
+    return fail("pack does not match this build");
   }
   if (head.arena > ASSETS_ARENA_MAX) {
     f_close(&f);
-    return fail(&fs, "pack too large for the arena");
+    return fail("pack too large for the arena");
   }
 
   if (f_read(&f, g_table, sizeof(PakEntry) * head.count, &br) != FR_OK ||
       br != sizeof(PakEntry) * head.count) {
     f_close(&f);
-    return fail(&fs, "pack index unreadable");
+    return fail("pack index unreadable");
   }
 
   for (i = 0; i < head.count; i++) {
@@ -132,12 +140,12 @@ int assets_load(void) {
     if (e->id >= ASSET_COUNT || e->csize > ASSET_MAX_CSIZE ||
         used + e->usize > ASSETS_ARENA_MAX) {
       f_close(&f);
-      return fail(&fs, "pack entry out of range");
+      return fail("pack entry out of range");
     }
     if (f_lseek(&f, e->off) != FR_OK ||
         f_read(&f, g_scratch, e->csize, &br) != FR_OK || br != e->csize) {
       f_close(&f);
-      return fail(&fs, "pack payload unreadable");
+      return fail("pack payload unreadable");
     }
     rle_decode(g_scratch, e->csize, arena + used, e->usize);
     g_assets[e->id].type = e->type;
@@ -148,7 +156,6 @@ int assets_load(void) {
   }
 
   f_close(&f);
-  f_mount(NULL, "", 0);
   g_err = "";
   g_ok = 1;
   return 1;

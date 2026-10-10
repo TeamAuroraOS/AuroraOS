@@ -5,6 +5,7 @@
 #include "terminal.h"
 #include "term.h"
 #include "anim.h"
+#include "container.h"
 #include "files.h"
 #include "font.h"
 #include "model.h"
@@ -508,13 +509,7 @@ int t_container(const char *path) {
     return 0;
   ok = f_read(&f, m, 4, &br) == FR_OK && br == 4;
   f_close(&f);
-  if (!ok || m[0] != 'A' || m[3] != '1')
-    return 0;
-  if (m[1] == 'O' && m[2] == 'S')
-    return 'A';
-  if (m[1] == 'U' && m[2] == 'R')
-    return 'U';
-  return 0;
+  return ok ? aurora_magic_kind(m) : 0;
 }
 
 int t_readdir(const char *dir, int all, int kinds, FRESULT *fr) {

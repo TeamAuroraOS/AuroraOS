@@ -4,7 +4,6 @@
 #include "aurora.h"
 #include "anim.h"
 #include "audio.h"
-#include "crypto.h"
 #include "gpu.h"
 #include "timer.h"
 #include "ui.h"
@@ -168,79 +167,10 @@ uint32_t wifi_http(uint32_t ip, uint32_t port, const char *req,
     n = WIFI_HTTP_RESP_MAX;
   if (n > max)
     n = max;
-  for (u32 i = 0; i < n; i++)
+  for (u32 i = 0; resp && i < n; i++)
     resp[i] = a[i];
   *got = n;
   *stage = io->stage;
   online = ((volatile WifiShared *)WIFI_SHARED_ADDR)->session == 1u;
   return io->status;
-}
-
-static int hex_digit(char c) {
-  return c >= '0' && c <= '9'   ? c - '0'
-         : c >= 'a' && c <= 'f' ? c - 'a' + 10
-         : c >= 'A' && c <= 'F' ? c - 'A' + 10
-                                : -1;
-}
-
-/* Read by the core at the start of a boot with WIFI_OPT_CONNECT. The password
- * stays on this side: the core gets the PMK made from it, or the PSK itself
- * when the password is 64 hex digits. The seed for the core's SNonce is
- * hashed from timer readings around that work. */
-void wifi_request(const char *ssid, const char *pass) {
-  static u32 count;
-  WifiReq *q = (WifiReq *)WIFI_REQ_ADDR;
-  uint8_t pmk[32], d[20];
-  u32 n = 0, p = 0, t;
-  Sha1 h;
-  while (ssid[n] && n < sizeof(q->ssid))
-    n++;
-  while (pass && pass[p] && p < 64u)
-    p++;
-  q->magic = 0;
-  sha1_init(&h);
-  t = timer_ticks();
-  sha1_update(&h, (const uint8_t *)&t, 4);
-  count++;
-  sha1_update(&h, (const uint8_t *)&count, 4);
-  for (u32 i = 0; i < sizeof(q->ssid); i++)
-    q->ssid[i] = i < n ? (u8)ssid[i] : 0;
-  q->ssid_len = n;
-  q->has_pmk = 0;
-  if (p) {
-    int hex = p == 64u;
-    for (u32 i = 0; hex && i < 64u; i++)
-      hex = hex_digit(pass[i]) >= 0;
-    if (hex) {
-      for (u32 i = 0; i < 32u; i++)
-        pmk[i] = (uint8_t)(hex_digit(pass[2 * i]) << 4 | hex_digit(pass[2 * i + 1]));
-    } else {
-      wpa_pmk((const uint8_t *)pass, p, (const uint8_t *)ssid, n, pmk);
-    }
-    for (u32 i = 0; i < 32u; i++)
-      q->pmk[i] = pmk[i];
-    q->has_pmk = 1;
-    crypto_wipe(pmk, sizeof(pmk));
-  }
-  t = timer_ticks();
-  sha1_update(&h, (const uint8_t *)&t, 4);
-  sha1_final(&h, d);
-  for (u32 i = 0; i < 32u; i++)
-    q->seed[i] = d[i % 20u] ^ (uint8_t)(t >> (8 * (i & 3u)));
-  crypto_wipe(d, sizeof(d));
-  q->magic = WIFI_REQ_MAGIC;
-  os_cache_sync();
-}
-
-/* Once the core is done with it, so the PMK does not stay in shared memory. */
-void wifi_request_clear(void) {
-  WifiReq *q = (WifiReq *)WIFI_REQ_ADDR;
-  q->magic = 0;
-  q->ssid_len = 0;
-  q->has_pmk = 0;
-  for (u32 i = 0; i < sizeof(q->pmk); i++)
-    q->pmk[i] = 0;
-  for (u32 i = 0; i < sizeof(q->seed); i++)
-    q->seed[i] = 0;
-  os_cache_sync();
 }

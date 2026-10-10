@@ -108,7 +108,8 @@ static int join(char *out, int outsz, const char *dir, const char *name) {
   return 1;
 }
 
-/* An AOS1/AUR1 container looks like any other .bin, so the magic decides. */
+/* An AOS1/AUR1/AURC container looks like any other .bin, so the magic
+ * decides. */
 static int is_aurora_container(const char *dir, const char *name) {
   static FIL f;
   char path[FILES_PATH];
@@ -124,10 +125,7 @@ static int is_aurora_container(const char *dir, const char *name) {
     return 0;
   }
   f_close(&f);
-  return (magic[0] == 'A' && magic[1] == 'O' && magic[2] == 'S' &&
-          magic[3] == '1') ||
-         (magic[0] == 'A' && magic[1] == 'U' && magic[2] == 'R' &&
-          magic[3] == '1');
+  return aurora_magic_kind(magic) != 0;
 }
 
 FileKind files_kind(const char *name, int is_dir) {

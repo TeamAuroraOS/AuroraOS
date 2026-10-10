@@ -48,6 +48,9 @@ typedef struct Font {
 int assets_load(void);
 int assets_ok(void);
 
+/* As assets_load(), on a card the caller has already mounted and keeps. */
+int assets_read(void);
+
 /* Null when the pack is absent or `id` is out of range. */
 const Asset *asset_get(uint32_t id);
 

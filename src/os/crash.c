@@ -8,6 +8,8 @@
 /* Shared with crash.s (filled by the exception stubs). */
 CrashDump g_crash_dump;
 
+void (*g_crash_poll)(void);
+
 extern void crash_vec_undef(void);
 extern void crash_vec_pabt(void);
 extern void crash_vec_dabt(void);
@@ -160,6 +162,8 @@ static void crash_wait_1s(void) {
   now = start;
   for (int i = 0; i < 500; i++) {
     delay(40000);
+    if (g_crash_poll)
+      g_crash_poll();
     I2C_readRegBuf(I2C_DEV_MCU, 0x30, &now, 1);
     if (now != start)
       return;
@@ -212,7 +216,8 @@ void crash_handle(CrashDump *d) {
     char line[40], *p;
     draw_filled_rect(VRAM_BOT_A, 0, SH_B - 18, BOT_SCREEN_WIDTH, 18, SH_B,
                      COLOR_CRASH);
-    p = scpy(line, "Auto power off in ");
+    p = scpy(line, g_crash_poll ? "HOME: back.  Power off in "
+                                : "Auto power off in ");
     if (s >= 10) {
       *p++ = '1';
       *p++ = '0';

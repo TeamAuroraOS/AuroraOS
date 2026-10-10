@@ -95,7 +95,8 @@ extern int t_ents_cut; /* the folder held more than fits */
  * unless `all`. With `kinds`, each .bin is opened to find the apps. */
 int t_readdir(const char *dir, int all, int kinds, FRESULT *fr);
 
-/* 'A' for an AOS1 container, 'U' for AUR1, 0 for anything else. */
+/* aurora_magic_kind() of the file: 'A' for an AOS1 container, 'U' for AUR1,
+ * 'C' for AURC, 0 for anything else. */
 int t_container(const char *path);
 
 typedef struct {

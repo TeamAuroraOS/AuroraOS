@@ -83,6 +83,10 @@ enum {
 /* The MSS we announce: a whole segment, with room to spare, still fits one
  * HTC frame (WiFi11.c HTC_FRAME_MAX). */
 #define NET_TCP_MSS 1200u
+/* The most window announced, whatever the reply buffer holds: what the chip
+ * has been seen to keep while a frame takes 0.3 s to read. A larger burst can
+ * overflow it, and a lost segment drops everything behind it. */
+#define NET_TCP_WND 8192u
 
 /* Each returns the frame length. */
 uint32_t net_dhcp(NetState *n, uint8_t *f, int request);
