@@ -150,6 +150,7 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_launch.o $(BUILD_DIR)/os_gpu9.o \
            $(BUILD_DIR)/os_power.o \
            $(BUILD_DIR)/os_wifi9.o \
+           $(BUILD_DIR)/os_wifijoin.o \
            $(BUILD_DIR)/os_crypto.o \
            $(BUILD_DIR)/os_touch9.o \
            $(BUILD_DIR)/os_timer9.o $(BUILD_DIR)/os_assets.o \
@@ -172,7 +173,7 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_account.o $(BUILD_DIR)/os_qr.o \
            $(BUILD_DIR)/os_http.o
 
-CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o $(BUILD_DIR)/Net11.o $(BUILD_DIR)/Wpa11.o $(BUILD_DIR)/Crypto.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o $(BUILD_DIR)/Stereo11.o $(BUILD_DIR)/P3d11.o
+CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o $(BUILD_DIR)/Net11.o $(BUILD_DIR)/Wpa11.o $(BUILD_DIR)/Crypto.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o $(BUILD_DIR)/Stereo11.o $(BUILD_DIR)/P3d11.o $(BUILD_DIR)/Run11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
 AUDIO11_BLOB := $(BUILD_DIR)/audio11_blob.h
 
@@ -366,6 +367,10 @@ $(BUILD_DIR)/os_anim.o: $(OS_DIR)/Anim.c $(wildcard $(INC_DIR)/*.h) | dirs
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_wifi9.o: $(OS_DIR)/WiFi9.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_wifijoin.o: $(OS_DIR)/WiFiJoin.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
