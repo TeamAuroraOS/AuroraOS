@@ -13,6 +13,7 @@
 #include "touch.h"
 #include "user.h"
 #include "auric_runtime.h"
+#include "auric_internal.h"
 
 /* ARM9 timers at 0x10003000: a value/reload register then a control register
  * per timer. Control bits 0-1 prescaler (/1, /64, /256, /1024), bit 2 count-up,
@@ -27,7 +28,7 @@
 #define TIMER_PRESCALE_1024 3u
 #define TIMER_COUNT_UP      (1u << 2)
 #define TIMER_ENABLE        (1u << 7)
-#define TICKS_PER_MS        65u
+#define TICKS_PER_MS        AUR_TICKS_PER_MS
 
 static int aur_timer_ready = 0;
 
@@ -41,7 +42,7 @@ static void aur_timer_init(void) {
   aur_timer_ready = 1;
 }
 
-static u32 aur_ticks(void) {
+u32 aur_ticks(void) {
   u32 hi, lo, hi2;
 
   if (!aur_timer_ready)
@@ -105,7 +106,7 @@ static int aur_voices_started; /* anything played that might still sound */
 
 /* Launched by the Home Menu rather than booted directly. Only then is the
  * ARM11 core, and so the GPU and sound, there to answer. */
-static int aur_from_home(void) {
+int aur_from_home(void) {
   volatile u32 *desc = (volatile u32 *)AURORA_RETURN_DESC_ADDR;
   return desc[0] == AURORA_RETURN_READY_MAGIC;
 }
@@ -123,7 +124,7 @@ static int aur_audio_ready(void) {
 }
 
 /* The card stays mounted once a built-in has needed it. */
-static int aur_mount(void) {
+int aur_mount(void) {
   static FATFS fs;
   static int mounted;
 
@@ -180,7 +181,7 @@ u32 get_keys_down(void) {
  * register 0x10 clears its flags; bit 2 of byte 0 signals a HOME press. */
 static int aur_i2c_ready = 0;
 
-static int aur_home_pressed(void) {
+int aur_home_pressed(void) {
   if (!aur_i2c_ready) {
     I2C_init();
     aur_i2c_ready = 1;
@@ -191,17 +192,19 @@ static int aur_home_pressed(void) {
   return (irq[0] & 0x04) != 0; /* bit 2 = HOME pressed */
 }
 
+/* The samples sit in memory the Home Menu takes back, so nothing may still
+ * be playing them when it does. */
+void aur_leave(void) {
+  if (aur_voices_started)
+    aur_audio_post(AUDIO_CMD_VOICE_STOP, AUDIO_VOICE_ALL, 0, 0, 0);
+  ((void (*)(void))AURORA_RETURN_STUB_ADDR)(); /* restores the OS */
+  __builtin_unreachable();
+}
+
 /* A directly booted app has no OS to return to, so HOME is ignored. */
 static void aur_home_poll_now(void) {
-  if (!aur_from_home())
-    return;
-  if (aur_home_pressed()) {
-    /* The samples sit in memory the Home Menu takes back, so nothing may still
-     * be playing them when it does. */
-    if (aur_voices_started)
-      aur_audio_post(AUDIO_CMD_VOICE_STOP, AUDIO_VOICE_ALL, 0, 0, 0);
-    ((void (*)(void))AURORA_RETURN_STUB_ADDR)(); /* restores the OS; no return */
-  }
+  if (aur_from_home() && aur_home_pressed())
+    aur_leave();
 }
 
 /* Called from every built-in. An MCU read is a full I2C transaction and a game
@@ -233,6 +236,16 @@ static void aur_drew(void) {
     aur_dirty[aur_scr] = 1;
   else
     aur_show(aur_scr);
+}
+
+int aur_str_eq(const char *a, const char *b) {
+  if (!a || !b)
+    return a == b;
+  while (*a && *a == *b) {
+    a++;
+    b++;
+  }
+  return *a == *b;
 }
 
 void aur_screen(int which) {

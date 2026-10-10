@@ -88,6 +88,9 @@ class TypeChecker:
         if isinstance(expr, ast.UnaryExpr):
             return self._is_const_expr(expr.operand)
         if isinstance(expr, ast.BinaryExpr):
+            # Comparing strings is a runtime call (aur_str_eq).
+            if expr.op in ("==", "!=") and expr.left.type == "string":
+                return False
             return (self._is_const_expr(expr.left)
                     and self._is_const_expr(expr.right))
         return False

@@ -1,10 +1,10 @@
-# Auric v0.4: language reference
+# Auric v0.5: language reference
 
 *"Coding too hard? Try Auric!"*
 
 Auric is a tiny, statically-typed language that **transpiles to freestanding C**
 and compiles into a bootable app for [AuroraOS](../../README.md) on the Nintendo
-3DS. This document is the complete v0.4 spec, the language is deliberately
+3DS. This document is the complete v0.5 spec, the language is deliberately
 small.
 
 ## A whole program
@@ -102,7 +102,7 @@ braces. Each `{ ... }` block is its own scope.
 | Arithmetic | `+` `-` `*` `/` `%`     | int x int or float x float (`%` int only) | same   |
 | Bitwise    | `&` `\|` `^` `<<` `>>`   | int x int                                 | `int`  |
 | Comparison | `<` `<=` `>` `>=`       | int x int or float x float                | `bool` |
-| Equality   | `==` `!=`               | any matching type                         | `bool` |
+| Equality   | `==` `!=`               | any matching type; strings by their text  | `bool` |
 | Logical    | `&&` `\|\|` `!`           | `bool`                                    | `bool` |
 | Unary      | `-` (negate), `!` (not) | number / bool                             | same   |
 
@@ -143,6 +143,25 @@ These map one-to-one onto AuroraOS's API through the runtime shim
 | `play_music(handle)`              | loop on the music voice                            | ARM11 voice       |
 | `stop_music()`                    | silence the music                                  | ARM11 voice       |
 | `stop_sounds()`                   | silence every effect                               | ARM11 voice       |
+| `net_connect() -> bool`           | join the Wi-Fi network saved in Settings           | ARM11 Wi-Fi       |
+| `net_online() -> bool`            | the network link is up                             | ARM11 Wi-Fi       |
+| `net_error() -> string`           | why the last network call failed                   | `src/os/AppNet.c` |
+| `net_address() -> string`         | the console's address on the network               | ARM11 Wi-Fi       |
+| `http_get(url) -> int`            | an HTTP GET; the reply's status, 0 if none         | ARM11 TCP         |
+| `http_post(url, body) -> int`     | an HTTP POST                                       | ARM11 TCP         |
+| `http_param(name, value)`         | a parameter for the next request (`_int`: a number) | `src/os/AppNet.c` |
+| `http_header(name, value)`        | a header for the next request                      | `src/os/AppNet.c` |
+| `http_text() -> string`           | the last reply's body                              | in place          |
+| `http_length() -> int`            | its size in bytes                                  | in place          |
+| `http_lines() -> int`             | how many lines it has                              | in place          |
+| `http_line(n) -> string`          | line `n`, from 0                                   | in place          |
+| `http_save(path) -> bool`         | write the last reply to the SD card                | FatFs             |
+| `http_download(url, path) -> bool` | save a file of any size, in pieces                | ARM11 TCP, FatFs  |
+| `json_string(path) -> string`     | a value of the last reply, read as JSON            | `src/os/Json.c`   |
+| `json_int` / `json_float` / `json_bool(path)` | the same as a number or a truth value | `src/os/Json.c`   |
+| `json_has(path) -> bool`          | the value is there                                 | `src/os/Json.c`   |
+| `json_count(path) -> int`         | the elements of an array, members of an object     | `src/os/Json.c`   |
+| `json_index(n)`                   | what `#` stands for in the paths after it          |                   |
 
 ### Animation and games
 
@@ -289,6 +308,97 @@ fn main() {
 Loading reads the whole file, so a long track takes a moment: draw a message and
 `present()` first, as `Games/Tetris_Source/Tetris.aur` does.
 
+### The network
+
+An app can reach the internet over the Wi-Fi network saved in Settings > Wi-Fi.
+It speaks plain HTTP: AuroraOS has no TLS yet, so `https://` addresses do not
+work (many sites send `http://` visitors to `https://`; such a reply comes back
+as its 301 or 302, with `net_error()` saying so).
+
+```auric
+fn main() {
+    print("Connecting...", 8, 8, WHITE);
+    if !net_connect() {
+        print(net_error(), 8, 24, RED);
+        wait_key(KEY_A);
+        return;
+    }
+    if http_get("http://ip-api.com/json/") == 200 {
+        print(json_string("city"), 8, 24, WHITE);
+    } else {
+        print(net_error(), 8, 24, RED);
+    }
+    wait_key(KEY_A);
+}
+```
+
+* `net_connect()` joins the saved network, unless the console is on it
+  already (aShop, the Terminal or another app may have joined it, and a join
+  stays up until the console is turned off or the network drops). The first
+  join takes about 25
+  seconds, so draw a message before it. It returns `false` when it cannot, and
+  `net_error()` says why, e.g. "no network saved: pick one in Settings >
+  Wi-Fi".
+* Every network built-in waits until it is done, and the screens keep their
+  last frame meanwhile. A request usually takes well under a second, and at
+  most 15.
+* `http_get(url)` and `http_post(url, body)` return the reply's status (200,
+  404, ...), or `0` when no reply came (not connected, no such host, no
+  answer; `net_error()` says which). Redirects are followed. The address may
+  carry a port and a query: `"http://example.com:8080/api?q=1"`.
+* The reply stays until the next request: `http_text()` is its body as text,
+  `http_length()` its size in bytes, `http_lines()` and `http_line(n)` its
+  lines (from 0, without their line ends), and `http_save(path)` writes it to
+  the SD card. A reply can be up to 1020 KB. `http_download(url, path)` saves
+  a file of any size, in pieces, without keeping it as the reply.
+* `http_param(name, value)` and `http_param_int(name, value)` add a parameter
+  to the next request's address (`?name=value&...`, encoded for you), and
+  `http_header(name, value)` a header (an API key, say). They count for that
+  one request. `http_post` with an empty body sends the parameters as the
+  body, as a web form does; a body that starts with `{` or `[` is sent as
+  JSON, anything else as a form, unless a `Content-Type` header says
+  otherwise.
+* A request, with its address, headers and body, must fit in 2 KB.
+* `net_online()` asks whether the link is still up, and `net_address()` is
+  the console's address on the network (`""` when not connected).
+* Like sound, the network needs the ARM11 core, so it works only in an app
+  launched from the Home Menu. HOME pressed during a network built-in takes
+  effect when it is done.
+
+#### JSON
+
+Most web APIs answer in JSON. `json_string(path)`, `json_int(path)`,
+`json_float(path)`, `json_bool(path)`, `json_has(path)` and `json_count(path)`
+read the last reply as JSON. A path names members of objects and elements of
+arrays, separated by dots: `"items.0.name"` is the `name` of the first element
+of `items`, and `""` is the whole reply. A value that is not there gives `""`,
+`0`, `0.0` or `false` (and `json_has` says `false`).
+
+```auric
+// {"city": "Paris", "temp": 21.5, "items": [{"name": "one"}, {"name": "two"}]}
+print(json_string("city"), 8, 8, WHITE);
+let t = json_float("temp");
+let n = json_count("items");
+let i = 0;
+while i < n {
+    json_index(i);
+    print(json_string("items.#.name"), 8, 24 + i * 10, WHITE);
+    i = i + 1;
+}
+```
+
+* `json_index(n)` sets what a `#` in the paths after it stands for, to walk
+  through an array.
+* `json_int` rounds, and reads a number written as a string (`"17"`) too.
+  `json_string` of a number, `true` or a whole object gives it as written.
+* Text outside ASCII shows as `?`, as the 8x8 font has no other letters.
+* **Strings from a reply** (`http_text`, `http_line`, `json_string`,
+  `net_error`) **change at the next request**, even one kept in a variable:
+  print or compare them before asking again, and keep numbers with `json_int`.
+
+`../examples/net.aur` joins, asks ip-api.com where the console is online and
+sends a score to httpbin.org with `http_param` and `http_post`.
+
 ### The HOME button
 
 You don't handle HOME yourself: the runtime polls it inside **every** built-in
@@ -313,8 +423,8 @@ A colour is just an `int`, so you can also pass a raw literal like `0xFF8800`.
 
 **Buttons** (HID bitmasks, matching `BUTTON_*` in `include/aurora.h`):
 
-`KEY_A` `KEY_B` `KEY_SELECT` `KEY_START` `KEY_UP` `KEY_DOWN` `KEY_LEFT`
-`KEY_RIGHT` `KEY_L` `KEY_R`
+`KEY_A` `KEY_B` `KEY_X` `KEY_Y` `KEY_SELECT` `KEY_START` `KEY_UP` `KEY_DOWN`
+`KEY_LEFT` `KEY_RIGHT` `KEY_L` `KEY_R`
 
 HOME is not in this list: the runtime handles it for you (see above).
 
@@ -331,8 +441,9 @@ You cannot declare a variable or function that reuses a predefined name.
 
 ## What Auric still leaves out
 
-Structs, pointers, `for` loops, string operations, float<->int conversion,
-multi-dimensional arrays, and passing arrays to functions. The scope stays
+Structs, pointers, `for` loops, string operations (joining, slicing; `==`
+compares), float<->int conversion, multi-dimensional arrays, and passing
+arrays to functions. The scope stays
 deliberately small; these are candidates for later versions.
 
 Flatten a 2D grid by hand until then, `board[row * WIDTH + col]`, as

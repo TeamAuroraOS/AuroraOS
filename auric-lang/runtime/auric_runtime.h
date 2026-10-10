@@ -62,6 +62,50 @@ int aur_touch_in(int x, int y, int w, int h);
  * control to AuroraOS and never comes back. Called from every built-in. */
 void aur_check_home(void);
 
+/* `==` and `!=` on strings: the same text. */
+int aur_str_eq(const char *a, const char *b);
+
+/* The network (src/os/AppNet.c): the Wi-Fi network saved in Settings > Wi-Fi,
+ * plain HTTP. Each call waits until it is done; the screens keep their last
+ * frame meanwhile and HOME leaves once it is over. A string these return
+ * stays valid until the next request (http_get, http_post, http_download). */
+/* net_connect(): joins the saved network unless already on one. */
+int aur_net_connect(void);
+/* net_online(): the Wi-Fi link is up. */
+int aur_net_online(void);
+/* net_error(): why the last network call failed, "" if it did not. */
+const char *aur_net_error(void);
+/* net_address(): the console's address, "" when not connected. */
+const char *aur_net_address(void);
+/* http_get(url), http_post(url, body): the reply's status (200, 404, ...),
+ * or 0 when none came. */
+int aur_http_get(const char *url);
+int aur_http_post(const char *url, const char *body);
+/* For the next request: a query parameter (URL-encoded here), or a header. A
+ * post with an empty body sends the parameters as its body, a form. */
+void aur_http_param(const char *name, const char *value);
+void aur_http_param_int(const char *name, int value);
+void aur_http_header(const char *name, const char *value);
+/* The last reply's body as text, its length in bytes, its lines. */
+const char *aur_http_text(void);
+int aur_http_length(void);
+int aur_http_lines(void);
+const char *aur_http_line(int n);
+/* http_save(path): the last reply's body into a file. */
+int aur_http_save(const char *path);
+/* http_download(url, path): a file of any size, in pieces. */
+int aur_http_download(const char *url, const char *path);
+/* The last reply as JSON, by a path of member names and array indices
+ * separated by dots ("items.0.name"; "" is the whole document). */
+int aur_json_has(const char *path);
+int aur_json_int(const char *path);
+float aur_json_float(const char *path);
+int aur_json_bool(const char *path);
+const char *aur_json_string(const char *path);
+int aur_json_count(const char *path);
+/* json_index(n): what a "#" in the paths that follow stands for. */
+void aur_json_index(int n);
+
 #define AUR_BLACK     0x000000
 #define AUR_WHITE     0xFFFFFF
 #define AUR_RED       0xFF0000
@@ -88,5 +132,7 @@ void aur_check_home(void);
 #define AUR_KEY_DOWN   (1 << 7)
 #define AUR_KEY_R      (1 << 8)
 #define AUR_KEY_L      (1 << 9)
+#define AUR_KEY_X      (1 << 10)
+#define AUR_KEY_Y      (1 << 11)
 
 #endif

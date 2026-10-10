@@ -47,6 +47,32 @@ BUILTINS: dict[str, Builtin] = {
     "play_music":  Builtin(("int",), "void", "aur_play_music"),
     "stop_music":  Builtin((), "void", "aur_stop_music"),
     "stop_sounds": Builtin((), "void", "aur_stop_sounds"),
+    # The network: the Wi-Fi network saved in Settings, plain HTTP. Strings
+    # these return stay valid until the next request.
+    "net_connect": Builtin((), "bool", "aur_net_connect"),
+    "net_online":  Builtin((), "bool", "aur_net_online"),
+    "net_error":   Builtin((), "string", "aur_net_error"),
+    "net_address": Builtin((), "string", "aur_net_address"),
+    "http_get":    Builtin(("string",), "int", "aur_http_get"),
+    "http_post":   Builtin(("string", "string"), "int", "aur_http_post"),
+    "http_param":  Builtin(("string", "string"), "void", "aur_http_param"),
+    "http_param_int": Builtin(("string", "int"), "void", "aur_http_param_int"),
+    "http_header": Builtin(("string", "string"), "void", "aur_http_header"),
+    "http_text":   Builtin((), "string", "aur_http_text"),
+    "http_length": Builtin((), "int", "aur_http_length"),
+    "http_lines":  Builtin((), "int", "aur_http_lines"),
+    "http_line":   Builtin(("int",), "string", "aur_http_line"),
+    "http_save":   Builtin(("string",), "bool", "aur_http_save"),
+    "http_download": Builtin(("string", "string"), "bool", "aur_http_download"),
+    # Values in the last reply, read as JSON, by path: "list.0.name".
+    "json_has":    Builtin(("string",), "bool", "aur_json_has"),
+    "json_int":    Builtin(("string",), "int", "aur_json_int"),
+    "json_float":  Builtin(("string",), "float", "aur_json_float"),
+    "json_bool":   Builtin(("string",), "bool", "aur_json_bool"),
+    "json_string": Builtin(("string",), "string", "aur_json_string"),
+    "json_count":  Builtin(("string",), "int", "aur_json_count"),
+    # What "#" stands for in the paths that follow.
+    "json_index":  Builtin(("int",), "void", "aur_json_index"),
 }
 
 
@@ -84,4 +110,6 @@ CONSTANTS: dict[str, Const] = {
     "KEY_DOWN":   Const("int", "AUR_KEY_DOWN"),
     "KEY_R":      Const("int", "AUR_KEY_R"),
     "KEY_L":      Const("int", "AUR_KEY_L"),
+    "KEY_X":      Const("int", "AUR_KEY_X"),
+    "KEY_Y":      Const("int", "AUR_KEY_Y"),
 }

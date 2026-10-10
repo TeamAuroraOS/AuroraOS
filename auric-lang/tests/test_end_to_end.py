@@ -84,6 +84,15 @@ class FullBuildTest(unittest.TestCase):
             aurc.compile_file(src, out, build_dir=Path(d) / "build")
             self.assertEqual(out.read_bytes()[:4], b"AUR1")
 
+    def test_build_net(self):
+        # The network built-ins: links src/os/AppNet.c, WiFiJoin.c, Crypto.c
+        # and Json.c.
+        src = AURIC_ROOT / "examples" / "net.aur"
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "net.bin"
+            aurc.compile_file(src, out, build_dir=Path(d) / "build")
+            self.assertEqual(out.read_bytes()[:4], b"AUR1")
+
     def test_embedded_icon_at_fixed_offset(self):
         from compiler import icon as icon_mod
         src = AURIC_ROOT / "examples" / "hello.aur"

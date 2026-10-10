@@ -16,6 +16,27 @@ def bad(src: str) -> AuricError:
     raise AssertionError("expected a type error, but checking succeeded")
 
 
+class NetTypeCheckTest(unittest.TestCase):
+    def test_net_builtins(self):
+        ok('fn main() { let up: bool = net_online(); let e: string = net_error(); '
+           'http_header("X-Key", "k"); http_param("q", "a b"); '
+           'let st: int = http_get("http://example.com/"); '
+           'let n: int = http_lines(); let l: string = http_line(0); '
+           'json_index(2); let c: int = json_count("items"); '
+           'let saved: bool = http_save("Aurora/x.txt"); }')
+
+    def test_http_get_needs_a_string(self):
+        e = bad("fn main() { let st = http_get(5); }")
+        self.assertIn("expects string", str(e))
+
+    def test_string_comparison_is_not_a_constant(self):
+        e = bad('let same = "a" == "b"; fn main() {}')
+        self.assertIn("constant expression", str(e))
+
+    def test_net_names_are_reserved(self):
+        bad("fn http_get() {} fn main() {}")
+
+
 class TypeCheckTest(unittest.TestCase):
     def test_minimal_main(self):
         ok("fn main() {}")

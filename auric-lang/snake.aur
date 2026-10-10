@@ -1,0 +1,206 @@
+// Snake for Auric. D-pad: steer; A: play again after a game over.
+//
+//   python -m compiler.aurc build snake.aur -o SNAKE.BIN
+//   then copy SNAKE.BIN to SD:\Aurora\Apps\
+
+let GRID_W: int = 20;
+let GRID_H: int = 14;
+let CELL: int = 16;
+let MAX_LEN: int = 280;    // GRID_W * GRID_H
+let HUD_Y: int = 224;      // GRID_H * CELL
+
+let C_BG: int = 0x000000;
+let C_BODY: int = 0x00FF00;
+let C_HEAD: int = 0xFFFFFF;
+let C_FOOD: int = 0xFF0000;
+let C_TEXT: int = 0xFFFFFF;
+
+let snake_x: int[280];
+let snake_y: int[280];
+let snake_len: int = 0;
+let dir: int = 1;          // 0=up 1=right 2=down 3=left
+let next_dir: int = 1;
+let food_x: int = 0;
+let food_y: int = 0;
+let score: int = 0;
+let best: int = 0;
+let alive: bool = true;
+let move_every: int = 8;   // frames between moves
+
+fn rand_below(n: int) -> int {
+    return rand(n);   // rand takes the exclusive upper bound
+}
+
+fn place_food() {
+    let tries = 0;
+    while (tries < 500) {
+        let fx = rand_below(GRID_W);
+        let fy = rand_below(GRID_H);
+        let clash = false;
+        let i = 0;
+        while (i < snake_len) {
+            if (snake_x[i] == fx && snake_y[i] == fy) {
+                clash = true;
+                break;
+            }
+            i = i + 1;
+        }
+        if (!clash) {
+            food_x = fx;
+            food_y = fy;
+            return;
+        }
+        tries = tries + 1;
+    }
+    food_x = 0;
+    food_y = 0;
+}
+
+fn reset() {
+    snake_len = 4;
+    snake_x[0] = 6;  snake_y[0] = 6;
+    snake_x[1] = 5;  snake_y[1] = 6;
+    snake_x[2] = 4;  snake_y[2] = 6;
+    snake_x[3] = 3;  snake_y[3] = 6;
+    dir = 1;
+    next_dir = 1;
+    score = 0;
+    alive = true;
+    move_every = 8;
+    place_food();
+}
+
+fn steer(d: int) {
+    // a 180-degree turn is ignored
+    if ((next_dir + 2) % 4 == d) {
+        return;
+    }
+    next_dir = d;
+}
+
+fn advance() {
+    dir = next_dir;
+
+    let hx = snake_x[0];
+    let hy = snake_y[0];
+    if (dir == 0) { hy = hy - 1; }
+    if (dir == 1) { hx = hx + 1; }
+    if (dir == 2) { hy = hy + 1; }
+    if (dir == 3) { hx = hx - 1; }
+
+    if (hx < 0 || hx >= GRID_W || hy < 0 || hy >= GRID_H) {
+        alive = false;
+        return;
+    }
+
+    let grow = (hx == food_x && hy == food_y);
+
+    // The tail leaves its cell this move unless the snake grows.
+    let limit = snake_len;
+    if (!grow) {
+        limit = snake_len - 1;
+    }
+    let i = 0;
+    while (i < limit) {
+        if (snake_x[i] == hx && snake_y[i] == hy) {
+            alive = false;
+            return;
+        }
+        i = i + 1;
+    }
+
+    if (grow) {
+        if (snake_len < MAX_LEN) {
+            snake_len = snake_len + 1;
+        }
+    }
+    let j = snake_len - 1;
+    while (j > 0) {
+        snake_x[j] = snake_x[j - 1];
+        snake_y[j] = snake_y[j - 1];
+        j = j - 1;
+    }
+    snake_x[0] = hx;
+    snake_y[0] = hy;
+
+    if (grow) {
+        score = score + 1;
+        if (score > best) {
+            best = score;
+        }
+        if (move_every > 3) {
+            move_every = move_every - 1;
+        }
+        place_food();
+    }
+}
+
+fn draw_cell(gx: int, gy: int, color: int) {
+    let px = gx * CELL;
+    let py = gy * CELL;
+    fill_rect(px, py, CELL - 1, CELL - 1, color);
+}
+
+fn draw() {
+    clear(C_BG);
+
+    draw_cell(food_x, food_y, C_FOOD);
+
+    // tail first, so the head is drawn on top
+    let i = snake_len - 1;
+    while (i >= 0) {
+        if (i == 0) {
+            draw_cell(snake_x[i], snake_y[i], C_HEAD);
+        } else {
+            draw_cell(snake_x[i], snake_y[i], C_BODY);
+        }
+        i = i - 1;
+    }
+
+    print("Score:", 4, HUD_Y + 4, C_TEXT);
+    print_int(score, 64, HUD_Y + 4, C_BODY);
+    print("Best:", 160, HUD_Y + 4, C_TEXT);
+    print_int(best, 220, HUD_Y + 4, C_BODY);
+
+    if (!alive) {
+        print("GAME OVER", 116, 96, C_FOOD);
+        print("Press A", 132, 116, C_TEXT);
+    }
+}
+
+fn main() {
+    buffered(true);
+    reset();
+
+    let frame = 0;
+    let last_move = 0;
+
+    while (true) {
+        // Auric has no int-to-bool conversion: key bits are compared with 0.
+        let pressed = keys_down();
+
+        if ((pressed & KEY_UP) != 0)    { steer(0); }
+        if ((pressed & KEY_RIGHT) != 0) { steer(1); }
+        if ((pressed & KEY_DOWN) != 0)  { steer(2); }
+        if ((pressed & KEY_LEFT) != 0)  { steer(3); }
+
+        if ((pressed & KEY_A) != 0) {
+            if (!alive) {
+                reset();
+                last_move = frame;
+            }
+        }
+
+        if (alive) {
+            if (frame - last_move >= move_every) {
+                advance();
+                last_move = frame;
+            }
+        }
+        frame = frame + 1;
+
+        draw();
+        present();
+        delay(16);  // about 60 fps; the snake moves every `move_every` frames
+    }
+}

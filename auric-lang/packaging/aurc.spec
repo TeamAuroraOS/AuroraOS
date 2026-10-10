@@ -26,11 +26,17 @@ AURORA_SOURCES = [
     ("diskio.c", "aurora_src"),
     ("sdmmc.c", "aurora_src"),
     ("string.c", "aurora_src"),
+    (os.path.join("os", "AppNet.c"), os.path.join("aurora_src", "os")),
+    (os.path.join("os", "WiFiJoin.c"), os.path.join("aurora_src", "os")),
+    (os.path.join("os", "Crypto.c"), os.path.join("aurora_src", "os")),
+    (os.path.join("os", "Json.c"), os.path.join("aurora_src", "os")),
 ]
 
 datas = [
     (os.path.join(AURIC, "runtime", "auric_runtime.c"), "runtime"),
     (os.path.join(AURIC, "runtime", "auric_runtime.h"), "runtime"),
+    (os.path.join(AURIC, "runtime", "auric_net.c"), "runtime"),
+    (os.path.join(AURIC, "runtime", "auric_internal.h"), "runtime"),
     (os.path.join(AURIC, "runtime", "auric_start.s"), "runtime"),
     (os.path.join(AURIC, "runtime", "auric.ld"), "runtime"),
     (os.path.join(AURIC, "tools", "aur_pack.py"), "tools"),

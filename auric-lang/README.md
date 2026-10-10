@@ -17,6 +17,10 @@ fn main() {
 }
 ```
 
+Apps can also be written directly in C with the SDK in
+[`../sdk`](../sdk/README.md); those are `AURC` apps, the same container
+with their own magic.
+
 ## How it works
 
 ```
@@ -150,8 +154,9 @@ auric-lang/
   runtime/     C shim (built-ins -> AuroraOS API), crt0 (auric_start.s), linker script
   tools/       aur_pack.py | AUR1 container packer/inspector (forked from aos_pack.py)
                sound_prep.py | small mono WAV copies for an app's sound folder
-  examples/    hello.aur, demo.aur, paint.aur (both screens and touch)
-  docs/        language.md | the full v0.4 language reference
+  examples/    hello.aur, demo.aur, paint.aur (both screens and touch),
+               net.aur (the network: HTTP and JSON)
+  docs/        language.md | the full v0.5 language reference
   tests/       unittest suite for every compiler stage + end-to-end build
   packaging/   PyInstaller spec + build_exe.py for the standalone aurc.exe
 ```
@@ -169,8 +174,12 @@ See [`docs/language.md`](docs/language.md) for the complete reference. In brief:
   `clear`, `fill_rect`), buttons (`keys_down`, `keys_held`, `wait_key`), touch
   on the bottom screen (`touch_down`, `touch_held`, `touch_up`, `touch_x`,
   `touch_y`, `touch_in`), frame control (`buffered`, `present`),
-  timing (`millis`, `rand`, `delay`), and sound from the SD card
-  (`load_sound`, `play_sound`, `play_music`, `stop_music`, `stop_sounds`).
+  timing (`millis`, `rand`, `delay`), sound from the SD card
+  (`load_sound`, `play_sound`, `play_music`, `stop_music`, `stop_sounds`),
+  and the network over the Wi-Fi network saved in Settings: plain HTTP
+  (`net_connect`, `http_get`, `http_post`, `http_param`, `http_download`)
+  and values from JSON replies (`json_string`, `json_int`, ...).
+* `==` and `!=` compare strings by their text.
 
 A complete game built on all of this lives in
 [`../Games/Tetris_Source/Tetris.aur`](../Games/Tetris_Source/Tetris.aur).

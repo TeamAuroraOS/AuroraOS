@@ -198,6 +198,11 @@ class CodeGen:
         if isinstance(expr, ast.UnaryExpr):
             return f"({expr.op}{self._gen_expr(expr.operand)})"
         if isinstance(expr, ast.BinaryExpr):
+            # Strings compare by their text, not by where they are.
+            if expr.op in ("==", "!=") and expr.left.type == "string":
+                eq = (f"aur_str_eq({self._gen_expr(expr.left)}, "
+                      f"{self._gen_expr(expr.right)})")
+                return f"({eq})" if expr.op == "==" else f"(!{eq})"
             return (f"({self._gen_expr(expr.left)} {expr.op} "
                     f"{self._gen_expr(expr.right)})")
         if isinstance(expr, ast.CallExpr):

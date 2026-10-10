@@ -91,5 +91,31 @@ class ScreenTouchCodegenTest(unittest.TestCase):
         self.assertIn("int au_u = aur_touch_up();", c)
 
 
+class NetCodegenTest(unittest.TestCase):
+    def test_net_builtins_lower_to_shim(self):
+        c = compile_to_c('fn main() { if net_connect() { '
+                         'http_param_int("score", 5); '
+                         'let st = http_post("http://x/p", ""); '
+                         'let name: string = json_string("a.0.b"); '
+                         'let t: float = json_float("t"); } }')
+        self.assertIn("if (aur_net_connect()) {", c)
+        self.assertIn('aur_http_param_int("score", 5);', c)
+        self.assertIn('int au_st = aur_http_post("http://x/p", "");', c)
+        self.assertIn('const char * au_name = aur_json_string("a.0.b");', c)
+        self.assertIn('float au_t = aur_json_float("t");', c)
+
+    def test_string_equality_compares_text(self):
+        c = compile_to_c('fn main() { let s = net_error(); '
+                         'let a = s == "x"; let b = s != "y"; let n = 1 == 2; }')
+        self.assertIn('int au_a = (aur_str_eq(au_s, "x"));', c)
+        self.assertIn('int au_b = (!aur_str_eq(au_s, "y"));', c)
+        self.assertIn("int au_n = (1 == 2);", c)
+
+    def test_x_and_y_buttons(self):
+        c = compile_to_c("fn main() { wait_key(KEY_X); wait_key(KEY_Y); }")
+        self.assertIn("aur_wait_key(AUR_KEY_X)", c)
+        self.assertIn("aur_wait_key(AUR_KEY_Y)", c)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,98 @@
+// Net: the network built-ins. Joins the Wi-Fi network saved in Settings >
+// Wi-Fi, asks ip-api.com (plain HTTP, a JSON reply) where the console's
+// internet connection is, and sends a score to httpbin.org, which echoes it.
+// A: ask again   X: send a score   START: quit
+
+let score = 0;
+
+fn status_line(text: string, color: int) {
+    screen(BOTTOM);
+    fill_rect(0, 200, 320, 40, DARK_GRAY);
+    print(text, 8, 216, color);
+}
+
+fn failed(what: string) {
+    screen(TOP);
+    print(what, 8, 120, RED);
+    print(net_error(), 8, 136, ORANGE);
+}
+
+fn lookup() {
+    status_line("Asking ip-api.com...", WHITE);
+    let status = http_get("http://ip-api.com/json/");
+    screen(TOP);
+    clear(BLACK);
+    print("Where this console is online", 8, 8, AURORA);
+    if status != 200 {
+        failed("ip-api.com did not answer");
+        status_line("A: try again", WHITE);
+        return;
+    }
+    if json_string("status") != "success" {
+        print(json_string("message"), 8, 32, ORANGE);
+        status_line("A: try again", WHITE);
+        return;
+    }
+    print("Address:", 8, 32, GRAY);
+    print(json_string("query"), 88, 32, WHITE);
+    print("City:", 8, 48, GRAY);
+    print(json_string("city"), 88, 48, WHITE);
+    print("Region:", 8, 64, GRAY);
+    print(json_string("regionName"), 88, 64, WHITE);
+    print("Country:", 8, 80, GRAY);
+    print(json_string("country"), 88, 80, WHITE);
+    print("Provider:", 8, 96, GRAY);
+    print(json_string("isp"), 88, 96, WHITE);
+    status_line("A: again  X: send a score", WHITE);
+}
+
+fn send_score() {
+    score = score + rand(100);
+    status_line("Sending to httpbin.org...", WHITE);
+    http_param("player", "Auric");
+    http_param_int("score", score);
+    let status = http_post("http://httpbin.org/post", "");
+    screen(TOP);
+    fill_rect(0, 160, 400, 80, BLACK);
+    if status != 200 {
+        failed("httpbin.org did not answer");
+        return;
+    }
+    print("httpbin.org got player", 8, 168, GRAY);
+    print(json_string("form.player"), 200, 168, WHITE);
+    print("and score", 8, 184, GRAY);
+    print(json_string("form.score"), 200, 184, WHITE);
+    status_line("A: again  X: send a score", WHITE);
+}
+
+fn main() {
+    screen(BOTTOM);
+    clear(DARK_GRAY);
+    screen(TOP);
+    clear(BLACK);
+    print("Net: Auric on the internet", 8, 8, AURORA);
+    print("Joining the Wi-Fi network...", 8, 32, WHITE);
+    print("(the first time takes about 25 seconds)", 8, 48, GRAY);
+    if !net_connect() {
+        failed("Could not connect");
+        status_line("START: quit", WHITE);
+        wait_key(KEY_START);
+        return;
+    }
+    print("Connected as", 8, 64, GRAY);
+    print(net_address(), 120, 64, WHITE);
+    lookup();
+    while true {
+        let k = keys_down();
+        if (k & KEY_A) != 0 {
+            lookup();
+        }
+        if (k & KEY_X) != 0 {
+            send_score();
+        }
+        if (k & KEY_START) != 0 {
+            return;
+        }
+        delay(20000);
+    }
+}

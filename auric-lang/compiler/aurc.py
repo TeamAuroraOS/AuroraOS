@@ -52,8 +52,14 @@ AURORA_TOUCH9 = AURORA_SRC / "os" / "Touch9.c"
 AURORA_SOUND = [AURORA_SRC / name for name in
                 ("wavload.c", "ff.c", "ffunicode.c", "diskio.c", "sdmmc.c",
                  "string.c")]
+# The network built-ins: the OS's client for apps, the join's request and
+# WPA2 key, and the JSON reader. Dropped again from an app that does not
+# use them.
+AURORA_NET = [AURORA_SRC / "os" / name for name in
+              ("AppNet.c", "WiFiJoin.c", "Crypto.c", "Json.c")]
 
 RUNTIME_C = RUNTIME_DIR / "auric_runtime.c"
+RUNTIME_NET = RUNTIME_DIR / "auric_net.c"
 RUNTIME_START = RUNTIME_DIR / "auric_start.s"
 RUNTIME_LD = RUNTIME_DIR / "auric.ld"
 
@@ -146,11 +152,13 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     head_o = work / "aur_head_gen.o"
     prog_o = work / f"{stem}.o"
     runtime_o = work / "auric_runtime.o"
+    net_o = work / "auric_net.o"
     screen_o = work / "screen.o"
     i2c_o = work / "i2c.o"
     gpu9_o = work / "gpu9.o"
     touch9_o = work / "touch9.o"
     sound_o = [work / (src.stem + ".o") for src in AURORA_SOUND]
+    netlib_o = [work / ("os_" + src.stem + ".o") for src in AURORA_NET]
     start_o = work / "auric_start.o"
     elf = work / f"{stem}.elf"
     payload = work / f"{stem}.payload.bin"
@@ -159,19 +167,20 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     _run([cc, *ARM9_ASFLAGS, *includes, "-c", str(head_s), "-o", str(head_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(gen_c), "-o", str(prog_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(RUNTIME_C), "-o", str(runtime_o)], verbose)
+    _run([cc, *ARM9_CFLAGS, *includes, "-c", str(RUNTIME_NET), "-o", str(net_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_SCREEN), "-o", str(screen_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_I2C), "-o", str(i2c_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_GPU9), "-o", str(gpu9_o)], verbose)
     _run([cc, *ARM9_CFLAGS, *includes, "-c", str(AURORA_TOUCH9), "-o", str(touch9_o)], verbose)
-    for src, obj in zip(AURORA_SOUND, sound_o):
+    for src, obj in zip(AURORA_SOUND + AURORA_NET, sound_o + netlib_o):
         _run([cc, *ARM9_CFLAGS, *includes, "-c", str(src), "-o", str(obj)], verbose)
     _run([cc, *ARM9_ASFLAGS, "-c", str(RUNTIME_START), "-o", str(start_o)], verbose)
 
     # Link. Section placement (icon header first, then _start) is fixed by the
     # linker script, so object order here is not significant.
     _run([cc, *ARM9_LDFLAGS, str(head_o), str(start_o), str(prog_o), str(runtime_o),
-          str(screen_o), str(i2c_o), str(gpu9_o), str(touch9_o),
-          *map(str, sound_o),
+          str(net_o), str(screen_o), str(i2c_o), str(gpu9_o), str(touch9_o),
+          *map(str, sound_o), *map(str, netlib_o),
           "-o", str(elf), "-lgcc"], verbose)
 
     _run([objcopy, "-O", "binary", str(elf), str(payload)], verbose)
