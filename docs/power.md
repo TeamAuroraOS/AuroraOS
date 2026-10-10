@@ -11,7 +11,10 @@ startup, before the first status bar is drawn.
 
 | Register | Meaning | Confidence |
 |----------|---------|------------|
+| `0x0A` | Battery temperature, degrees C (`battery_temperature()`); the only temperature the console reports | 3dbrew I2C registers |
 | `0x0B` | Battery charge percentage, 0-100 | well established (`MCUHWC_GetBatteryLevel` reads this) |
+| `0x0C` | The percentage's fraction, /256 (`battery_tenths()` adds it) | 3dbrew I2C registers |
+| `0x0D` | System voltage on the load side, raw x 5/256 V (`battery_millivolts()`) | 3dbrew I2C registers |
 | `0x0F` | Power / charger flags | register is right; **the charging bit is not**, see below |
 | `0x30`..`0x36` | RTC: sec, min, hour, weekday, day, month, year, all BCD | confirmed on hardware |
 | `0x20` | Power control: bit 0 powers off, bit 2 reboots | bits from GodMode9; power-off confirmed on hardware |

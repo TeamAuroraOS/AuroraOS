@@ -110,7 +110,7 @@ looked up with DNS once per session, and again after a connection fails
    the file is written.
 
 Every request is HTTP/1.0 with `Host: 3ds.aurora3ds.xyz`,
-`User-Agent: AuroraOS/0.1.4` (the digits of `AURORA_VERSION`),
+`User-Agent: AuroraOS/0.1.5` (`AURORA_VERSION_NUM`),
 `Accept: application/json` and `Connection: close`, and a form body with its
 `Content-Length`. The reply is read until the server closes or until the
 `Content-Length` after the headers is in. The status code is the three digits
@@ -130,16 +130,17 @@ sends the request, collects the reply and closes, all in one go.
 |---|---|
 | `WifiNetIo` (`0x233B8100`) | `ip`, `port`, `req_len`, `timeout_ms` in; `status`, `resp_len`, `stage` (`WIFI_HTTP_CONNECT` / `SEND` / `WAIT` / `DONE`), `resent` out |
 | `WIFI_HTTP_REQ` (`0x233B9000`, 2 KB) | the request bytes, written by the ARM9 |
-| `WIFI_HTTP_RESP` (`0x233B9800`, 8 KB) | the reply bytes, headers included |
+| `WIFI_HTTP_RESP` (`0x23200000`, 1020 KB; 8 KB at `0x233B9800` before core 115) | the reply bytes, headers included |
 
 `wifi_http()` in `src/os/WiFi9.c` copies the request in, posts the command,
 waits with the screens drawn directly (like `wifi_net()`), and copies the reply
-out. The whole exchange is bounded by `timeout_ms` (at most 20 s; the account
+out, or with no buffer given leaves it in place (aShop's downloads read it
+there, see docs/store.md). The whole exchange is bounded by `timeout_ms` (at most 20 s; the account
 code asks for 15 s).
 
 Results: `WIFI_NETS_OK` (the reply is in), `TIMEOUT`, `NOLINK` (the link
 dropped), `NOHOST` (no router MAC), `REFUSED` (the server sent RST), `TOOBIG`
-(request over 2 KB or reply over 8 KB), `NOSEND`.
+(request over 2 KB or reply over 1020 KB), `NOSEND`.
 
 The TCP client in `src/os/Net11.c` is just enough for this:
 
@@ -148,7 +149,9 @@ The TCP client in `src/os/Net11.c` is just enough for this:
 - The SYN announces an MSS of 1200, so a full segment still fits one HTC frame
   (1664 bytes). There are no other options (no window scaling, SACK or
   timestamps), so the server sends none either. The window we announce is the
-  room left in the 8 KB reply buffer.
+  room left in the reply buffer, at most 8 KB (`NET_TCP_WND`): about what the
+  chip was seen to hold while frames were read slowly, and a segment it drops
+  costs everything sent behind it.
 - Data goes out in segments of at most 512 bytes, within the server's MSS and
   window. A request is one or two segments.
 - Received data is kept only when it continues the stream. A segment that
@@ -164,9 +167,10 @@ The TCP client in `src/os/Net11.c` is just enough for this:
 - IP fragments are not reassembled (Cloudflare sets DF and stays under the
   MSS).
 
-Each received frame is read from the chip a byte at a time (about 0.3 s for a
-full-size frame, docs/wifi.md *Path forward*). A typical Cloudflare reply of
-about 1 KB therefore takes a fraction of a second on top of the round trips.
+Since core 115 a network operation reads each received frame a 128-byte block
+per CMD53 on a faster SDIO clock (docs/wifi.md *The bus in network
+operations*); before, every byte took its own CMD52 at 523 kHz, about 0.3 s
+for a full-size frame.
 
 ## The QR code
 
@@ -184,7 +188,7 @@ so 164 and 180 pixels square.
 |---|---|---|
 | `0x233B8100` | 316 B | `WifiNetIo`, now with the HTTP fields |
 | `0x233B9000` | 2 KB | `WIFI_HTTP_REQ` |
-| `0x233B9800` | 8 KB | `WIFI_HTTP_RESP` (to `0x233BB800`, below `GpuShared` at `0x233C0000`) |
+| `0x23200000` | 1020 KB | `WIFI_HTTP_RESP` (to `0x232FF000`: above the core's stack top, below `AudioCtrl` at `0x23300000`) |
 
 `Account.c` keeps its own 2 KB request and 4 KB reply buffers in `.bss`, and
 `Qr.c` two 57x57 grids.

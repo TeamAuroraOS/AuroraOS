@@ -52,6 +52,13 @@ driver, and the Linux 3DS port's AR6014 support.
   once everything worked.
 - Core v114 adds a small TCP client: one HTTP exchange per command, which
   links the console to an Aurora account (works on hardware, 2026-10-04).
+- Core v115 reads frames a block per CMD53 on a faster SDIO clock during
+  network operations, instead of a byte per CMD52 at 523 kHz, and takes
+  replies of up to 1020 KB, for aShop's downloads (about 160 KB/s on a New
+  3DS, 2026-10-08).
+- Auric and C apps use the network through `src/os/AppNet.c`: they join the
+  saved network and make HTTP requests and downloads (2026-10-08; an Auric
+  app works on a New 3DS, the C SDK's example is untested on a console).
 
 ## Not done
 

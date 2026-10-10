@@ -15,6 +15,21 @@ code, so no PC is needed (see *Copying the firmware on the console*). The
 setup wizard's Network step leads to the same screen, and Settings > Wi-Fi
 and the copy speak English, Spanish and French.
 
+**Apps reach the network (2026-10-08; Auric's net example works on a New
+3DS).** Auric
+and C apps join the saved network, look up names, ping and make HTTP
+requests and downloads through the same core operations, with the ARM9
+side in `src/os/AppNet.c` (see *Apps on the network*).
+
+**Core v115 reads frames faster in network operations (2026-10-08, works on
+a New 3DS at about 160 KB/s).** Every received frame used to be read a byte per CMD52
+at the 523 kHz identification clock, about 0.3 s for a full one, which held
+aShop's downloads to about 4 KB a second. Network operations now read a
+128-byte block per CMD53 on the fastest clock the bus takes, up to 16.8 MHz,
+and the HTTP reply buffer grew from 8 KB to 1020 KB so aShop can ask for
+large pieces (see *The bus in network operations*). The boot and the join
+are unchanged.
+
 **Core v114 speaks TCP, and it works on hardware (New 3DS, 2026-10-04).** A new
 network operation, `WIFI_NETOP_HTTP`, makes one HTTP exchange over a TCP
 connection inside a single command: connect, send the request, collect the
@@ -341,7 +356,8 @@ Every transfer is padded to the 128-byte block size in both directions: the
 target only releases a frame once a whole block has moved. Reading just the
 frame (v85) left the rest of the block in the mailbox, so the next read came
 back stale and the write after it overflowed the target's FIFO. Sends are
-end-aligned like BMI commands; reads come back a byte at a time with CMD52.
+end-aligned like BMI commands; reads come back a byte at a time with CMD52
+(in network operations, a block per CMD53 since core 115).
 
 The handshake is four messages on endpoint 0, all in ath6kl's legacy layout,
 which is what this firmware speaks:
@@ -425,7 +441,7 @@ register dump `hi_failure_state` (HI + 0x04) points to, 60 words through
 A boot with `WIFI_OPT_CONNECT` (`0x80`) goes on, after the scan, to join the
 network in the request block `WifiReq` at `0x233B8000` (`include/wifi.h`):
 magic `WFRQ`, the SSID, and for a password the PMK made from it and a seed
-for the SNonce. The ARM9 writes it (`wifi_request()` in `src/os/WiFi9.c`)
+for the SNonce. The ARM9 writes it (`wifi_request()` in `src/os/WiFiJoin.c`)
 before posting the boot and wipes it when the core is done
 (`wifi_request_clear()`). The password itself never leaves the ARM9, and the
 PMK never reaches `WifiShared`.
@@ -551,13 +567,48 @@ answer is `WIFI_NETS_NOLINK`.
 | `DNS` | an A query for `name` to the DNS server DHCP gave (the router if none), up to three tries; `ip`, or `NONAME` (NXDOMAIN), `DNSFAIL`, `BADNAME`, `TIMEOUT` |
 | `PING` | one echo to `ip` with `seq`: 56 data bytes as Linux sends; `rtt_us`, `ttl`, `bytes`, `from`, or `ICMPERR` with the type and code of an unreachable or time-exceeded that quotes our echo |
 | `LEAVE` | `WMI_DISCONNECT`, and the session ends |
-| `HTTP` | one HTTP exchange over TCP with `ip`:`port` (core 114): the request at `WIFI_HTTP_REQ` (`0x233B9000`, 2 KB) goes out, the reply comes back at `WIFI_HTTP_RESP` (`0x233B9800`, 8 KB) until the server closes or its `Content-Length` is in; `resp_len`, `stage`, `resent`, or `REFUSED` (RST), `TOOBIG`, `TIMEOUT` |
+| `HTTP` | one HTTP exchange over TCP with `ip`:`port` (core 114): the request at `WIFI_HTTP_REQ` (`0x233B9000`, 2 KB) goes out, the reply comes back at `WIFI_HTTP_RESP` (`0x23200000`, 1020 KB; 8 KB at `0x233B9800` before core 115) until the server closes or its `Content-Length` is in; `resp_len`, `stage`, `resent`, or `REFUSED` (RST), `TOOBIG`, `TIMEOUT` |
 
 A frame for an address off our subnet goes to the router's MAC; one on the
 subnet first needs that host's MAC, asked for with ARP (one entry is kept).
 Each wait is `timeout_ms` (100 to 10000, 2000 by default; for `HTTP` it
 bounds the whole exchange, up to 20000). The TCP details are in
 docs/account.md, *The network underneath*.
+
+### The bus in network operations
+
+Since core 115, `wifi_net_op` switches the bus up for its operation
+(`wifi_bus_up` in `WiFi11.c`) and leaves it there until the next boot, whose
+`wifi_ctrl_init` starts again at 523 kHz:
+
+- **Frames by CMD53.** `wifi_htc_recv` reads a frame one HTC block (128
+  bytes) per CMD53 in byte mode, at the mailbox addresses the CMD52 reads
+  used, instead of one CMD52 per byte. As ath6kl does, the first four bytes
+  must equal the lookahead the frame was announced with.
+- **A faster clock.** The divider goes to the first of 16.8, 8.4, 4.2 and
+  2.1 MHz (`bus_divs`) at which four CCCR registers (revision, bus interface,
+  card capability, function 1's block size) read as they do at 523 kHz, 10 ms
+  after each switch as Linux's tmio driver waits.
+- **Stepping down.** A failed command or a header that does not match on the
+  fast clock drops the frame and moves one step down the ladder, for the
+  rest of the core's life (`g_bus_step`); a failed CMD53 has already reset
+  the controller to 523 kHz, and the rest of its frame is drained by CMD52. A
+  CMD53 read failing at 523 kHz goes back to CMD52 reads for good
+  (`g_rx53_bad`). A command that timed out never reached the chip, so its
+  block is still in the mailbox; any other failure took the block.
+- Only on a 1-bit bus (write styles 0 and 1), the width a failed CMD53
+  resets the controller to.
+- The poll while waiting for a frame is 1 ms instead of 10.
+
+`WifiShared` publishes the divider, whether CMD53 reads are on and the
+failed commands (`bus_div`, `bus_rx53`, `bus_errs`); the terminal's
+`systemctl status wifi` shows the clock, and "byte reads" when CMD53 reads
+were given up.
+
+The TCP window stays at 8 KB (`NET_TCP_WND`) whatever the buffer holds:
+about what the chip was seen to keep while frames took 0.3 s each. A larger
+window is the next thing to try once the faster reads are proven, since a
+segment the chip drops costs everything sent behind it (in-order data only).
 
 On the ARM9, `src/os/WiFi9.c` posts the command and waits for it with the
 screens drawn directly (`wifi_net()`), and `wifi_net_join()` in `os_main.c`
@@ -566,6 +617,46 @@ terminal's `ping` (docs/terminal.md)
 joins first when there is no session, shows the seconds while it does, then
 resolves the name and sends one echo a second. The status bar's Wi-Fi icon is
 white while a session is up (`wifi_online()`).
+
+### Apps on the network
+
+Auric and C apps use the network too (2026-10-08; checked on a PC against a
+simulated core, then Auric's `examples/net.aur` worked on a New 3DS; the C
+SDK's `net` example has not been tried on a console). An app has replaced the OS in
+memory, so `src/os/AppNet.c` (with `include/appnet.h`), which both the C SDK
+and the Auric runtime link, posts the core's commands itself as `WiFi9.c`
+does for the OS:
+
+- **Joining** (`appnet_join`): a `STATUS` first, since a session the OS or
+  another app left is still up; otherwise `SD:/Aurora/wifi/network.txt`,
+  the firmware staged at `WIFI_FW_ADDR` and `WifiReq` written, and a boot
+  with `CONNECT | STAY`, as `wifi_net_join()` does. The firmware staging
+  (`wifi_fw_stage`), the request (`wifi_request`, `wifi_request_clear`)
+  and the reason a join failed (`wifi_join_why`) are in
+  `src/os/WiFiJoin.c`, shared with the OS.
+- **DNS, ping, one TCP exchange** are `WIFI_NETOP_DNS`, `PING` and `HTTP`;
+  names are kept (eight) and looked up again when a server did not connect.
+- **HTTP** is built on the ARM9: HTTP/1.0 with `Host`, `Connection: close`
+  and `Accept-Encoding: identity`, the path percent-encoded, a
+  `Content-Length` for a body; the whole request within `WIFI_HTTP_REQ_MAX`
+  (2 KB). The reply is parsed in place at `WIFI_HTTP_RESP`: chunked bodies
+  undone, `Content-Length` and `Content-Range` read, and 301/302/303/307/308
+  followed up to five times (303, and 301/302 after a POST, become a GET).
+  `https://` is refused, as is a redirect to it (the 3xx comes back with the
+  reason).
+- **Downloads** (`appnet_download`) ask for Range pieces sized as aShop's
+  are (64 KB first, then 16 to 512 KB for about 3 s each, halved after a
+  failure that may pass), write them to `<path>.part` and rename it; a
+  server that ignores Range sends the whole file, which then must fit in
+  1020 KB.
+- Between posting and the acknowledgement the core does nothing else, so
+  the runtimes post nothing else: the SDK copies frames to framebuffer A by
+  the CPU for a `net_on_wait()` handler and drops sounds, and HOME pressed
+  meanwhile leaves once the call is over. A call needs core 115 or later
+  (`APPNET_CORE_VERSION`), where replies are at `0x23200000`.
+
+The APIs are in `sdk/README.md` (*The network*) and
+`auric-lang/docs/language.md` (*The network*).
 
 ## Settings > Wi-Fi
 
@@ -779,9 +870,9 @@ there into shared FCRAM before each boot. Main.type5 is copied but not used.
    host, which this one may not do; WPA2/WPA3 transition networks already
    work as WPA2.
 3. Make the boot's delays real (`wifi_ms` runs 6-8 times long, see *Status*;
-   the join already uses the timer), and move frames to CMD53 reads, the
-   4-bit bus and a faster clock: today every byte of a frame is read with its
-   own CMD52 at about 523 kHz, about 0.3 s for a full-size frame.
+   the join already uses the timer). Network operations read frames by CMD53
+   on a faster clock since core 115; the boot and the join could too once
+   that is proven, and the 4-bit bus and a larger TCP window are left.
 
 ## Reverse-engineering setup
 
@@ -801,7 +892,8 @@ HIF cluster `0x33800..0x33b50`; upload `0x330ac`, execute `0x33244`.
 
 The Wi-Fi driver code (the SDIO/BMI/HIF bring-up in `src/os/WiFi11.c`, plus
 `src/os/Net11.c`, `src/os/net11.h`, `src/os/Wpa11.c`, `src/os/wpa11.h`,
-`src/os/Crypto.c`, `include/crypto.h`, `src/os/WiFi9.c`, the
+`src/os/Crypto.c`, `include/crypto.h`, `src/os/WiFi9.c`,
+`src/os/WiFiJoin.c`, `src/os/AppNet.c`, `include/appnet.h`, the
 Wi-Fi parts of `src/os/os_main.c` (the Wi-Fi Test and Settings > Wi-Fi),
 and `include/wifi.h`) is
 licensed **GPL-2.0**, separately from the rest of AuroraOS. It derives register

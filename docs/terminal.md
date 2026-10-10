@@ -139,9 +139,11 @@ NAME
 * A first word with a `/` in it runs that file: `./Tetris.bin`,
   `/Aurora/Apps/Tetris.bin`.
 * A first word that is not a command runs `/Aurora/Apps/NAME`, or failing that
-  `/Aurora/Apps/NAME.bin`, from any folder: `Tetris`. Commands come first, so
+  `/Aurora/Apps/NAME.bin`, from any folder: `Tetris`. C apps are looked for
+  next, in `/Aurora/Apps/C` the same way: `Bricks`. Commands come first, so
   an app called `ls.bin` has to be run by its path.
-* Only an AOS1 or AUR1 container whose payloads lie inside the file is started.
+* Only an AOS1, AUR1 or AURC container whose payloads lie inside the file is
+  started.
   Otherwise the shell says why:
 
   | Message | Cause |
@@ -149,7 +151,7 @@ NAME
   | `aurora: X: command not found` | no command and no app by that name |
   | `aurora: X: No such file or directory` | the path does not exist |
   | `aurora: X: Is a directory` | the path is a folder |
-  | `aurora: X: cannot execute: not an Aurora app (see 'info')` | no AOS1 or AUR1 header |
+  | `aurora: X: cannot execute: not an Aurora app (see 'info')` | no AOS1, AUR1 or AURC header |
   | `aurora: X: cannot execute: the header points past the end of the file` | a damaged container |
   | `aurora: X: the app did not start` | the loader could not read it; the reason was on the bottom screen |
 
@@ -323,6 +325,7 @@ matches what opening the file would do. Each file prints a block:
 | Audio | rate, depth, channels and length (WAV and AAF) |
 | ARM9, ARM11 | payload size, load address and entry (apps) |
 | Icon | whether an app carries a Home Menu icon |
+| Data | a C app's (AURC) data folder, `/Aurora/Apps/C/<Name>`, which Aurora makes when it starts the app |
 | Execute | whether Aurora can run it, and how, or why not |
 | Open | what opens it, or why it cannot be opened |
 
@@ -330,14 +333,14 @@ What **Execute** and **Open** say:
 
 | File | Execute | Open |
 |------|---------|------|
-| AUR1 or AOS1 container | yes, with the command to type; no if the header points past the end of the file | the File Explorer runs it |
+| AUR1, AURC or AOS1 container | yes, with the command to type; no if the header points past the end of the file | the File Explorer runs it |
 | PNG, BMP, JPEG | no | the image viewer, unless: interlaced PNG; compressed BMP or a depth other than 8, 24 or 32 bits; JPEG other than baseline; over 6 MB; more pixels than the viewer holds; contents not a picture |
 | WAV | no | the File Explorer plays uncompressed 8 and 16-bit PCM; other formats do not play |
 | AAF | no | the Music app, from `/Aurora/Music`; not without an AAF1 header |
 | MP3 | no | not decoded yet; hex editor only |
 | TXT, LOG | no | the text viewer, and `cat` |
 | FIRM | no: boot it from Luma's chainloader | hex editor only |
-| other `.bin` | no: no AOS1 or AUR1 header | hex editor only |
+| other `.bin` | no: no AOS1, AUR1 or AURC header | hex editor only |
 | anything else | no | hex editor only |
 | folder | no | `cd`, or the File Explorer; also counts its folders and files |
 
@@ -455,9 +458,10 @@ ping [-c COUNT] [-W SECONDS] HOST
   line for each reply. A request with no reply in time prints `no answer yet
   for icmp_seq=N`, as Linux's `ping -O` does. SELECT stops, like Ctrl+C, and
   the statistics follow.
-* The times include the console's own polling of the Wi-Fi chip (every 10
-  ms) and reading the reply a byte at a time, so they read a few tens of
-  milliseconds high.
+* The times include the console's own polling of the Wi-Fi chip (every
+  millisecond) and reading the reply, so they read a little high. Before
+  core 115 the poll was every 10 ms and replies were read a byte at a time,
+  a few tens of milliseconds high.
 * Errors use Linux's wording: `ping: HOST: Name or service not known` for a
   name that does not exist, `Temporary failure in name resolution` when the
   DNS server does not answer, `From A.B.C.D icmp_seq=N Destination Host
@@ -567,7 +571,7 @@ Units can be named with or without their suffix (`audio` or `audio.service`):
 | `audio.service` | the core answers and is not parked | playing or idle |
 | `touch.service` | the core answers | default or custom calibration |
 | `gpu.service` | the GPU driver is up | jobs done |
-| `wifi.service` | the console is joined to a network | its address |
+| `wifi.service` | the console is joined to a network | its address, and the Wi-Fi bus clock of the last network operation (`byte reads` when the faster reads were given up; docs/wifi.md *The bus in network operations*) |
 | `sdcard.mount` | a card is mounted | free and total space |
 | `power.service` | the MCU answers | battery level, and whether it is charging |
 
@@ -589,7 +593,8 @@ audio.service   active   idle
 touch.service   active   custom calibration
 gpu.service     active   ready, 1234 jobs done
 wifi.service    active   joined, address
-                         10.48.199.94
+                         10.48.199.94, SDIO
+                         16.7 MHz
 sdcard.mount    active   12.2 of 30.5 GB free
 power.service   active   battery 87%, charging
 
@@ -615,7 +620,7 @@ uname [-a] [-s] [-n] [-r] [-m] [-o]
 |--------|--------|
 | `-s` | `AuroraOS` (the default) |
 | `-n` | the host, `n3ds` or `o3ds` |
-| `-r` | the version, for example `Beta v0.1.4` |
+| `-r` | the version, for example `Beta 6 v0.1.5` |
 | `-m` | `armv5tel`, the ARM9 |
 | `-o` | `AuroraOS` |
 | `-a` | all of the above, in that order |

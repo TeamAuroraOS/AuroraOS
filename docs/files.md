@@ -114,14 +114,14 @@ patch.
 ## What each file is
 
 The extension decides, except for `.bin`: an Aurora app container is a `.bin`
-like any other, so the first four bytes are read and checked for `AOS1` or
-`AUR1`. That check runs only over the `.bin` files in a folder, after the
+like any other, so the first four bytes are read and checked for `AOS1`,
+`AUR1` or `AURC` (`aurora_magic_kind()`). That check runs only over the `.bin` files in a folder, after the
 listing is built, rather than opening every entry.
 
 | Kind | Matches | Icon | A opens it with |
 |------|---------|------|-----------------|
 | Folder | directory | `files.png`, corners rounded | descends into it |
-| Aurora app | `.bin` with `AOS1`/`AUR1` | `Aurora-Bin-File.png` | the app launcher |
+| Aurora app | `.bin` with `AOS1`/`AUR1`/`AURC` | `Aurora-Bin-File.png` | the app launcher |
 | Image | `.png` `.jpg` `.jpeg` `.bmp` | `Media-File-Icon.png` | the viewer |
 | Audio | `.wav` `.mp3` `.aaf` | `Media-File-Icon.png` | WAV plays; MP3 offers the hex editor; see below |
 | Text | `.txt` `.log` | a ruled page, built from `Unkonwn File.png` | the text viewer |

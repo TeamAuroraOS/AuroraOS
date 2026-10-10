@@ -191,6 +191,39 @@ since core 84 replaced 83 without a power-off.
 | `AUDIO_CMD_NONE` | none; acked, which shows a core is running |
 | `AUDIO_CMD_PARK` | none; the core stops and waits for a new one |
 
+## Running an app's code on the ARM11
+
+From core 116, `AUDIO_CMD_RUN11` (13) calls ARM11 code that an app left in
+FCRAM: `arg0` is its address (ARM code, word aligned, in the first 128 MB of
+FCRAM), `arg1` the one argument it gets. `src/os/Run11.c` gives the call what
+Horizon gives an app, and takes it away again before the ack:
+
+- **The MMU, with a flat map**: every 1 MB section at its own address,
+  strongly ordered, except FCRAM's first 128 MB (on every model), which is
+  normal write-back, write-allocate memory, not shared. The table (16 KB, in
+  the core's `.bss`) is built the first time. Domain 0 is a manager domain,
+  so nothing is permission-checked.
+- **The L1 caches and branch prediction** (SCTLR `M`, `C`, `I`, `Z`, and `XP`
+  for the ARMv6 descriptor format). The New 3DS's L2 cache stays off.
+- **The VFP**: CPACR gives cp10 and cp11 to every mode and FPEXC.EN is set.
+  It stays enabled afterwards; the core's own code never uses it. The code
+  run should put the VFP in RunFast mode (flush-to-zero, default NaN), since
+  there is no support code for the cases that would otherwise trap.
+
+Before the call every cache and the TLB are cleaned or invalidated; after it
+the D-cache is cleaned and invalidated so the results are in memory, the
+SCTLR, TTBR0, TTBCR and DACR go back to what they were, and the caches and
+TLB are invalidated again. If the MMU was already on (someone else's map),
+the code just runs as things are. Interrupts stay masked throughout, and
+while the code runs the core does nothing else: no presents, no touch, no
+new sound. An exception in the code hangs the core (its vectors are not
+installed). The CPU stress test (`cpu-stress/`) is the user: it runs its
+workloads this way to measure the ARM11 as Horizon apps get it, and did so
+on a New 3DS at 804 MHz (2026-10-08).
+
+`AUDIO_CMD_N3DS` takes mode 0 from core 116 too, to go back to 268 MHz; it
+leaves the L2 controller's power and the GPU's New 3DS bits as they are.
+
 ## Audio files
 
 `.aaf` is a 16-byte header (`AAF1`, version, channels, bit depth, reserved,

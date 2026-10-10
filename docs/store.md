@@ -2,7 +2,8 @@
 
 aShop ("auroraShop" on its logo) is Aurora's app store. It shows the apps and
 games published on the Aurora Network, with news, and downloads them into
-`SD:/Aurora/Apps`, where the Home Menu shows them. The catalogue, the icons and
+`SD:/Aurora/Apps` (apps in C into `SD:/Aurora/Apps/C`), where the Home Menu
+shows them. The catalogue, the icons and
 the apps come from the account server (the `aurora-site/Account-API`
 repository; its `API.md`, section *aShop*, is the contract), so aShop needs an
 Aurora account linked to the console (see [`account.md`](account.md)).
@@ -51,7 +52,7 @@ the auroraShop logo in place of the usual icon and name card.
 | Connecting | the welcome screen, its card naming the step | a spinner |
 | Main | striped green background, the shopping bag, "Welcome to aShop!" | the section's name, the banner carousel, and Search / Go! / Options |
 | Section | the selected item's page | the section's apps or news as a list |
-| Page | the item's page, scrollable | an app's icon, version, size and state, with Download (or Update, or Download again); or a news item |
+| Page | the item's page, scrollable; "C SDK" under an app in C's name | an app's icon, name ("C SDK" under it for an app in C), version, size and state, with Download (or Update, or Download again); or a news item |
 | Download | a checkerboard floor, the app's card and a progress bar | the percentage, then the result, with Cancel or OK |
 | Search | the bag and "Search aShop" | the on-screen keyboard; then the results as a section |
 | Options | | Check for updates, Reload catalogue, About aShop |
@@ -79,11 +80,15 @@ again; the first then lists the apps with updates.
 
 ## Downloads
 
-An app comes in pieces of 6 KB (`GET /v1/store/files/<sha256>.bin` with a
-`Range` header), because each reply has to fit the Wi-Fi core's 8 KB reply
-buffer with Cloudflare's headers. Each piece is written to
-`SD:/Aurora/Apps/<file>.part`, which the Home Menu ignores, and hashed on the
-way. When all are in, the SHA-256 is compared with the catalogue's; only a
+An app comes in pieces (`GET /v1/store/files/<sha256>.bin` with a `Range`
+header) of 16 KB to 512 KB: each is sized from the speed the last one came
+at, to take about three seconds, so a slow link still answers well inside
+the 15 s timeout and a fast one spends its time on data rather than on
+connections. A failed piece halves the size. The reply stays in the Wi-Fi
+core's 1020 KB buffer (`WIFI_HTTP_RESP`) and is written from there. Each
+piece is written to
+`SD:/Aurora/Apps/<file>.part` (`Apps/C/<file>.part` for an app in C), which
+the Home Menu ignores, and hashed on the way. When all are in, the SHA-256 is compared with the catalogue's; only a
 match is renamed over any old copy, so a cancelled, failed or damaged download
 leaves the old app as it was. The version is recorded in `installed.txt`, and
 when aShop closes the Home Menu rescans the apps and shows the new one where
@@ -105,11 +110,13 @@ console was unlinked.
 The file is asked for by its hash, so a release published during a download
 cannot mix two versions.
 
-**Speed.** The Wi-Fi driver reads each received frame a byte at a time (about
-0.3 s for a full-size frame, see [`wifi.md`](wifi.md) *Path forward*), so a
-download moves at about 4 KB a second: Tetris (28 KB, five pieces) takes about
-ten seconds. Faster frame reads in the driver will speed aShop up with no
-change here.
+**Speed.** Up to core 114 the Wi-Fi driver read each received frame a byte
+per CMD52 at 523 kHz (about 0.3 s for a full-size frame), so a download moved
+at about 4 KB a second in 6 KB pieces. Since core 115 a network operation
+reads frames a block per CMD53 on a clock of up to 16.8 MHz (see
+[`wifi.md`](wifi.md) *The bus in network operations*); then the 8 KB TCP
+window and the round trip to Cloudflare set the pace. The download screen
+shows the average speed under the progress bar.
 
 While a piece comes in, the core is busy and cannot present frames (see
 `wifi_direct_on`), so the download screen's top is drawn in its backbuffer and
@@ -144,7 +151,7 @@ baseline JPEG both work.
 ## The catalogue
 
 `GET /v1/store/catalog` answers one JSON document, ASCII only (anything else as
-`\u` escapes), fetched in 6 KB pieces when it is larger:
+`\u` escapes), fetched in pieces as downloads are when it is larger:
 
 ```json
 {"v":1,
@@ -164,7 +171,8 @@ baseline JPEG both work.
 | | `kind` | `apps` (apps whose `in` names this section), `news` (every news item) or `updates` (every app with an update) |
 | app | `id`, `name`, `dev`, `version` | shown on the page and in lists |
 | | `size`, `sha256` | the file's length and hash, for the download and its check |
-| | `file` | its name in `SD:/Aurora/Apps` |
+| | `file` | its name in `SD:/Aurora/Apps`, or in `SD:/Aurora/Apps/C` for an app in C |
+| | `lang` | `c` for an app in C (an `AURC` file, made by the C SDK); absent for the rest |
 | | `icon` | the icon's name, also the name of the copy in `icons/`; "" for none |
 | | `in` | the sections it is listed in, separated by spaces |
 | | `text` | the page: the summary, the description, what is new, cut to about 700 characters |
@@ -183,12 +191,26 @@ starts again.
 
 ## Installed apps and updates
 
-An app counts as installed when its `file` is in `SD:/Aurora/Apps`, which is
-what the Home Menu shows too. `installed.txt` remembers the version aShop last
-put there, and an installed app has an update when that version differs from
-the catalogue's, or when aShop has no record of it (it was copied by hand).
-The count is in the status bar, the Download updates section lists them, and
-Options > Check for updates asks the server first.
+An app counts as installed when its `file` is in `SD:/Aurora/Apps` (an app in
+C: `SD:/Aurora/Apps/C`), which is what the Home Menu shows too.
+`installed.txt` remembers the version aShop last put there, and an installed
+app has an update when that version differs from the catalogue's, or when
+aShop has no record of it (it was copied by hand). An app found only in the
+other folder has an update too: its new version is in the other language, and
+the old copy is deleted once the new one is installed. The count is in the
+status bar, the Download updates section lists them, and Options > Check for
+updates asks the server first.
+
+## Apps in C
+
+Apps written with the C SDK ([`sdk/README.md`](../sdk/README.md)) are `AURC`
+files. The server records each release's magic; aShop asks for the catalogue
+with `?c=1`, and only then does it list apps in C (Beta v0.1.4 and older
+refuse `AURC`, so they are not offered them). Such an app carries
+`"lang":"c"`: aShop installs it into `SD:/Aurora/Apps/C` and writes "C SDK" in
+mint under its name, on the page's top card and on the bottom screen. The
+Home Menu shows "C SDK" under a C app's name too, and the store's website
+under the title on the app's page and in the lists.
 
 ## Publishing apps
 
@@ -210,7 +232,7 @@ up once per session and again after a connection fails, and reads the status,
 
 | Request | When |
 |---------|------|
-| `GET /v1/store/catalog` | opening aShop, Check for updates, Reload |
+| `GET /v1/store/catalog?c=1` | opening aShop, Check for updates, Reload |
 | `GET /v1/store/icons/<hash>.png` | an icon the card does not have |
 | `GET /v1/store/files/<sha256>.bin` | a download, piece by piece |
 
@@ -226,8 +248,8 @@ A `401` deletes the token (`account_forget()`) and closes aShop; a `403`
 | `0x25700000`, `0x26100000` | | the decoder's own scratch, as for the image viewer |
 
 In the OS's `.bss`: the catalogue (96 KB), its JSON tokens (50 KB), the text
-pool (64 KB), one reply (8 KB), an icon (16 KB) and the bar strip kept for
-scrolling (43 KB).
+pool (64 KB), an icon (16 KB) and the bar strip kept for scrolling (43 KB).
+Replies are read in place in the core's buffer at `0x23200000`.
 
 ## Art
 
@@ -290,7 +312,14 @@ fails as on the console (`FR_NOT_ENABLED`, and `FR_INVALID_OBJECT` for a
 join during a download); the new one writes, rejoins twice mid-download,
 resumes at the right length and installs the file byte for byte.
 On a New 3DS (2026-10-05) the catalogue, icons, downloads and the download
-screen drawn during pieces work. The download speed has not been measured.
+screen drawn during pieces work, at about 4 KB a second (core 114). With
+core 115's faster bus and larger pieces, downloads run at about 160 KB a
+second on a New 3DS (2026-10-08).
+
+Apps in C (2026-10-09): the server's tests take an `AURC` upload, list it only
+for `?c=1` with `"lang":"c"`, and show "C SDK" on the website and in the
+review queue. The OS builds with the console side; the page layout was checked
+against the fonts' line heights, not drawn. Not yet tried on a console.
 
 ## Console checklist
 
@@ -302,3 +331,6 @@ screen drawn during pieces work. The download speed has not been measured.
 5. Close and open aShop again: it should open quickly (no icons fetched).
 6. Turn the router off: aShop opens offline with the saved catalogue.
 7. Revoke the console on the website: aShop says it was unlinked.
+8. Publish an app in C (an `AURC` file): its page shows "C SDK" under the
+   name on both screens, it installs into `SD:/Aurora/Apps/C`, and the Home
+   Menu shows "C SDK" under it.
