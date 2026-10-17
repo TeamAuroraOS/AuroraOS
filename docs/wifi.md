@@ -82,7 +82,7 @@ joined: the terminal's network*), and Settings > Wi-Fi joins now stay up.
 Settings > Wi-Fi searches, lists the networks with signal and lock, and
 joins an open one when it is picked: the core scans, sends `WMI_CONNECT` the
 way Octoblimp's port found to work, then asks for an address over DHCP, finds
-the router with ARP and pings it four times, and leaves (see *Joining a
+the router with ARP and pings it once, and leaves (see *Joining a
 network*). A secured network's password can be typed and is saved, but
 joining one needs WPA2, which is not written yet. Each join writes
 `WiFi_Log.txt`, and the full test (X) adds a join of the saved network as its
@@ -488,8 +488,8 @@ IP stack. Type 2 frames are WMI events, as before.
 the link: DHCP (DISCOVER, OFFER, REQUEST, ACK; broadcast flag set, client id,
 host name `AuroraOS`), ARP (asking for the router, learning its MAC from any
 ARP it sends, answering for our own address) and ICMP echo (pinging the router,
-answering pings). DHCP is tried four times, 4 s each; ARP three times; then
-four pings, 2 s each. The round trip includes the 10 ms polling interval and
+answering pings). DHCP is tried four times, 4 s each; ARP three times; then one gateway ping,
+up to 2 s. The round trip includes the 10 ms polling interval and
 reading the reply a byte at a time, so it is an upper bound. At the end the
 core sends `WMI_DISCONNECT`, so the access point does not keep a station
 nobody serves, unless the boot asked to stay (next section).

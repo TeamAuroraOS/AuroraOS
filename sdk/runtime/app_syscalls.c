@@ -223,7 +223,8 @@ int usleep(useconds_t us) {
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem) {
-  if (!req || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L) {
+  if (!req || req->tv_sec < 0 || req->tv_nsec < 0 ||
+      req->tv_nsec >= 1000000000L) {
     errno = EINVAL;
     return -1;
   }

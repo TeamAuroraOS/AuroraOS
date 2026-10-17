@@ -34,6 +34,12 @@ static int load_blob(const char *path, u32 dst, u32 maxlen,
 int wifi_fw_stage(u32 main_type) {
   WifiFw *fw = (WifiFw *)WIFI_FW_ADDR;
   int ok = 1;
+  if (fw->magic == WIFI_FW_MAGIC && fw->main_type == main_type &&
+      fw->stubdata_len && fw->stubdata_len <= 0x1000u &&
+      fw->stubcode_len && fw->stubcode_len <= 0x1000u &&
+      fw->database_len && fw->database_len <= 0x1000u &&
+      fw->main_len && fw->main_len <= 0x60000u)
+    return 1;
   fw->magic = 0;
   fw->main_len = 0;
   fw->main_type = 0;

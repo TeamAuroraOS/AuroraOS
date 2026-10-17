@@ -16,6 +16,7 @@ import argparse
 import concurrent.futures
 import os
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -65,6 +66,7 @@ APP_CFLAGS = ARCH + ["-Wall", "-Wextra", "-g", "-ffunction-sections",
 LIBS = ["-Wl,--start-group", "-lc", "-lm", "-lgcc", "-Wl,--end-group"]
 
 LOAD_ADDR = 0x22000000
+APP_IMAGE_LIMIT = 0x22F00000
 HEADER_FMT = "<4sIIIIIIII"  # include/loader.h aos_header_t, 36 bytes
 
 ICON_SIZE = 32
@@ -231,11 +233,26 @@ def newest(paths) -> float:
     return max((p.stat().st_mtime for p in paths if p.exists()), default=0.0)
 
 
+def dependency_paths(path: Path) -> list[Path]:
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("\\\n", " ")
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        return []
+    return [Path(word) for word in words[1:]
+            if not word.endswith(":")]
+
+
 def compile_all(jobs: list, verbose: bool) -> None:
     """jobs: (source, object, flags); runs gcc on several at once."""
     def one(job):
         src, obj, flags = job
-        run([CC, *flags, "-c", src, "-o", obj], verbose)
+        dep = obj.with_suffix(".d")
+        run([CC, *flags, "-MMD", "-MP", "-MF", dep, "-c", src, "-o", obj],
+            verbose)
     workers = min(len(jobs), os.cpu_count() or 2) or 1
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
         for f in [pool.submit(one, j) for j in jobs]:
@@ -247,15 +264,16 @@ def runtime_objects(build_dir: Path, rebuild: bool, verbose: bool) -> list:
     a header or this script changes."""
     out = build_dir / "runtime"
     out.mkdir(parents=True, exist_ok=True)
-    deps = newest([*OS_INCLUDE.glob("*.h"), *SDK_INCLUDE.glob("*.h"),
-                   *RUNTIME_DIR.glob("*.h"), Path(__file__)])
     jobs, objs = [], []
     for src in RUNTIME_SOURCES + OS_SOURCES:
         root = RUNTIME_DIR if src.parent == RUNTIME_DIR else OS_SRC
         obj = out / (("" if root == RUNTIME_DIR else "os_") + obj_name(src, root))
         objs.append(obj)
+        dep_paths = dependency_paths(obj.with_suffix(".d"))
+        inputs = [src, *dep_paths]
         if (rebuild or not obj.exists()
-                or obj.stat().st_mtime < max(deps, src.stat().st_mtime)):
+                or (src.suffix != ".s" and not dep_paths)
+                or obj.stat().st_mtime < newest(inputs)):
             flags = ARCH if src.suffix == ".s" else RUNTIME_CFLAGS
             jobs.append((src, obj, flags))
     if jobs:
@@ -331,15 +349,27 @@ def build(inputs: list, output: Path | None, *, icon: Path | None = None,
     run([OBJCOPY, "-O", "binary", elf, payload], verbose)
 
     data = payload.read_bytes()
-    header = struct.pack(HEADER_FMT, magic.encode("ascii"), 36, len(data),
-                         LOAD_ADDR, LOAD_ADDR, 0, 0, 0, 0)
+    end = bss_end(elf)
+    if end and end > APP_IMAGE_LIMIT:
+        raise BuildError(
+            f"app image uses {end - LOAD_ADDR:,} bytes; "
+            f"the limit is {APP_IMAGE_LIMIT - LOAD_ADDR:,} bytes")
+    header = container_header(magic, len(data))
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(header + data)
 
-    end = bss_end(elf)
     print(f"Built {output} ({len(header) + len(data):,} bytes"
           + (f"; uses memory to {end:#010x}" if end else "") + ")")
     return output
+
+
+def container_header(magic: str, payload_size: int) -> bytes:
+    if magic not in ("AURC", "AUR1", "AOS1"):
+        raise BuildError(f"unsupported container magic: {magic}")
+    if payload_size < 0:
+        raise BuildError("payload size cannot be negative")
+    return struct.pack(HEADER_FMT, magic.encode("ascii"), 36, payload_size,
+                       LOAD_ADDR, LOAD_ADDR, 0, 0, 0, 0)
 
 
 def bss_end(elf: Path) -> int:
@@ -443,6 +473,54 @@ def cmd_version(_a) -> int:
     return 0
 
 
+def tool_version(name: str) -> str | None:
+    path = shutil.which(name)
+    if not path:
+        return None
+    try:
+        proc = subprocess.run([path, "--version"], capture_output=True,
+                              text=True, env=tool_env(), check=False)
+    except OSError:
+        return None
+    first = (proc.stdout or proc.stderr).splitlines()
+    return first[0] if first else path
+
+
+def cmd_doctor(_a) -> int:
+    """Check the tools and files needed to build an AuroraOS C app."""
+    checks = [
+        (CC, "ARM C compiler"),
+        (OBJCOPY, "ARM binary converter"),
+        (NM, "ARM symbol reader"),
+    ]
+    failed = False
+    print(f"aurcc doctor (SDK {__version__})")
+    for name, label in checks:
+        version = tool_version(name)
+        if version:
+            print(f"  [ok]   {label}: {version}")
+        else:
+            failed = True
+            print(f"  [fail] {label}: {name} was not found on PATH")
+    for path, label in (
+        (SDK_INCLUDE, "SDK headers"),
+        (RUNTIME_DIR, "SDK runtime"),
+        (LINKER_SCRIPT, "SDK linker script"),
+        (OS_INCLUDE, "AuroraOS headers"),
+        (OS_SRC, "AuroraOS sources"),
+    ):
+        if path.exists():
+            print(f"  [ok]   {label}: {path}")
+        else:
+            failed = True
+            print(f"  [fail] {label}: missing {path}")
+    if failed:
+        print("\nInstall devkitARM and run this command again.", file=sys.stderr)
+        return 1
+    print("All C SDK build prerequisites are available.")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="aurcc",
                                 description="Build AuroraOS apps written in C.")
@@ -481,6 +559,9 @@ def main(argv=None) -> int:
 
     v = sub.add_parser("version", help="print versions and the toolchain")
     v.set_defaults(func=cmd_version)
+
+    d = sub.add_parser("doctor", help="check C SDK build prerequisites")
+    d.set_defaults(func=cmd_doctor)
 
     a = p.parse_args(argv)
     return a.func(a)

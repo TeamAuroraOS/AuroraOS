@@ -1234,6 +1234,7 @@ static void wifi_wmi_stage(WifiShared *w, uint32_t stage) {
  * can pick it out: the strongest BSS with that SSID. */
 static uint8_t g_want[32];
 static uint32_t g_want_len;
+static uint32_t g_opts;
 static int g_have_pmk; /* a password was given; the PMK stays in WifiReq */
 static int g_tgt_ok;
 static uint8_t g_tgt_bssid[6];
@@ -1484,8 +1485,15 @@ static void wifi_wmi_scan(WifiShared *w, int style, int passive) {
 
   for (uint32_t i = 0; i < 35; i++)
     c[i] = 0;
-  c[0] = 1; /* entry */
-  c[1] = 2; /* ANY_SSID_FLAG */
+  c[0] = 0; /* entry */
+  if ((g_opts & WIFI_OPT_CONNECT) && g_want_len) {
+    c[1] = 1; /* SPECIFIC_SSID_FLAG */
+    c[2] = (uint8_t)g_want_len;
+    for (uint32_t i = 0; i < g_want_len; i++)
+      c[3 + i] = g_want[i];
+  } else {
+    c[1] = 2; /* ANY_SSID_FLAG */
+  }
   bad |= wifi_wmi_send(w, WMI_SET_PROBED_SSID_CMDID, c, 35, style);
 
   put16(c + 0, 0xFFFF); /* foreground start period, s */
@@ -1821,7 +1829,9 @@ static void wifi_net_run(WifiShared *w) {
     w->gw_mac[k] = n->gw_mac[k];
 
   wifi_conn_stage(w, WIFI_CONN_PING);
-  for (uint32_t s = 1; s <= 4u && g_link > 0; s++) {
+  /* DHCP and ARP establish the session. Keep one ping as a diagnostic, but
+   * avoid four serial two-second waits on routers that filter ICMP. */
+  for (uint32_t s = 1; s <= 1u && g_link > 0; s++) {
     g_net_want = NET_BIT(NET_RX_PING_REPLY);
     g_net_hit = 0;
     g_ping_seq = s;
@@ -2082,7 +2092,7 @@ static void wifi_join(WifiShared *w, int style, int stay) {
 }
 
 /* The boot options of the command in progress. */
-static uint32_t g_opts;
+
 
 #define WMI_DATA_BE_SVC 0x0101u /* then BK, VI, VO */
 

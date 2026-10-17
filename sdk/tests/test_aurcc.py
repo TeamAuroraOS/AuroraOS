@@ -8,6 +8,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zlib
 from pathlib import Path
 
@@ -89,6 +90,58 @@ class HeaderTests(unittest.TestCase):
         self.assertEqual(aurcc.safe_name('a"b\\c'), "a_b_c")
         self.assertEqual(aurcc.safe_name("Star Field (2)"), "Star Field (2)")
         self.assertEqual(aurcc.safe_name(""), "app")
+
+    def test_container_header_is_deterministic(self):
+        first = aurcc.container_header("AURC", 1234)
+        second = aurcc.container_header("AURC", 1234)
+        self.assertEqual(first, second)
+        self.assertEqual(struct.unpack("<4sIIIIIIII", first),
+                         (b"AURC", 36, 1234, 0x22000000, 0x22000000,
+                          0, 0, 0, 0))
+
+    def test_container_header_rejects_unknown_magic(self):
+        with self.assertRaises(aurcc.BuildError):
+            aurcc.container_header("TEST", 10)
+
+
+class DependencyTests(unittest.TestCase):
+    def test_dependency_paths_reads_continuation_lines(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "hello.d"
+            path.write_text("hello.o: hello.c include/a\\ b.h \\\n include/c.h\n")
+            self.assertEqual(aurcc.dependency_paths(path),
+                             [Path("hello.c"), Path("include/a b.h"),
+                              Path("include/c.h")])
+
+
+class DoctorTests(unittest.TestCase):
+    def test_doctor_succeeds_in_repository(self):
+        with mock.patch("builtins.print") as output:
+            self.assertEqual(aurcc.cmd_doctor(None), 0)
+        self.assertIn("All C SDK build prerequisites are available.",
+                      "\n".join(str(call.args[0]) for call in output.call_args_list))
+
+    def test_doctor_fails_when_compiler_is_missing(self):
+        with mock.patch.object(aurcc.shutil, "which",
+                              side_effect=lambda name:
+                              None if name == aurcc.CC else "/tool"):
+            with mock.patch("builtins.print"):
+                self.assertEqual(aurcc.cmd_doctor(None), 1)
+
+
+class RuntimeContractTests(unittest.TestCase):
+    def test_invalid_seek_origin_is_rejected(self):
+        source = (SDK / "runtime" / "app_fs.c").read_text()
+        self.assertIn("default:\n    return -EINVAL;", source)
+
+    def test_negative_nanosleep_seconds_are_rejected(self):
+        source = (SDK / "runtime" / "app_syscalls.c").read_text()
+        self.assertIn("req->tv_sec < 0", source)
+
+    def test_http_post_rejects_truncated_content_type(self):
+        source = (SDK / "runtime" / "app_net.c").read_text()
+        self.assertIn('(size_t)written >= sizeof(head)', source)
+        self.assertIn('g_err = "the content type is too long";', source)
 
 
 @unittest.skipUnless(shutil.which(aurcc.CC), "arm-none-eabi-gcc not on PATH")

@@ -40,6 +40,41 @@ bool app_fs_mount(void) {
 
 bool fs_available(void) { return app_fs_mount(); }
 
+bool fs_open(FsFile *file, const char *path, const char *mode) {
+  int flags = O_RDONLY;
+  if (!file || !mode)
+    return false;
+  if (strchr(mode, 'w'))
+    flags = O_WRONLY | O_CREAT | O_TRUNC;
+  else if (strchr(mode, 'a'))
+    flags = O_WRONLY | O_CREAT | O_APPEND;
+  if (strchr(mode, '+'))
+    flags = (flags & ~(O_RDONLY | O_WRONLY)) | O_RDWR;
+  file->fd = app_fs_open(path, flags);
+  return file->fd >= 0;
+}
+
+int fs_read(FsFile *file, void *buf, size_t size) {
+  return file ? app_fs_read(file->fd, buf, size) : -EBADF;
+}
+
+int fs_write(FsFile *file, const void *buf, size_t size) {
+  return file ? app_fs_write(file->fd, buf, size) : -EBADF;
+}
+
+long fs_seek(FsFile *file, long offset, int whence) {
+  return file ? app_fs_lseek(file->fd, offset, whence) : -EBADF;
+}
+
+bool fs_close(FsFile *file) {
+  int result;
+  if (!file || file->fd < 0)
+    return false;
+  result = app_fs_close(file->fd);
+  file->fd = -1;
+  return result == 0;
+}
+
 bool app_fs_path(const char *in, char *out, size_t max) {
   const char *p = in;
   size_t n = 2;
@@ -231,9 +266,19 @@ long app_fs_lseek(int fd, long off, int whence) {
   FRESULT r;
   if (!s)
     return -EBADF;
-  pos = whence == SEEK_CUR ? (long long)f_tell(&s->f)
-        : whence == SEEK_END ? (long long)f_size(&s->f)
-                             : 0;
+  switch (whence) {
+  case SEEK_SET:
+    pos = 0;
+    break;
+  case SEEK_CUR:
+    pos = (long long)f_tell(&s->f);
+    break;
+  case SEEK_END:
+    pos = (long long)f_size(&s->f);
+    break;
+  default:
+    return -EINVAL;
+  }
   pos += off;
   if (pos < 0 || pos > 0xFFFFFFFFLL)
     return -EINVAL;

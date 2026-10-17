@@ -29,6 +29,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -318,6 +319,17 @@ bool fs_mkdir(const char *path);
 /* True when the SD card can be read. */
 bool fs_available(void);
 
+/* A low-level streaming file handle. The handle is independent of stdio and
+ * is useful when an app should not buffer a whole file in memory. */
+typedef struct {
+  int fd;
+} FsFile;
+bool fs_open(FsFile *file, const char *path, const char *mode);
+int fs_read(FsFile *file, void *buf, size_t size);
+int fs_write(FsFile *file, const void *buf, size_t size);
+long fs_seek(FsFile *file, long offset, int whence);
+bool fs_close(FsFile *file);
+
 /* Since the app started. */
 uint32_t sys_millis(void);
 uint64_t sys_micros(void);
@@ -370,8 +382,10 @@ void sys_reboot(void) __attribute__((noreturn));
 
 /* The network, over the Wi-Fi network saved in Settings > Wi-Fi. Plain HTTP
  * only: AuroraOS has no TLS yet, so https:// addresses fail. Every call waits
- * until it is done. The first net_connect() takes about 25 seconds, a request
- * usually well under one (at most 15). Meanwhile the screens keep their last
+ * until it is done. The first net_connect() loads and starts Wi-Fi, scans for
+ * the saved SSID, and obtains an address; later joins can reuse staged
+ * firmware. A request is usually well under one second (at most 15).
+ * Meanwhile the screens keep their last
  * frame and the core can play no new sound or read touch and the circle pad,
  * unless a net_on_wait() handler draws something. HOME leaves once the call is
  * over. Needs app_from_home() and an AuroraOS as new as this SDK (ARM11
@@ -387,6 +401,24 @@ void sys_reboot(void) __attribute__((noreturn));
 
 /* Whether this app can use the network at all; net_error() says why not. */
 bool net_available(void);
+typedef enum {
+  AURORA_NET_OK = 0,
+  AURORA_NET_INVALID_ARGUMENT,
+  AURORA_NET_UNAVAILABLE,
+  AURORA_NET_BUSY,
+  AURORA_NET_NO_NETWORK,
+  AURORA_NET_TIMEOUT,
+  AURORA_NET_DNS,
+  AURORA_NET_CONNECTION,
+  AURORA_NET_PROTOCOL,
+  AURORA_NET_TOO_LARGE,
+  AURORA_NET_CANCELLED,
+  AURORA_NET_MEMORY,
+  AURORA_NET_IO,
+  AURORA_NET_UNSUPPORTED,
+} AuroraNetError;
+AuroraNetError net_error_code(void);
+const char *net_error_code_name(AuroraNetError code);
 /* Joins the saved network, unless the console is on it already (the Home
  * Menu, the Terminal or another app may have joined it). */
 bool net_connect(void);
@@ -447,6 +479,11 @@ void http_free(HttpResponse *r);
  * the size is unknown; it may draw and present. */
 bool http_download(const char *url, const char *path,
                    void (*progress)(size_t done, size_t total));
+/* Downloads in bounded pieces and calls sink for each piece. Returning false
+ * stops the transfer. The sink must not make network calls. */
+typedef bool (*HttpChunkSink)(const void *data, size_t size, size_t done,
+                              size_t total);
+bool http_download_stream(const char *url, HttpChunkSink sink);
 
 /* `text` percent-encoded for a query or a form ("a b&c" -> "a%20b%26c");
  * returns the length written, cut to fit `max` with its 0 byte. */

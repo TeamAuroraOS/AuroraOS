@@ -66,6 +66,21 @@ later builds only compile the app.
 
 `py sdk/aurcc.py version` checks that the compiler is found.
 
+`py sdk/aurcc.py doctor` checks the compiler, binary tools, SDK files and
+AuroraOS sources needed for a build, and reports any missing prerequisite.
+
+The SDK's GitHub Actions workflow runs the host tests, checks the toolchain,
+and cross-builds every example on SDK or platform-source changes.
+
+The API also exposes `FsFile` for bounded file reads and writes without
+loading a whole file into memory, `AuroraNetError`/`net_error_code()` for
+machine-readable network failures, and an optional header-only C++ wrapper at
+`include/aurora_app.hpp`. Network timeout/cancellation options and callback
+streaming require an OS-core command ABI that is not present in this release;
+`http_download()` already transfers in bounded pieces, and the new
+`http_download_stream()` reports `AURORA_NET_UNSUPPORTED` until that ABI is
+available. TLS remains unavailable; HTTPS must not be presented as secure.
+
 ## Writing an app
 
 ### The frame loop
@@ -152,8 +167,9 @@ if (r) {
 
 * `net_connect()` joins the saved network unless the console is on it already
   (aShop, the Terminal or another app may have joined it; a join stays up until
-  the console is turned off or the network drops). The first join takes about
-  25 seconds.
+  the console is turned off or the network drops). The first join loads the
+  Wi-Fi firmware, scans for the saved SSID, obtains DHCP and verifies the
+  gateway; the firmware remains staged for later joins in the same session.
 * `http_get()`, `http_post()` and `http_request()` (any method, extra header
   lines) return the response whatever its status, or NULL when none came, and
   follow redirects. The request, with its headers and body, must fit in 2 KB,
@@ -274,7 +290,8 @@ py sdk/aurcc.py build SOURCES... [-o APP.bin] [options]
 `SOURCES` are `.c` (and `.s`) files, or folders: a folder brings every `.c`
 inside it, at any depth (except folders named `build`), and its first
 `*.icon` as the icon. Without `-o` the app is named after the first source or
-folder.
+folder. GCC dependency files are kept beside cached objects, so changes to
+headers included from nested directories invalidate the affected objects.
 
 | Option | |
 |--------|--|
@@ -291,9 +308,13 @@ folder.
 
 Apps compile with the OS's ARM9 flags (`-mcpu=arm946e-s -march=armv5te
 -marm -O2`), `-Wall -Wextra`, and link with `--gc-sections`, so only the
-runtime code an app uses ends up in it: a `printf` hello world is about 87 KB,
+runtime code an app uses ends up in it. The linker enforces the 15 MiB
+code/data/BSS limit; each successful build reports the highest used address
+and fails if the limit is exceeded. A `printf` hello world is about 87 KB,
 the Bricks example 167 KB. The link map is left beside the objects
-(`sdk/build/apps/NAME/NAME.map`).
+(`sdk/build/apps/NAME/NAME.map`). Container headers contain no timestamps or
+other build-time data, so packaging the same payload with the same magic is
+deterministic.
 
 `py sdk/aurcc.py new NAME [--dir DIR]` starts a project: `NAME/main.c` (a
 small program to change) and `NAME/NAME.icon`.
@@ -309,6 +330,7 @@ The tool's own tests: `py sdk/tests/test_aurcc.py` (the build test runs when
 | [`examples/demo`](examples/demo/main.c) | a tour: shapes, all fonts, a ball the circle pad pushes, the clock and battery, painting with the stylus, **X** saves the picture as a BMP with stdio; `sprite.png` and `bounce.wav` in its data folder are used when there |
 | [`examples/bricks`](examples/bricks/main.c) | a breakout game: D-pad, circle pad or touch; the best score saved through `atexit()`; optional `paddle.wav`, `brick.wav`, `lost.wav` |
 | [`examples/net`](examples/net/main.c) | the network: joins with a spinner from `net_on_wait()`, fetches a page (A), pings a host (Y), downloads the page into its data folder (X) |
+| [`examples/tester`](examples/tester/main.c) | on-device regression suite: SDK filesystem seeks, invalid `nanosleep()` arguments, app data, clock, input, Wi-Fi, DNS, ping, HTTP GET/POST/custom requests, raw TCP and downloads |
 
 ```
 py sdk/aurcc.py build sdk/examples/bricks -o Bricks.bin

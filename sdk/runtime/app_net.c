@@ -16,6 +16,7 @@ static void (*g_progress)(size_t done, size_t total);
 static bool g_in_call;
 static bool g_home; /* HOME was pressed during the call */
 static const char *g_err; /* the SDK's own reason, over AppNet's */
+static AuroraNetError g_err_code;
 
 u32 appnet_ms(void) { return sys_millis(); }
 
@@ -42,6 +43,7 @@ static bool begin(void) {
     return false;
   }
   g_err = NULL;
+  g_err_code = AURORA_NET_OK;
   g_home = false;
   g_in_call = true;
   if (g_wait_fn)
@@ -58,6 +60,22 @@ static void end(void) {
 }
 
 const char *net_error(void) { return g_err ? g_err : appnet_error(); }
+
+AuroraNetError net_error_code(void) {
+  if (g_err_code != AURORA_NET_OK)
+    return g_err_code;
+  if (appnet_error()[0])
+    return AURORA_NET_CONNECTION;
+  return AURORA_NET_OK;
+}
+
+const char *net_error_code_name(AuroraNetError code) {
+  static const char *const names[] = {
+      "ok", "invalid-argument", "unavailable", "busy", "no-network",
+      "timeout", "dns", "connection", "protocol", "too-large", "cancelled",
+      "memory", "io", "unsupported"};
+  return code <= AURORA_NET_UNSUPPORTED ? names[code] : "unknown";
+}
 
 void net_on_wait(void (*fn)(uint32_t ms)) { g_wait_fn = fn; }
 
@@ -170,8 +188,13 @@ HttpResponse *http_get(const char *url) {
 HttpResponse *http_post(const char *url, const char *content_type,
                         const void *data, size_t length) {
   char head[256];
-  snprintf(head, sizeof(head), "Content-Type: %s\r\n",
-           content_type ? content_type : "application/x-www-form-urlencoded");
+  int written = snprintf(
+      head, sizeof(head), "Content-Type: %s\r\n",
+      content_type ? content_type : "application/x-www-form-urlencoded");
+  if (written < 0 || (size_t)written >= sizeof(head)) {
+    g_err = "the content type is too long";
+    return NULL;
+  }
   return http_request("POST", url, head, data, length);
 }
 
@@ -201,6 +224,7 @@ bool http_download(const char *url, const char *path,
   bool ok;
   if (!app_fs_path(path, fpath, sizeof(fpath))) {
     g_err = "the file name is not valid";
+    g_err_code = AURORA_NET_INVALID_ARGUMENT;
     return false;
   }
   if (!begin())
@@ -210,4 +234,12 @@ bool http_download(const char *url, const char *path,
   g_progress = NULL;
   end();
   return ok;
+}
+
+bool http_download_stream(const char *url, HttpChunkSink sink) {
+  (void)url;
+  (void)sink;
+  g_err = "streaming network sinks are not available in this OS core";
+  g_err_code = AURORA_NET_UNSUPPORTED;
+  return false;
 }
