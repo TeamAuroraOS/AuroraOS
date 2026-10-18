@@ -1,4 +1,4 @@
-# AuroraOS native apps in C
+# AuroraOS native apps in C and Python
 
 Apps for AuroraOS can be written in plain C as well as in
 [Auric](../auric-lang/README.md). A C app uses one header,
@@ -42,6 +42,7 @@ int main(void) {
 * [The C library](#the-c-library)
 * [Memory](#memory)
 * [Building](#building)
+* [Testing](#testing)
 * [Examples](#examples)
 * [How it works](#how-it-works)
 * [Limits](#limits)
@@ -71,6 +72,65 @@ AuroraOS sources needed for a build, and reports any missing prerequisite.
 
 The SDK's GitHub Actions workflow runs the host tests, checks the toolchain,
 and cross-builds every example on SDK or platform-source changes.
+
+## Python apps
+
+Python apps use a deliberately small, validated subset of Python and compile
+ahead of time to the same native `AURC` container as C apps. This keeps the
+existing loader, app data folders, HOME behavior and C SDK ABI unchanged; it
+is not a CPython port and arbitrary Python modules are not available.
+
+Install the host package from this directory:
+
+```
+python -m pip install ./sdk
+aurora-python new MyGame
+aurora-python build MyGame -o MyGame.bin
+aurora-python install MyGame.bin --sd-root /media/my-aurora-card
+```
+
+The source must define `main()` and may use `import aurora`. The initial API
+maps the frame loop, drawing primitives, button/touch state, and the color,
+screen and font constants to their C SDK equivalents:
+
+```python
+import aurora
+
+def main():
+    while aurora.loop():
+        aurora.clear(aurora.SCREEN_TOP, aurora.COLOR_BLACK)
+        aurora.text(aurora.SCREEN_TOP, 12, 10, aurora.COLOR_WHITE,
+                    "Hello from Python on AuroraOS!")
+        if aurora.keys_down():
+            break
+```
+
+Supported syntax and APIs are intentionally checked at build time. Unsupported
+imports, dynamic Python features, keyword arguments and values are reported as
+errors instead of producing a partially working app. The generated app uses
+the same image-size limit and devkitARM prerequisite as a C app.
+
+`install` copies an already-built app to the card's
+`Aurora/Apps/C/<name>.bin` location. Project-owned runtime files can be
+copied into the matching `Aurora/Apps/C/<name>/` data directory; the app can
+refer to that directory through the native SDK's app data APIs.
+
+## Testing
+
+The complete test procedure, including clean-host setup, cross-build
+verification, negative CLI tests, SD-card installation, and console smoke
+tests, is in [`TESTING.md`](TESTING.md). The shortest complete automated check
+is:
+
+```sh
+python sdk/tests/run_tests.py --cross-build
+```
+
+Host-only testing, which does not require devkitARM, is:
+
+```sh
+python sdk/tests/run_tests.py
+```
 
 The API also exposes `FsFile` for bounded file reads and writes without
 loading a whole file into memory, `AuroraNetError`/`net_error_code()` for

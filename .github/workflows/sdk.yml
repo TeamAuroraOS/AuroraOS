@@ -28,7 +28,11 @@ jobs:
           sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi \
             libnewlib-arm-none-eabi
       - name: Run SDK tests
-        run: python sdk/tests/test_aurcc.py
+        run: python sdk/tests/run_tests.py --cross-build
+      - name: Check Python SDK package
+        run: python -m pip install ./sdk
+      - name: Check Python SDK host tools
+        run: aurora-python doctor
       - name: Check SDK prerequisites
         run: python sdk/aurcc.py doctor
       - name: Build SDK examples
