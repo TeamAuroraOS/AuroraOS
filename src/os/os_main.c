@@ -33,6 +33,7 @@
 #include "wifi.h"
 #include "ff.h"
 #include "image.h"
+#include "lid.h"
 
 void delay(volatile u32 cycles) {
   while (cycles--)
@@ -40,7 +41,11 @@ void delay(volatile u32 cycles) {
 }
 
 /* HID pad bits 0..9 are A/B/Select/Start/D-pad/R/L; 10 and 11 are X and Y. */
-u32 get_keys(void) { return ~REG_HID_PAD & 0xFFF; }
+static int lid_resumed;
+u32 get_keys(void) {
+  lid_resumed = aurora_lid_wait_open();
+  return ~REG_HID_PAD & 0xFFF;
+}
 
 /* Only directions repeat while held; everything else is edge-triggered, so
  * holding A cannot relaunch an app. */
@@ -96,6 +101,15 @@ u32 get_keys_down(void) {
   crash_poll_arm11();
   u32 physical = get_keys();
   u32 cpad = cpad_directions();
+  if (lid_resumed) {
+    /* Ignore keys held through sleep so opening the lid does not trigger an
+     * accidental action. */
+    prev_physical_keys = physical;
+    prev_keys = physical | cpad;
+    last_physical_down = 0;
+    lid_resumed = 0;
+    return 0;
+  }
   if (physical & (BUTTON_DLEFT | BUTTON_DRIGHT))
     cpad &= ~(u32)(BUTTON_DLEFT | BUTTON_DRIGHT);
   if (physical & (BUTTON_DUP | BUTTON_DDOWN))

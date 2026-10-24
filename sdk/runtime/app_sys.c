@@ -5,6 +5,7 @@
 #include "power.h"
 #include "timer.h"
 #include "user.h"
+#include "lid.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -31,6 +32,12 @@ void app_wait_ticks(u64 ticks) {
   u64 now = app_ticks64(), end = now + ticks, next = now;
   u32 frame = timer_hz() / 60u;
   while (now < end) {
+    u64 before_lid = now;
+    if (aurora_lid_wait_open()) {
+      now = app_ticks64();
+      end += now - before_lid;
+      next = now;
+    }
     if (now >= next) {
       app_poll_home();
       crash_poll_arm11();

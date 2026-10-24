@@ -65,6 +65,19 @@ poweroff|reboot` use both. The crash handler keeps its own copy of the
 power-off sequence in `src/os/crash.c`, so a fault never depends on more code
 than it has to.
 
+## Lid pause
+
+The ARM11 core samples the lid sensor on GPIO1 bit 2. When it reports closed,
+the core blanks both backlights while continuing to service GPU and audio
+commands. The ARM9 OS, C SDK runtime and Auric runtime pause at their input and
+wait checkpoints until the shell opens; timed SDK waits extend by the time the
+lid stayed closed. Opening the shell restores the configured brightness and
+resumes input polling. The framebuffers stay in place.
+
+This is a cooperative software pause, not the console's hardware low-power
+state: bare-metal apps that never poll input or use the SDK wait functions can
+continue running while the lid is closed.
+
 Inside an app the system menu runs on the ARM11 core, so from core 118
 `src/power.c` and `src/i2c.c` are compiled a second time for the core
 (`build/os_power11.o`, `build/os_i2c11.o`) and the core calls the same

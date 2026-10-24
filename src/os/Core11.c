@@ -2,6 +2,10 @@
 #include "touch.h"
 #include "wifi.h"
 
+/* GPIO1 bit 2 follows the magnetic lid sensor (0 open, 1 closed). */
+#define GPIO1_DATA          0x10147000u
+#define GPIO1_SHELL_CLOSED  (1u << 2)
+
 /* Exception stubs from audio11_start.s, which capture a fault into the
  * cross-core crash block. */
 extern void crash_vec_undef11(void);
@@ -53,6 +57,8 @@ static const uint16_t bl_top2d[5] = {15, 33, 57, 75, 94};
 static const uint16_t bl_top3d[5] = {36, 80, 140, 187, 237};
 static const uint16_t bl_bot[5]   = {32, 71, 123, 162, 203};
 static int bl_level = -1;
+static int lid_blanked;
+static uint32_t lid_saved_top, lid_saved_bot;
 
 static void bl_panel(uint32_t base, uint32_t duty) {
   uint32_t pwm = LCD_BL_PWM(base);
@@ -68,7 +74,7 @@ static void bl_panel(uint32_t base, uint32_t duty) {
 }
 
 void backlight11_refresh(void) {
-  if (bl_level < 0)
+  if (bl_level < 0 || lid_blanked)
     return;
   bl_panel(LCD_TOP, (stereo11_is3d() ? bl_top3d : bl_top2d)[bl_level]);
   bl_panel(LCD_BOT, bl_bot[bl_level]);
@@ -161,10 +167,35 @@ static void core11_park(AudioCtrl *ct) {
   ((void (*)(void))AUDIO_PARK_ADDR)();
 }
 
+/* Blank the panel while closed, without stopping this command-service core.
+ * ARM9 runtimes pause at their input and wait checkpoints and continue when
+ * the shell opens. */
+void core11_sleep_poll(void) {
+  if (MMIO8(GPIO1_DATA) & GPIO1_SHELL_CLOSED) {
+    if (!lid_blanked) {
+      lid_saved_top = LCD_BL_DUTY(LCD_TOP);
+      lid_saved_bot = LCD_BL_DUTY(LCD_BOT);
+      lid_blanked = 1;
+      LCD_BL_DUTY(LCD_TOP) = 0;
+      LCD_BL_DUTY(LCD_BOT) = 0;
+    }
+  } else if (lid_blanked) {
+    lid_blanked = 0;
+    if (bl_level >= 0)
+      backlight11_refresh();
+    else {
+      LCD_BL_DUTY(LCD_TOP) = lid_saved_top;
+      LCD_BL_DUTY(LCD_BOT) = lid_saved_bot;
+    }
+  }
+  dsb();
+}
+
 void audio11_main(void) {
   AudioCtrl *ct = (AudioCtrl *)AUDIO_CTRL_ADDR;
   int poll_tick = 0;
   int menu_tick = 0;
+  uint32_t lid_tick = 0;
 
   ct->status = AUDIO_ST_BOOT;
   ct->ack_seq = ct->cmd_seq;
@@ -187,6 +218,12 @@ void audio11_main(void) {
   touch11_init();
 
   for (;;) {
+    /* Check about every 100-150 ms, depending on the selected New 3DS clock. */
+    if (++lid_tick >= 32768u) {
+      lid_tick = 0;
+      core11_sleep_poll();
+    }
+
     /* Polled before a pending command is taken, so an app waiting on its
      * present stays held there while the menu is open. */
     if (++menu_tick >= 16) {

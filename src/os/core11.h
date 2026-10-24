@@ -120,6 +120,9 @@ void gpu11_menu_restore(void);
  * runs even when an app does not call its C/Auric runtime. */
 void system_menu11_poll(void);
 
+/* Update the lid state and blank/restore the backlights without blocking. */
+void core11_sleep_poll(void);
+
 /* Keeps the New 3DS barrier's polarity alternating while it is in use; call
  * it often (Stereo11.c times it). */
 void stereo11_tick(void);

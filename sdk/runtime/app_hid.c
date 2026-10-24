@@ -4,6 +4,7 @@
 #include "crash.h"
 #include "touch.h"
 #include "user.h"
+#include "lid.h"
 
 #include <stdlib.h>
 
@@ -22,6 +23,7 @@ static int g_touch;            /* 0 not set up yet, 1 usable, -1 not */
 static bool g_touch_ignore = true; /* a touch from before the app started */
 
 static u32 pad(void) {
+  aurora_lid_wait_open();
   if (app_from_home()) {
     volatile AuroraSystemMenuShared *menu = aurora_system_menu_shared();
     for (;;) {

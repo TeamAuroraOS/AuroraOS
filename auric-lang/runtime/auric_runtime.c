@@ -15,6 +15,7 @@
 #include "auric_runtime.h"
 #include "auric_internal.h"
 #include "system_menu.h"
+#include "lid.h"
 
 /* ARM9 timers at 0x10003000: a value/reload register then a control register
  * per timer. Control bits 0-1 prescaler (/1, /64, /256, /1024), bit 2 count-up,
@@ -173,6 +174,7 @@ void delay(volatile u32 cycles) {
 
 /* Pad bits 0..9 are A/B/Select/Start/D-pad/R/L; 10 and 11 are X and Y. */
 u32 get_keys(void) {
+  aurora_lid_wait_open();
   if (aur_from_home()) {
     volatile AuroraSystemMenuShared *menu = aurora_system_menu_shared();
     for (;;) {

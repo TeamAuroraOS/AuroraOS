@@ -23,6 +23,7 @@
 static uint32_t menu_chord_latched;
 
 static uint32_t menu_keys(void) {
+  core11_sleep_poll();
   return ~MMIO32(HID_PAD_ADDR) & 0xFFFu;
 }
 
