@@ -118,6 +118,18 @@ $(BUILD_DIR)/arm9_%.o: $(SRC_DIR)/%.c $(wildcard $(INC_DIR)/*.h)
 	@echo [CC9 ] Compiling $<
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
+# The launcher embeds the few pack entries it draws (so it needs no SD read
+# before showing its menu); the header is regenerated when the pack changes.
+LAUNCHER_ASSETS := $(BUILD_DIR)/launcher_assets.h
+
+$(LAUNCHER_ASSETS): $(wildcard Aurora/assets.pak) $(INC_DIR)/asset_ids.h tools/mklauncherassets.py | dirs
+	@echo [GEN ] $@
+	$(PYTHON) tools/mklauncherassets.py Aurora/assets.pak $(INC_DIR)/asset_ids.h > $@
+
+$(BUILD_DIR)/arm9_main.o: $(SRC_DIR)/main.c $(wildcard $(INC_DIR)/*.h) $(LAUNCHER_ASSETS)
+	@echo [CC9 ] Compiling $<
+	$(CC) $(ARM9_CFLAGS) -I$(BUILD_DIR) -c $< -o $@
+
 $(BUILD_DIR)/arm9_%.o: $(SRC_DIR)/%.s
 	@echo [AS9 ] Assembling $<
 	$(AS) $(ARM9_ASFLAGS) -c $< -o $@
