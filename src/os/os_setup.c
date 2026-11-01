@@ -30,7 +30,7 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     {"Set up a wireless network connection to use",
      "Configura una conexi\u00F3n de red inal\u00E1mbrica",
      "Configurez une connexion r\u00E9seau sans fil",
-     "Configure uma liga\u00E7\u00E3o de rede sem fios para utilizar"},
+     "Configure o Wi-Fi para continuar"},
     /* STR_NET_L2       */
     {"online features such as aShop.",
      "para usar funciones como aShop.",
@@ -83,7 +83,7 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     {"Press (A) to start using Aurora!",
      "\u00A1Pulsa (A) para empezar con Aurora!",
      "Appuyez sur (A) pour d\u00E9marrer Aurora !",
-     "Prima (A) para come\u00E7ar a utilizar o Aurora!"},
+     "Prima (A) para iniciar o Aurora!"},
     /* STR_B_BACK       */ {"B: Back", "B: Atr\u00E1s", "B: Retour", "B: Voltar"},
     /* STR_SETTINGS     */ {"Settings", "Ajustes", "R\u00E9glages", "Configura\u00E7\u00F5es"},
     /* STR_WIFI         */ {"Wi-Fi", "Wi-Fi", "Wi-Fi", "Wi-Fi"},
