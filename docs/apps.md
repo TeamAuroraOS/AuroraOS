@@ -105,8 +105,9 @@ through the SDK's file layer.
 ## The network
 
 Auric and C apps can use the network over the Wi-Fi network saved in
-Settings > Wi-Fi: join it, look up names, and make plain HTTP requests (no
-HTTPS yet) and downloads. C apps call `net_connect()`, `http_get()` and the
+Settings > Wi-Fi: join it, look up names, and make HTTP and HTTPS requests
+and downloads (HTTPS from C SDK 1.4 and Auric 0.6, on an AuroraOS with core
+121 or later; [`tls.md`](tls.md)). C apps call `net_connect()`, `http_get()` and the
 rest (`sdk/README.md`, *The network*); Auric has `net_connect()`,
 `http_get()`, `http_post()`, `http_download()` and `json_string()` and its
 kin (`auric-lang/docs/language.md`, *The network*). Both are built on
@@ -115,7 +116,9 @@ the app has replaced the OS (docs/wifi.md, *Apps on the network*). Like
 sound, it needs an app started from the Home Menu, Files or the Terminal.
 Checked on a PC against a simulated core (2026-10-08); Auric's
 `examples/net.aur` then worked on a New 3DS the same day. The SDK's `net`
-example has not been tried on a console yet.
+example has not been tried on a console yet. HTTPS was checked on a PC
+against real servers through the real `AppNet.c` and `Tls.c` (2026-10-28),
+not yet on a console; apps get it only when rebuilt.
 
 ## Sound and other data files
 
@@ -182,6 +185,11 @@ python auric-lang/tools/sound_prep.py -o $O "$S/tetris-bg-music.wav=MUSIC.WAV"
 ```
 
 ## How launching works
+
+Before anything is copied the header is checked: the payload has to be 1 byte to
+16 MB, load inside `0x22000000..0x23000000` and have its entry point inside
+itself, so a damaged file cannot overwrite the core or the OS while it starts.
+It is refused as "Not an Aurora app."
 
 The running Home Menu lives at `0x22000000`, which is also where apps load, so
 it cannot copy an app over itself while it is executing there. The launch path

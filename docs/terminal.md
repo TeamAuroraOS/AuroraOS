@@ -170,6 +170,7 @@ NAME
 | [`cd`](#cd) | change the working folder |
 | [`clear`](#clear) | clear the screen |
 | [`cp`](#cp) | copy files and folders |
+| [`curl`](#curl) | fetch a URL over HTTP or HTTPS |
 | [`date`](#date) | print the date and time |
 | [`echo`](#echo) | print text |
 | [`exit`](#exit) | close the terminal |
@@ -263,6 +264,54 @@ cp [-r] [-n] SRC... DIR
 cp notes.txt notes-backup.txt
 cp -r Aurora/Music /Backup
 cp *.png Pictures
+```
+
+### curl
+
+```
+curl [-iIsLO] [-o FILE] [-X METHOD] [-H LINE] [-d DATA] URL
+```
+
+| Option | Means |
+|--------|-------|
+| `-o FILE` | save the body to FILE instead of printing it |
+| `-O` | save it under the URL's own file name (`index.html` when it has none) |
+| `-i` | print the reply's status line and headers before the body |
+| `-I` | ask for the headers only (a `HEAD` request) and print them |
+| `-s` | no progress line while saving |
+| `-X METHOD` | the method (`GET`, or `POST` with `-d`, by default) |
+| `-H LINE` | add a header line, such as `-H "Accept: application/json"`; may be given more than once |
+| `-d DATA` | send DATA as the body (a `POST` unless `-X` says otherwise) |
+| `-L` | accepted; redirects are always followed, without `-H` lines naming `Authorization` or `Cookie` once the host, port or TLS changes |
+
+* URL is `http://` or `https://`, with an optional port and query. An
+  `https://` URL goes over TLS 1.2 and the server's certificate is checked
+  against the roots AuroraOS trusts (built in, plus any in
+  `SD:/Aurora/certs`; see [`tls.md`](tls.md)). There is no option to skip
+  that check.
+* If the console is not on a network yet, or the one it was on has gone, curl
+  first joins the one saved in Settings > Wi-Fi, as [`ping`](#ping) does. A
+  lost network is named first: `The network was lost: the link dropped`.
+* Without `-o` or `-O` the body is printed as `cat` prints a file, up to
+  16 KB, then `(N more bytes; -o FILE saves all of it)`; SELECT stops the
+  printing.
+* With `-o` or `-O` and a `GET`, the file is fetched in Range pieces of any
+  size (as aShop downloads are) into `FILE.part`, renamed at the end, and the
+  line below the output shows `Downloaded 1.2M of 3.4M`; then `Saved PATH`.
+  Other methods save the one reply, up to 1020 KB.
+* A request waits at most 15 s for the server each time; SELECT cannot stop
+  a request in flight. Errors print the reason, for example
+  `curl: example.com: the certificate is for another host name`.
+* The reply's status does not change the output: a `404` page is printed as
+  any other.
+
+```
+Nick@n3ds:/$ curl -I https://example.com/
+HTTP/1.1 200 OK
+Content-Type: text/html
+...
+Nick@n3ds:/$ curl -o /Aurora/rfc8446.txt https://www.rfc-editor.org/rfc/rfc8446.txt
+Saved /Aurora/rfc8446.txt
 ```
 
 ### date
@@ -573,7 +622,7 @@ Units can be named with or without their suffix (`audio` or `audio.service`):
 | `audio.service` | the core answers and is not parked | playing or idle |
 | `touch.service` | the core answers | default or custom calibration |
 | `gpu.service` | the GPU driver is up | jobs done |
-| `wifi.service` | the console is joined to a network | its address, and the Wi-Fi bus clock of the last network operation (`byte reads` when the faster reads were given up; docs/wifi.md *The bus in network operations*) |
+| `wifi.service` | the console is joined to a network | its address, and the Wi-Fi bus clock of the last network operation (`byte reads` when the faster reads were given up; docs/wifi.md *The bus in network operations*). `systemctl status wifi` adds `Chip:`, the send credits left and the bus commands that failed, and, once the core has had to end a session, `Lost:`, how many times and why the last one ended (docs/wifi.md *When a session stops working*) |
 | `sdcard.mount` | a card is mounted | free and total space |
 | `power.service` | the MCU answers | battery level, and whether it is charging |
 

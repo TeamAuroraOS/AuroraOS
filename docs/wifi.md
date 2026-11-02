@@ -21,6 +21,16 @@ and C apps join the saved network, look up names, ping and make HTTP
 requests and downloads through the same core operations, with the ARM9
 side in `src/os/AppNet.c` (see *Apps on the network*).
 
+**Core v121 keeps a TCP connection open for the ARM9 (2026-10-28, for
+HTTPS; PC-tested, then reported working on the maintainer's console on
+2026-11-01).** A new network operation,
+`WIFI_NETOP_TCP`, holds one connection for as long as the ARM9 wants it, with
+the bytes going through two rings in shared FCRAM (see *A connection the ARM9
+drives*). The ARM9 runs TLS over it (`src/os/Tls.c`, BearSSL), so the
+account, aShop, apps and the terminal's `curl` speak HTTPS; the crypto stays
+on the ARM9, whose caches are on, while the core, which runs uncached, only
+moves bytes. `docs/tls.md` has the TLS side.
+
 **Core v115 reads frames faster in network operations (2026-10-08, works on
 a New 3DS at about 160 KB/s).** Every received frame used to be read a byte per CMD52
 at the 523 kHz identification clock, about 0.3 s for a full one, which held
@@ -553,27 +563,149 @@ MAC does not leave at the end: the core keeps the link as a session
 (`WifiShared.session` = 1) and returns, free for audio and the GPU again. The
 firmware keeps the association by itself; nothing reads the chip until the
 next command, so frames queue up in it meanwhile. A new boot of any kind ends
-the session (the chip is reset).
+the session (the chip is reset), and so does anything that means only a reset
+can bring the network back (see *When a session stops working*).
 
 `AUDIO_CMD_WIFI_NET` (12) runs one operation on the session, `arg0` one of
 `WIFI_NETOP_*`, with its operands and results in `WifiNetIo` at `0x233B8100`
 (`include/wifi.h`). Each first reads what queued up since the last command
-(64 frames at most); a `DISCONNECT` among them ends the session and the
-answer is `WIFI_NETS_NOLINK`.
+(64 frames at most), then checks that the session can still carry anything;
+if it cannot, the session ends and the answer is `WIFI_NETS_NOLINK`.
 
 | Op | Does |
 |----|------|
-| `STATUS` | only that: whether the link is still up |
+| `STATUS` | only that: whether the session is still good |
 | `DNS` | an A query for `name` to the DNS server DHCP gave (the router if none), up to three tries; `ip`, or `NONAME` (NXDOMAIN), `DNSFAIL`, `BADNAME`, `TIMEOUT` |
 | `PING` | one echo to `ip` with `seq`: 56 data bytes as Linux sends; `rtt_us`, `ttl`, `bytes`, `from`, or `ICMPERR` with the type and code of an unreachable or time-exceeded that quotes our echo |
 | `LEAVE` | `WMI_DISCONNECT`, and the session ends |
 | `HTTP` | one HTTP exchange over TCP with `ip`:`port` (core 114): the request at `WIFI_HTTP_REQ` (`0x233B9000`, 2 KB) goes out, the reply comes back at `WIFI_HTTP_RESP` (`0x23200000`, 1020 KB; 8 KB at `0x233B9800` before core 115) until the server closes or its `Content-Length` is in; `resp_len`, `stage`, `resent`, or `REFUSED` (RST), `TOOBIG`, `TIMEOUT` |
+| `TCP` | a connection with `ip`:`port` that the ARM9 drives through `WifiTcp` until it closes it (core 121; see *A connection the ARM9 drives*); `stage`, `resent`, or `REFUSED`, `NOHOST`, `TIMEOUT` |
 
 A frame for an address off our subnet goes to the router's MAC; one on the
 subnet first needs that host's MAC, asked for with ARP (one entry is kept).
 Each wait is `timeout_ms` (100 to 10000, 2000 by default; for `HTTP` it
-bounds the whole exchange, up to 20000). The TCP details are in
+bounds the whole exchange, up to 20000; for `TCP` the connect and each wait
+for an acknowledgement, up to 20000). The TCP details are in
 docs/account.md, *The network underneath*.
+
+### A connection the ARM9 drives
+
+`WIFI_NETOP_TCP` (core 121, `wifi_op_tcp` in `WiFi11.c`) is for TLS, which
+needs a connection that lasts across several round trips while the ARM9
+computes between them. The command opens the connection and does not end
+until the connection does, so for its whole life the core services the chip
+(every 2 ms, or at once when a segment comes) while the ARM9 works. They talk
+through `WifiTcp` at `0x233F0000` (`include/wifi.h`):
+
+| Part | Size | Written by |
+|------|------|------------|
+| `tx_head`, `rx_tail`, `close`, `alive` | one 32-byte line | the ARM9 |
+| `state`, `tx_tail`, `rx_head`, `eof` | one 32-byte line | the core (the ARM9 sets them once, before posting) |
+| `tx` | 16 KB ring | the ARM9 |
+| `rx` | 32 KB ring | the core |
+
+Counters are byte totals since the connection began; a ring position is the
+total modulo the ring's size. Each side writes only its own line, since a
+cache line both wrote would be written back over the other's value. The ARM9
+caches FCRAM and the core does not, so the ARM9 side (`src/os/WiFiTcp.c`,
+linked by the OS and both app runtimes) cleans what it wrote, the data before
+the counter, and invalidates before it reads.
+
+- **Sending**: bytes between `tx_tail` and `tx_head` go out as the server's
+  window allows, in segments of up to 512 bytes, and stay in the ring until
+  acknowledged; `tx_tail` follows the acknowledgements. Nothing acknowledged
+  for the retransmission timeout (1 s, doubling to 4 s) sends everything
+  again from the first unacknowledged byte.
+- **Receiving**: in-order data goes into `rx`. `NetState`'s receive buffer is
+  a ring now, with `tcp_rx_done` the ARM9's `rx_tail`; the one-shot `HTTP`
+  op leaves that 0 and reads its buffer as before. The window announced is
+  the ring's free room, at most 8 KB; once the ARM9 has freed a segment's
+  worth (1200 bytes) more than the last window said, a window update goes
+  out.
+- **Ending**: `close` = `WIFI_TCP_FIN` sends a FIN after the last byte (again
+  after a retransmission that went back past it), then waits for its
+  acknowledgement and up to 0.5 s for the server's FIN, 3 s at most from
+  when it was asked for, whether or not the FIN could be sent; `WIFI_TCP_ABORT`
+  sends a RST at once. The server's FIN sets `eof`; its RST ends the command
+  with `REFUSED`. Nothing acknowledged for `timeout_ms` ends it with
+  `TIMEOUT`, and so does an ARM9 that has not bumped `alive` for
+  `WIFI_TCP_ALIVE_MS` (15 s), so a crashed or forgetful caller cannot hold
+  the core.
+
+While it runs the core takes no other command, as with every Wi-Fi command:
+the OS draws straight into the framebuffers (`wifi_direct_on`), and nothing
+may post presents or sounds. When nothing moved, the ARM9 side waits on the
+timer rather than polling FCRAM, which the core runs its code from.
+
+Checked on a PC (2026-10-28): the real `wifi_op_tcp`, `Net11.c` and
+`WiFiTcp.c` against a model server over a simulated link, 11 cases (clean; 5%
+loss with reordering and a 40 KB request that wraps `tx`; ARM9 stalls that
+fill `rx` to a zero window; 10% failed sends; the microsecond clock wrapping
+mid-way; a server RST; an ARM9 abort; the `alive` watchdog; a server that
+never answers), every byte checked. A clean link with a 40 ms round trip
+moves about 180 KB/s, what the 8 KB window allows. Reordered segments are
+dropped and sent again (in-order data only, as before), which slows a link
+that reorders a lot.
+
+### When a session stops working
+
+Nothing reads the chip between commands, and much of what can go wrong with
+it shows only in what it stops doing. Until core 123 a session that could no
+longer work kept `WifiShared.session` at 1, so the OS went on using it and
+never joined again: every request failed until Settings > Wi-Fi or a reboot
+reset the chip. The maintainer saw that on hardware (2026-11-01): after some
+`curl`, aShop or account requests, the network stopped working until then.
+
+Since core 123 the core ends the session itself, and says why:
+
+| `session_end` | When |
+|---------------|------|
+| `WIFI_END_LINK` | a `DISCONNECT` that was not ours; `session_reason` holds the firmware's reason |
+| `WIFI_END_ASSERT` | the firmware's debug counter was set, in a pass of the registers that read clean (a failed read of that bit used to count, and nothing clears it but a boot) |
+| `WIFI_END_CHIP` | the CCCR registers fail on the current clock and again on 523 kHz (failing only on the fast clock is a step down, not an end) |
+| `WIFI_END_CREDITS` | no send credit at the start of an operation, and none after 2 s of reading. A credit report comes in the trailer of a frame, so a frame dropped because it read wrong takes its credits with it, and nothing else gives them back |
+| `WIFI_END_SEND` | 8 frame writes in a row failed |
+| `WIFI_END_RECV` | 8 frames in a row could not be read as their lookahead announced |
+| `WIFI_END_LEFT` | `WIFI_NETOP_LEAVE` |
+
+`http_online()` (account, aShop) and the terminal's `net_join()` (`ping`,
+`curl`) now send `STATUS` every time instead of trusting what the OS last
+heard, as `appnet_join()` always did, so the next request after a session ended joins again by
+itself: about as long as joining in Settings takes, and nothing else to do.
+`wifi_direct_off()` is where `wifi_online()` takes the core's word, which also
+covers the terminal's `curl`, whose commands AppNet.c posts itself; it used to
+stay "online" after the session had gone, so `curl` could not recover at all.
+
+`session_ends`, `session_end` and `session_reason` outlive the join, so
+`systemctl status wifi` can say what happened (docs/terminal.md).
+
+Also in core 123, for what can start such a failure:
+
+- **A port for each connection.** `wifi_now()` restarts with every command, so
+  the source port and first sequence number taken from it came out nearly the
+  same each time. A server can hold a closed connection for a minute, and a SYN
+  on that port with a lower sequence number only draws an ACK of the old
+  connection, so about every other new connection could hang until it timed
+  out. Ports now run on in turn from where the join's length left them.
+- **The I/O abort.** After a CMD53 fails in a network operation, the CCCR's
+  I/O abort (`0x06`, SDIO spec) ends whatever the chip thinks is still going on;
+  resetting the controller alone leaves that side as it was.
+- **A failed write steps the clock down**, as a failed read did; it used to
+  come back on the same clock next time.
+- **A key that could not be sent stays ready.** With no credit at that moment,
+  a new group key was forgotten, and without it no ARP request is understood,
+  so the router soon cannot reach the console.
+- A frame whose header does not match its lookahead is dropped on the slow
+  clock too.
+- The join starts the bus ladder and CMD53 reads over: the chip is new.
+
+Checked on a PC (2026-11-01): the real `WiFi11.c`, its controller and timer
+calls replaced by a simulated AR6014 and server, and the real `Net11.c`, 22
+scenarios on the old source and the new. The old one gets stuck in the cases
+above (with a server holding the last connection, 2 connections of 6 worked,
+and all 20 connections used one port); the new one passes all of them. Which
+of these the console hit is not known: `systemctl status wifi` says, from now
+on, when one happens.
 
 ### The bus in network operations
 
@@ -591,9 +723,9 @@ Since core 115, `wifi_net_op` switches the bus up for its operation
   after each switch as Linux's tmio driver waits.
 - **Stepping down.** A failed command or a header that does not match on the
   fast clock drops the frame and moves one step down the ladder, for the
-  rest of the core's life (`g_bus_step`); a failed CMD53 has already reset
+  rest of the session (`g_bus_step`); a failed CMD53 has already reset
   the controller to 523 kHz, and the rest of its frame is drained by CMD52. A
-  CMD53 read failing at 523 kHz goes back to CMD52 reads for good
+  CMD53 read failing at 523 kHz goes back to CMD52 reads for the session
   (`g_rx53_bad`). A command that timed out never reached the chip, so its
   block is still in the mailbox; any other failure took the block.
 - Only on a 1-bit bus (write styles 0 and 1), the width a failed CMD53
@@ -636,14 +768,16 @@ does for the OS:
   `src/os/WiFiJoin.c`, shared with the OS.
 - **DNS, ping, one TCP exchange** are `WIFI_NETOP_DNS`, `PING` and `HTTP`;
   names are kept (eight) and looked up again when a server did not connect.
+  `https://` goes over `WIFI_NETOP_TCP` with TLS on the ARM9 (`Tls.c`,
+  `docs/tls.md`), from core 121.
 - **HTTP** is built on the ARM9: HTTP/1.0 with `Host`, `Connection: close`
   and `Accept-Encoding: identity`, the path percent-encoded, a
   `Content-Length` for a body; the whole request within `WIFI_HTTP_REQ_MAX`
   (2 KB). The reply is parsed in place at `WIFI_HTTP_RESP`: chunked bodies
   undone, `Content-Length` and `Content-Range` read, and 301/302/303/307/308
   followed up to five times (303, and 301/302 after a POST, become a GET).
-  `https://` is refused, as is a redirect to it (the 3xx comes back with the
-  reason).
+  `https://` URLs and redirects to them go over TLS (core 121 and later; on
+  an older core they are refused with the reason).
 - **Downloads** (`appnet_download`) ask for Range pieces sized as aShop's
   are (64 KB first, then 16 to 512 KB for about 3 s each, halved after a
   failure that may pass), write them to `<path>.part` and rename it; a
@@ -863,9 +997,11 @@ there into shared FCRAM before each boot. Main.type5 is copied but not used.
 ## Path forward
 
 1. Servicing the chip between commands (today frames wait in it until the
-   next one). Until then a TCP connection lives inside one command
-   (`WIFI_NETOP_HTTP`); longer-lived sockets and TLS need the chip serviced
-   in the background.
+   next one). A TCP connection lives inside one command (`WIFI_NETOP_HTTP`,
+   or `WIFI_NETOP_TCP` for as long as the ARM9 keeps it, which TLS uses);
+   sockets that outlive a command, and several at once, still need the chip
+   serviced in the background. Keeping segments that arrive out of order,
+   rather than dropping them, would help links that reorder.
 2. WPA3 (SAE) would need the firmware to pass authentication frames to the
    host, which this one may not do; WPA2/WPA3 transition networks already
    work as WPA2.

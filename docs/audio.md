@@ -9,6 +9,7 @@ command block described in `include/audio.h`.
 | ARM9 API, core boot | `src/os/Audio9.c` |
 | Output path + CSND | `src/os/Audio11.c` |
 | WAV reader, shared by the OS and apps | `src/wavload.c` |
+| The OS's own sounds | `src/os/UiSound.c`, `include/uisound.h` |
 | Codec bus (shared with the touchscreen) | `src/os/Codec11.c` |
 
 ## The channel register layout
@@ -131,8 +132,138 @@ an app runs (`src/wavload.c` is the reader, shared with the File Explorer). The
 Home Menu calls `audio_voices_stop()` at start-up, which is also where it lands
 when an app returns, so an app's music cannot play on over memory the OS has
 taken back. Voices arrived with core version 82; an older core acknowledges both
-commands without acting on them, and apps stay silent. The next section is how
-an older core gets replaced.
+commands without acting on them, and apps stay silent. How an older core gets
+replaced is under "Replacing a running core" below.
+
+## The OS's own sounds
+
+`src/os/UiSound.c` plays the seven sounds in `assets.pak` ([`assets.md`](assets.md),
+"Sounds"). They use voices, which are free while the OS runs, so channel 0
+(the Music app, Files) is never touched:
+
+| Sound | Voice | Buffer | When |
+|-------|-------|--------|------|
+| startup | 2 | `0x27D80000`, 256 KB | once the Home Menu is drawn, when `audio_boot()` loaded or replaced the core; a HOME return finds the core running and stays quiet |
+| Home music | 0, looped, at 70% | `0x27100000`, 5 MB, with its packed form at `0x27600000`, 1.5 MB | see "The Home Menu's song" below |
+| install chime | 1 | `0x27DC0000`, 256 KB | when a download has passed its SHA-256 check and been renamed into place (`dl_finish()`) |
+| select, back | 3 | `0x27E00000`, 256 KB for the three menu sounds | see "Menu sounds" below |
+| move | 4 and 5 in turn | the same 256 KB | see "Menu sounds" below |
+| aShop music | 0, looped | `0x27E40000`, 1.75 MB to `0x28000000` | from aShop's start (after the account check, before "Connecting to aShop...") until it closes |
+
+`UI_SOUND_ADDR` (`0x27D80000`) to `0x28000000`, the end of Old 3DS FCRAM, is
+used by nothing else. The buffers hold 4 s for each short sound, 4 s for the
+three menu sounds together (they use 1.4 s) and 28 s for the music (the song is
+17.5 s). A sound is decoded from the pack to 16-bit PCM before it plays.
+`ui_sound_boot()`, called once the Home Menu is drawn, mounts the card itself,
+starts the startup sound on a cold boot and then decodes the three menu sounds
+one after another into their slot, 32-byte aligned. It runs at every OS start,
+since an app may have used that memory. The music and chime are read when
+aShop opens, on aShop's own mount, since mounting again would drop it. The
+aShop song is 571,360 samples to decode; how long that takes on a console has
+not been measured yet.
+
+`audio_voice_play()` in `Audio9.c` waits for an in-flight present and then
+for the core's ack, as the one-request block requires. `audio_voices_stop()`
+and `audio_voices_stop_mask()` wait for a present too. A core running a Wi-Fi
+command takes no request, so `UiSound.c` skips a sound while
+`wifi_direct_active()`. When aShop closes it stops only voices 0 and 1, so the
+back sound of leaving plays out. If a Wi-Fi command is still running then, the
+music plays on until the next aShop visit or a boot stops it. Once started, a
+channel needs nothing more from the core, so the music carries on through
+joins and downloads. It also plays with the lid closed, like all sound but the
+Home Menu's song (see "Brightness, the system menu and the lid").
+
+All play at full volume, as the files were mixed, except the Home Menu's song.
+The aShop song peaks at full scale, so the chime over a loud passage may clip;
+that has not been heard yet. The menu sounds are quieter: select and back peak
+at -14 dBFS, move at -25 dBFS.
+
+Settings has four rows: Startup sound; Home music; aShop music, which covers
+the chime too; and Menu sounds. They are bits 0, 3, 1 and 2 of `USER.dat` byte
+52 (`USER_SOUND_*` in `include/user.h`). A set bit means off, so files from
+before read as all on. A, a tap, Left or Right switches a row, and the change
+is saved at once. The click comes after the switch, so turning Menu sounds on
+is heard and turning it off is not. None of this needed a core change: voices
+have been in the core since version 82.
+
+### The Home Menu's song
+
+`Aurora-HOME.wav` (39.3 s, by LeweckBanana, from an `.m4a` kept out of the
+repository) plays on voice 0 whenever the Home Menu is on screen; it was heard
+on the maintainer's console on 2026-11-01:
+
+- After a cold boot it starts when the startup sound is over: `ui_sound_boot()`
+  notes when that began and how long it lasts (2.6 s, of which the last 0.9 s
+  is silence in the file). With the startup sound off, or on a HOME return, it
+  starts as soon as it is loaded.
+- It loops. The file is 17 ms of silence and then 18 bars at 110 BPM with no
+  fade, so `TRIM_LEAD` cuts the silence and each pass stays on the beat. The
+  jump across the seam is 143, less than the song's usual step between two
+  samples (283), so the loop does not click.
+- It stops when anything opens from the Home Menu: Settings, Files, Terminal,
+  Music, 3D Model, aShop or an SD app (`ui_sound_home_leave()`, in `home_open`,
+  `home_settings` and `home_terminal` in `os_main.c`). Folders and pop-ups are
+  part of the Home Menu and leave it playing. Coming back restarts it from the
+  top, with no startup sound.
+- It stops when the lid closes (`get_keys()` calls `ui_sound_lid_closed()` before
+  it waits) and restarts from the top on the next pass of the menu's loop after
+  the lid opens. Other sound keeps playing with the lid closed.
+- It plays at 70% (`HOME_VOLUME`, `0x5999`): the song peaks near full scale and
+  the menu sounds play over it at full volume.
+- Settings > Home music turns it off (`USER_SOUND_HOME_OFF`).
+
+At 2.6 MB decoded it does not fit the sound slots, and FCRAM has no free stretch
+that size on an Old 3DS, so it borrows 3D Model's file buffer (`GLB_FILE_ADDR`,
+idle whenever the menu is showing). The first 5 MB of that buffer hold the PCM
+and the next 1.5 MB the packed sound, room for 80 s; a compile-time check keeps
+them inside it. Opening 3D Model overwrites them, so `ui_sound_home_lost()` has
+the song loaded again on the way back. An app can overwrite them too, and the OS
+starts afresh when one returns, so that case loads it again by itself.
+
+Decoding 1.3 million samples in one go would hold up the menu at every start, so
+it is split, all from `ui_sound_home_tick()`, which `home_tick` in `os_main.c`
+calls on every pass of the menu's loop:
+
+1. `home_fetch()` reads the packed sound in one go (0.73 MB). This is the only
+   step that needs the card, and it is why the rest can be spread out: every
+   other user of the card mounts and unmounts around its own work, so a file
+   left open between passes would not survive. Blocks one pass.
+2. `home_decode()` decodes for about a millisecond per pass
+   (`asset_sound_decode()`, 32 frames at a time between looks at the clock), so
+   the menu keeps answering.
+3. Once it is all decoded, the startup sound is over and the core is free, it
+   posts the voice. A core busy with a Wi-Fi command just makes it wait.
+
+The whole decode is about 0.3 s of ARM9 time by estimate, so it should finish
+well inside the startup sound; that has not been measured on a console.
+
+### Menu sounds
+
+In the Home Menu and its folders, Settings and every screen under it, and
+aShop:
+
+- **select** (`ui_sound_select()`): A, or a tap, that opens or does something:
+  an app, a folder, a Settings row, a list row, a button, a menu item, the
+  Yes of a confirm box, a drop with A while moving an app. Y (the action
+  menu), START (Settings) and X (the Terminal) on the Home Menu, and Y and X
+  in aShop, count too. A tap that both moves the selection and opens it makes
+  only this sound.
+- **back** (`ui_sound_back()`): B, or a tap on a Back button or outside a
+  pop-up, that leaves a screen, folder or pop-up, or cancels: a folder up, the
+  Home bar's back button (or holding an app over it), Settings and its
+  screens, aShop and its screens, the No of a confirm box, a cancelled move.
+- **move** (`ui_sound_move()`): the selection moving by the D-pad, circle pad,
+  L or R, a swipe or a page dot, a value stepped with the D-pad (Clock,
+  Brightness), and a page turned while an app is dragged to a side. Nothing
+  plays when a key is pressed at an edge and nothing moves. Moves take turns
+  on two voices, so with key repeat (every 70 ms) each 100 ms move sound plays
+  out instead of being cut off.
+
+A message closed with A, B or a tap (`ui_sound_close(keys)`) plays back for B
+and select otherwise. `fv_confirm()` makes its Yes/No sound itself, so the
+File Explorer's confirm boxes make it too. The Files screens, the Terminal, the
+Music app, the 3D Model viewer, the keyboard, the setup wizard and the system
+menu (Aurore Tools) make no menu sounds, apart from those confirm boxes.
 
 ## A core's start-up
 
@@ -244,12 +375,21 @@ live in the core too:
   whose runtime set `app_caps`, and it closes the menu as soon as
   `app_active` drops (an older app left by HOME meanwhile), so the restarting
   OS's probe is answered. See [`home.md`](home.md), "The system menu".
+- **Core 123**: only the Wi-Fi code changed ([`wifi.md`](wifi.md), "When a
+  session stops working").
+- **Core 122**: the crash tone (`audio11_error_play()`) stops every channel
+  first, so a looping song does not play on under the crash screen.
 - **Core 120**, the lid (`core11_sleep_poll()` in `src/os/Core11.c`, PR 29).
   Every 32,768 loop passes, and on each of the system menu's button reads,
   the core reads the lid sensor (GPIO1 bit 2). Closed, it sets both
   backlights' duty to 0; open again, it restores the level in use. It keeps
   taking commands meanwhile, so sound goes on playing; the ARM9 side waits at
   its button reads. See [`power.md`](power.md), "Closing the lid".
+- **Core 121**, a TCP connection for HTTPS (`WIFI_NETOP_TCP`,
+  `AUDIO_TCP_VERSION`): the command keeps one connection open, moving bytes
+  through two rings at `0x233F0000`, until the ARM9 closes it, while the ARM9
+  runs TLS over it. No audio change. See [`wifi.md`](wifi.md), "A connection
+  the ARM9 drives", and [`tls.md`](tls.md).
 
 The core links those two shared files, `include/font.h` and
 `include/system_menu.h`, so a change to any of them is a core change and needs

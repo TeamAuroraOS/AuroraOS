@@ -73,17 +73,19 @@ is treated as no account. The username is cached so Settings can show it
 without the network. Unlink (or a revoked token found by Check account)
 deletes the file.
 
-The token sits on the SD card in plain text, as `API.md` suggests. It crosses
-the network in plain HTTP too, until the console has TLS. That is why the
-server gives console tokens only the `profile:read` scope. Anyone with the
-card or on the same Wi-Fi could read the profile until the token is revoked on
-the website.
+The token sits on the SD card in plain text, as `API.md` suggests. Since
+2026-10-28 it crosses the network only inside TLS (HTTPS, see below); before
+that it went in plain HTTP, which is why the server gives console tokens only
+the `profile:read` scope. Anyone with the card can still read the profile
+until the token is revoked on the website.
 
 ## How linking works
 
-All requests go to `http://3ds.aurora3ds.xyz` (port 80). The host name is
-looked up with DNS once per session, and again after a connection fails
-(Cloudflare's addresses can change).
+All requests go to `https://3ds.aurora3ds.xyz` (port 443), over TLS 1.2 with
+the server's certificate checked (`docs/tls.md`); OS builds before 2026-10-28
+used `http://` on port 80. The host name is looked up with DNS once per
+session, and again after a connection fails (Cloudflare's addresses can
+change).
 
 1. `POST /v1/device/code` with `client_id=aurora-3ds` and `name`, the
    console's name as it will appear on the website: the owner's name from
@@ -119,7 +121,22 @@ Headers are skipped except `Content-Length` (any case). The body is parsed with
 `src/os/Json.c`. Rate limiting (`429 rate_limited`) shows "Too many tries. Wait
 a while."
 
-## The network underneath: HTTP over TCP on the ARM11
+## The network underneath: HTTPS, and TCP on the ARM11
+
+Since 2026-10-28 `http_call()` (`src/os/Http.c`) sends every request with
+`wifi_https()` (`src/os/WiFi9.c`): `AUDIO_CMD_WIFI_NET` with `WIFI_NETOP_TCP`
+(core 121) keeps a TCP connection open on the core while the ARM9 runs the
+TLS handshake and the exchange over it (`src/os/Tls.c`, BearSSL). The reply
+is decrypted into the same buffer, `WIFI_HTTP_RESP`, so the reply handling
+below and aShop's in-place reads did not change. The certificate must be for
+`3ds.aurora3ds.xyz` and chain to a trusted root (Cloudflare uses Google Trust
+Services); a failure shows "The secure connection failed.", or "Secure
+connection failed: check the clock." when the certificate's dates do not fit
+the console's clock (`STR_AC_E_TLS`, `STR_AC_E_CLOCK`). The TLS side is in
+`docs/tls.md`; the TCP connection the ARM9 drives in docs/wifi.md, *A
+connection the ARM9 drives*. The `WIFI_NETOP_HTTP` operation described here
+is still the core's one-shot exchange, which plain `http://` requests from
+apps use.
 
 The Wi-Fi driver runs on the ARM11 core and only reads the chip while a
 command runs (docs/wifi.md, *Staying joined*). So a TCP connection lives inside
@@ -250,16 +267,17 @@ over Wi-Fi. Not yet tried: an Old 3DS.
 | `include/account.h` | `account_load`, `account_linked`, `account_name`, `account_screen` |
 | `src/os/Qr.c`, `include/qr.h` | the QR encoder |
 | `src/os/Http.c`, `include/http.h` | `http_call()`: the request, the host look-up, the reply's status and headers (shared with aShop, [`store.md`](store.md)) |
-| `src/os/WiFi9.c` | `wifi_http()` |
-| `src/os/WiFi11.c` | `wifi_op_http()`: the connection, retransmission, close |
+| `src/os/WiFi9.c` | `wifi_https()`, `wifi_http()` |
+| `src/os/Tls.c`, `include/tls.h` | the TLS client ([`tls.md`](tls.md)) |
+| `src/os/WiFi11.c` | `wifi_op_tcp()`, `wifi_op_http()`: the connection, retransmission, close |
 | `src/os/Net11.c` | `net_tcp_open`, `net_tcp_seg`, the TCP receive path in `net_rx`, `net_http_done` |
 | `src/os/os_setup.c` | the wizard's Account step, and the `STR_AC_*` strings |
 | `src/os/os_main.c` | the Settings row (`SET_ACCOUNT`) |
 
 ## Not done
 
-- TLS: `https://3ds.aurora3ds.xyz` already works on the server, but the
-  console has no TLS.
+- HTTPS was checked on a PC against the live server (2026-10-28), not yet on
+  a console.
 - Revoking the token from the console needs an endpoint the server does not
   have.
 - Deleting an account has no page on the website yet (see the server's

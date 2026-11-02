@@ -81,6 +81,20 @@ icon when it is empty.
 | Swipe left or right | turns the page; the grid follows the stylus |
 | Hold a tile (half a second) | picks it up: drag it, or let go without moving for the action menu |
 
+### Sounds
+
+Moving the selection clicks (move), opening something with A or a tap plays
+select, and B or the back button plays back; a tap that opens a tile plays
+only select. Y, START and X play select as they open their screen. Settings >
+Menu sounds turns them off. Where else they play, and how:
+[`audio.md`](audio.md), "Menu sounds".
+
+The Home Menu has its own song, which starts when the startup sound is over and
+loops at 70% volume under the clicks. It stops when anything opens from here and
+when the lid closes, and restarts from the top on the way back; folders and
+pop-ups are part of the Home Menu and do not stop it. Settings > Home music turns
+it off. How it works: [`audio.md`](audio.md), "The Home Menu's song".
+
 ### The action menu (Y)
 
 | Item | Does |

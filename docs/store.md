@@ -44,6 +44,14 @@ the auroraShop logo in place of the usual icon and name card.
 - **Neither the server nor a copy on the card:** "Could not reach aShop" with
   the reason.
 
+Music: once the account check is passed, aShop's song
+(`assets/audio/Aurora-SHOP.wav`, in `assets.pak`) starts and loops until aShop
+closes, through connecting, browsing and downloads. When an install finishes,
+the download chime plays over it. Settings > aShop music turns both off. The
+screens also make the OS's menu sounds (select, back, move), which Settings >
+Menu sounds turns off. How they are stored and played: [`assets.md`](assets.md)
+"Sounds", [`audio.md`](audio.md) "The OS's own sounds" and "Menu sounds".
+
 ## Screens
 
 | Screen | Top | Bottom |
@@ -88,9 +96,9 @@ An app comes in pieces (`GET /v1/store/files/<sha256>.bin` with a `Range`
 header) of 16 KB to 512 KB: each is sized from the speed the last one came
 at, to take about three seconds, so a slow link still answers well inside
 the 15 s timeout and a fast one spends its time on data rather than on
-connections. A failed piece halves the size. The reply stays in the Wi-Fi
-core's 1020 KB buffer (`WIFI_HTTP_RESP`) and is written from there. Each
-piece is written to
+connections. A failed piece halves the size. The reply stays in the 1020 KB
+reply buffer (`WIFI_HTTP_RESP`), decrypted there by the ARM9 since HTTPS, and
+is written from there. Each piece is written to
 `SD:/Aurora/Apps/<file>.part` (`Apps/C/<file>.part` for an app in C), which
 the Home Menu ignores, and hashed on the way. When all are in, the SHA-256 is compared with the catalogue's; only a
 match is renamed over any old copy, so a cancelled, failed or damaged download
@@ -120,7 +128,11 @@ at about 4 KB a second in 6 KB pieces. Since core 115 a network operation
 reads frames a block per CMD53 on a clock of up to 16.8 MHz (see
 [`wifi.md`](wifi.md) *The bus in network operations*); then the 8 KB TCP
 window and the round trip to Cloudflare set the pace. The download screen
-shows the average speed under the progress bar.
+shows the average speed under the progress bar. Since HTTPS (2026-10-28)
+each piece is its own TLS connection, so each costs a handshake (two more
+round trips and the ARM9's share of the crypto, whose time on the console is
+not measured yet); a session Cloudflare still remembers is resumed, which is
+cheaper. The pieces' sizing takes that time in, as it did the connections'.
 
 While a piece comes in, the core is busy and cannot present frames (see
 `wifi_direct_on`), so the download screen's top is drawn in its backbuffer and
@@ -231,12 +243,15 @@ once; everyone else's releases are checked by staff first. The server's README,
 ## Talking to the server
 
 `src/os/Http.c` (`include/http.h`) makes every request, for aShop and for the
-account screens: HTTP/1.0 to `3ds.aurora3ds.xyz` on port 80 with `Host`, a
-`User-Agent`, `Connection: close`, the console's token as `Authorization:
-Bearer`, and extra header lines (`Range`, `If-None-Match`). It looks the host
-up once per session and again after a connection fails, and reads the status,
-`Content-Length`, `Content-Range` and `ETag` from the reply. One request is one
-`WIFI_NETOP_HTTP` (see [`account.md`](account.md)).
+account screens: HTTP/1.0 over TLS to `3ds.aurora3ds.xyz` on port 443 (port
+80 without TLS before 2026-10-28) with `Host`, a `User-Agent`,
+`Connection: close`, the console's token as `Authorization: Bearer`, and
+extra header lines (`Range`, `If-None-Match`). It looks the host up once per
+session and again after a connection fails, and reads the status,
+`Content-Length`, `Content-Range` and `ETag` from the reply. One request is
+one TLS connection over `WIFI_NETOP_TCP` (see [`account.md`](account.md) and
+[`tls.md`](tls.md)); a certificate that does not check out fails it with
+"The secure connection failed."
 
 | Request | When |
 |---------|------|
@@ -254,6 +269,7 @@ A `401` deletes the token (`account_forget()`) and closes aShop; a `403`
 | `0x26E00000` | 2 MB | `STORE_ARENA_ADDR`: decoded banners, the bag and app icons, only while aShop is open |
 | `0x25100000` | 2 MB | the picture file being decoded, then the decoder's rows: the image viewer's buffers, idle while aShop is open |
 | `0x25700000`, `0x26100000` | | the decoder's own scratch, as for the image viewer |
+| `0x27DC0000`, `0x27E40000` | 256 KB, 1.75 MB | the chime and the music, decoded to 16-bit PCM when aShop opens (`src/os/UiSound.c`); the menu sounds sit between them at `0x27E00000` |
 
 In the OS's `.bss`: the catalogue (96 KB), its JSON tokens (50 KB), the text
 pool (64 KB), an icon (16 KB) and the bar strip kept for scrolling (43 KB).
@@ -281,6 +297,7 @@ Replies are read in place in the core's buffer at `0x23200000`.
 | Drawing | `stripes`, `checker_floor`, `shade_round`, `buttons`, `tile`, `page_top`, `wrap`, `busy`, `spin` |
 | Screens | `main_screen`, `list_screen`, `page_screen`, `download_screen`, `search_screen`, `options_menu`, `notice` |
 | Download | `dl_start`, `dl_step`, `dl_finish`, `dl_close`, `dl_tick` |
+| Music and chime | `ui_sound_shop_start`/`chime`/`stop` in `src/os/UiSound.c`, called from `store_screen` and `dl_finish` |
 | SHA-256 in pieces | `sha256_init`/`update`/`final` in `src/os/Nand.c` |
 
 `store_screen(owner)` returns how many apps it installed; `home_open()` in
@@ -324,6 +341,11 @@ screen drawn during pieces work, at about 4 KB a second (core 114). With
 core 115's faster bus and larger pieces, downloads run at about 160 KB a
 second on a New 3DS (2026-10-08).
 
+HTTPS (2026-10-28): the TLS client, through the real `AppNet.c` and
+`Tls.c`, fetched `https://3ds.aurora3ds.xyz/v1/store/catalog` from the live
+server on a PC (the `401` without a token), with the certificate chain
+checked. aShop then worked over HTTPS on the maintainer's console (2026-11-01).
+
 Apps in C (2026-10-09): the server's tests take an `AURC` upload, list it only
 for `?c=1` with `"lang":"c"`, and show "C SDK" on the website and in the
 review queue. The OS builds with the console side; the page layout was checked
@@ -342,3 +364,9 @@ against the fonts' line heights, not drawn. Not yet tried on a console.
 8. Publish an app in C (an `AURC` file): its page shows "C SDK" under the
    name on both screens, it installs into `SD:/Aurora/Apps/C`, and the Home
    Menu shows "C SDK" under it.
+9. The music starts as aShop opens, loops on the beat, keeps going through a
+   download, the chime plays when the install finishes, and both stop on
+   leaving. With Settings > aShop music off, aShop is silent.
+10. Moving between sections and rows clicks (move), opening one plays select,
+    B plays back, and the back sound of leaving aShop is not cut off with the
+    music.

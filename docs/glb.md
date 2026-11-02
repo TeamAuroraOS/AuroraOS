@@ -160,7 +160,7 @@ and copies the texture coordinate and colour.
 | `0x25700000`, `0x26100000` | 8 MB each | while loading: the image decoders' buffers |
 | `0x26D60000` | 288,000 B | software fallback's backdrop |
 | `0x26DB0000` | 288,000 B | right eye's frame, in 3D |
-| `0x27100000` | 11 MB | `model.glb` as read from the card |
+| `0x27100000` | 11 MB | `model.glb` as read from the card; the Home Menu's song uses its first 6.5 MB while the menu shows, and is loaded again after this screen ([`audio.md`](audio.md), "The Home Menu's song") |
 | `0x27C00000` | 1 MB | JSON tokens (52,428; a longer JSON chunk is refused) |
 | `0x27D00000` | 2 x 256 KB | the two eyes' command lists |
 
