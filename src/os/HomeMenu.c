@@ -1261,7 +1261,7 @@ static void system_menu_draw(const int *rows, int n, int selected) {
   static const Color cyan = {0x64, 0xE8, 0xC8};
   static const StringId labels[SYS_COUNT] = {
       STR_RETURN_HOME, STR_POWER_OFF, STR_CANCEL};
-  const char *title = "Aurore Tools";
+  const char *title = "Aurora Tools"; // Used to be Aurore tools lol -Moonii
 
   clear_screen(fb, BOT_FB_SIZE, black);
   ui_text(fb, 8, 8, BSH, title, cyan, black, &ui_small);
