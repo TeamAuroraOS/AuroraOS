@@ -1,8 +1,11 @@
-"""Build SD:\\Aurora\\assets.pak from the PNG art and the Figtree fonts.
+"""Build SD:\\Aurora\\assets.pak from the PNG art, the Figtree fonts and the
+OS's sounds.
 
 Every size the UI draws is resampled here once, with an area filter, so
 nothing is scaled at runtime. The white-on-alpha icons are stored as
-coverage and tinted when drawn. Payloads are byte-RLE'd; see docs/assets.md.
+coverage and tinted when drawn. Payloads are byte-RLE'd. Sounds are mono at
+the CSND mixer's rate, as DSP-ADPCM, in a section after the images; see
+docs/assets.md.
 
 Usage:
     python tools/mkassets.py [-o Aurora/assets.pak] [--header include/asset_ids.h]
@@ -10,10 +13,14 @@ Usage:
 
 import ttf
 import png_read
+import dspadpcm
 import argparse
+import array
+import math
 import os
 import struct
 import sys
+import wave
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -96,6 +103,7 @@ PEOPLE = [
     ('PERSON_SAIITANAA', 'people/saiitanaa.png', 40),
     ('PERSON_KYAERO',    'people/kyaero.png',    40),
     ('PERSON_SECRET',    'people/secret.png',    40),
+    ('PERSON_LEWECK',    'people/leweck.png',    40),
 ]
 
 # (asset id, ttf, pixel size). Each atlas covers U+0020..U+00FF (Latin-1). The
@@ -110,6 +118,63 @@ FONTS = [
 ]
 
 WALLPAPER = ('WALLPAPER', 'background.png', 400, 240)
+
+# (sound id, source WAV, which digital silence to drop). The two songs loop, and
+# their 17 ms of leading silence would put every pass off the beat. The menu
+# sounds come as 3.2 s files that are mostly silence.
+TRIM_NONE, TRIM_LEAD, TRIM_BOTH = 0, 1, 2
+SOUNDS = [
+    ('STARTUP', 'startup.wav',     TRIM_NONE),
+    ('SHOP',    'Aurora-SHOP.wav', TRIM_LEAD),
+    ('DL_DONE', 'DL-complete.wav', TRIM_LEAD),
+    ('SELECT',  'select.wav',      TRIM_BOTH),
+    ('BACK',    'back.wav',        TRIM_BOTH),
+    ('MOVE',    'move.wav',        TRIM_BOTH),
+    ('HOME',    'Aurora-HOME.wav', TRIM_LEAD),
+]
+SND_DSPADPCM = 0
+
+# The core plays a sound with the divider CSND_CLOCK // rate, so each one is
+# resampled to exactly the rate that divider gives: 32728.5 Hz, CSND's mixer
+# rate, at which the channel copies samples through unchanged.
+CSND_CLOCK = 67027964
+CSND_RATE = 32728
+
+
+def read_sound(path, trim):
+    """A WAV file as 16-bit mono at CSND_RATE, and a line describing it."""
+    with wave.open(path, 'rb') as w:
+        ch, width = w.getnchannels(), w.getsampwidth()
+        rate, n = w.getframerate(), w.getnframes()
+        raw = w.readframes(n)
+    if width == 2:
+        s = array.array('h', raw)
+        if sys.byteorder == 'big':
+            s.byteswap()
+    elif width == 1:
+        s = array.array('h', ((b - 128) << 8 for b in raw))
+    else:
+        raise SystemExit('%s: only 8- and 16-bit PCM' % path)
+    lead, end = 0, n
+    if trim != TRIM_NONE:
+        while lead < n and not any(s[lead * ch:(lead + 1) * ch]):
+            lead += 1
+    if trim == TRIM_BOTH:
+        while end > lead and not any(s[(end - 1) * ch:end * ch]):
+            end -= 1
+    mono = [sum(s[i:i + ch]) / ch for i in range(lead * ch, end * ch, ch)]
+    if not mono:
+        raise SystemExit('%s: no samples' % path)
+    out = CSND_CLOCK / (CSND_CLOCK // CSND_RATE)
+    x, clipped = dspadpcm.to_s16(dspadpcm.resample(mono, rate, out))
+    note = '%d Hz x%d, %.3f s' % (rate, ch, n / rate)
+    if lead:
+        note += ', %.1f ms of silence cut' % (1000.0 * lead / rate)
+    if end < n:
+        note += ', %.3f s cut at the end' % ((n - end) / rate)
+    if clipped:
+        note += ', %d samples clipped' % clipped
+    return x, note
 
 
 def area_alpha(w, h, px, nw, nh):
@@ -292,6 +357,7 @@ def main():
     ap.add_argument('--header', default=os.path.join('include', 'asset_ids.h'))
     ap.add_argument('--icons', default='icons')
     ap.add_argument('--fonts', default=os.path.join('assets', 'fonts'))
+    ap.add_argument('--audio', default=os.path.join('assets', 'audio'))
     ap.add_argument('-v', '--verbose', action='store_true')
     a = ap.parse_args()
 
@@ -371,8 +437,32 @@ def main():
         arena += (len(payload) + 3) & ~3
         max_csize = max(max_csize, len(comp))
 
+    # Loaders from before the sound section check nothing past the images, so
+    # they still take this pack.
+    sound_off = data_off + len(blob)
+    ssz = struct.calcsize('<6I')
+    sound_table = b''
+    sound_blob = bytearray()
+    for i, (name, fn, trim) in enumerate(SOUNDS):
+        x, note = read_sound(os.path.join(a.audio, fn), trim)
+        coefs = dspadpcm.design(x)
+        frames = dspadpcm.encode(x, coefs)
+        dec = dspadpcm.decode(coefs, frames, len(x))
+        assert len(dec) == len(x), 'DSP-ADPCM round-trip failed: ' + name
+        payload = struct.pack('<16h', *coefs) + frames
+        sound_table += struct.pack('<6I', i, SND_DSPADPCM, CSND_RATE, len(x),
+                                   sound_off + ssz * len(SOUNDS) + len(sound_blob),
+                                   len(payload))
+        sound_blob += payload
+        if a.verbose:
+            err = sum((p - q) * (p - q) for p, q in zip(x, dec))
+            snr = 10 * math.log10(sum(p * p for p in x) / err) if err else 99.0
+            print('  sound %-24s %s -> %d samples, %d bytes, %.1f dB' %
+                  (fn, note, len(x), len(payload), snr))
+
     out = struct.pack('<8I', 0x4B415041, PAK_VERSION, len(entries), data_off,
-                      arena, 0, 0, 0) + table + bytes(blob)
+                      arena, sound_off, len(SOUNDS), 0) + table + bytes(blob)
+    out += sound_table + bytes(sound_blob)
 
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     open(a.out, 'wb').write(out)
@@ -385,13 +475,17 @@ def main():
             f.write('#define ASSET_%-26s %du\n' % (n, i))
         f.write('\n#define ASSET_COUNT %du\n' % len(ids))
         f.write('#define ASSET_ARENA_NEEDED %du\n' % arena)
-        f.write('#define ASSET_MAX_CSIZE %du\n\n#endif\n' % max_csize)
+        f.write('#define ASSET_MAX_CSIZE %du\n\n' % max_csize)
+        for i, (n, _, _) in enumerate(SOUNDS):
+            f.write('#define ASSET_%-26s %du\n' % ('SOUND_' + n, i))
+        f.write('\n#define ASSET_SOUND_COUNT %du\n\n#endif\n' % len(SOUNDS))
 
     raw = sum(len(e[4]) for e in entries)
     print(
-        '%s: %d assets, %d bytes on disk (%d decoded, %.0f%% saved)'
+        '%s: %d assets, %d bytes on disk (%d decoded, %.0f%% saved), '
+        '%d sounds in %d bytes'
         % (a.out, len(entries), len(out), arena,
-           100.0 * (1 - len(blob) / float(raw)))
+           100.0 * (1 - len(blob) / float(raw)), len(SOUNDS), len(sound_blob))
     )
     print('%s: ASSET_COUNT=%d ASSET_ARENA_NEEDED=%d' % (a.header, len(ids), arena))
 
