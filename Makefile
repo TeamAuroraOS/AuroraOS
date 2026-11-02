@@ -75,7 +75,7 @@ ARM9_ENTRY      := 0x08006800
 ARM11_LOAD_ADDR := 0x1FF80000
 ARM11_ENTRY     := 0x1FF80000
 
-.PHONY: all clean rebuild dirs os greentest assets
+.PHONY: all clean rebuild dirs os greentest assets roots
 
 all: dirs $(FIRM)
 	@echo ""
@@ -130,6 +130,10 @@ $(BUILD_DIR)/arm11_%.o: $(SRC_DIR)/%.s
 assets:
 	$(PYTHON) tools/mkassets.py -v
 
+# Rebuilds the roots HTTPS trusts (src/os/TlsRoots.c) from assets/certs.
+roots:
+	$(PYTHON) tools/mkroots.py assets/certs/roots.pem $(SRC_DIR)/os/TlsRoots.c
+
 
 clean:
 	@echo [CLEAN] Removing build artifacts...
@@ -141,6 +145,19 @@ rebuild: clean all
 
 OS_DIR  := src/os
 OS_LD   := $(OS_DIR)/os.ld
+
+# BearSSL (lib/bearssl, MIT), the TLS behind HTTPS: the files Tls.c's client
+# uses, each function in a section of its own so --gc-sections keeps only
+# what is called.
+BEARSSL_DIR    := lib/bearssl
+BEARSSL_SRC    := $(wildcard $(BEARSSL_DIR)/src/*/*.c)
+BEARSSL_OBJS   := $(patsubst $(BEARSSL_DIR)/src/%.c,$(BUILD_DIR)/bearssl/%.o,$(BEARSSL_SRC))
+BEARSSL_HDRS   := $(wildcard $(BEARSSL_DIR)/inc/*.h) $(BEARSSL_DIR)/src/inner.h \
+                  $(BEARSSL_DIR)/src/config.h
+BEARSSL_CFLAGS := $(ARM9_ARCH) -mthumb-interwork -ffreestanding -fno-builtin \
+                  -nostdlib -Wall -Wextra -g -O2 -ffunction-sections \
+                  -fdata-sections -I$(BEARSSL_DIR)/inc -I$(BEARSSL_DIR)/src
+
 OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_setup.o $(BUILD_DIR)/os_audio9.o \
            $(BUILD_DIR)/os_crash.o $(BUILD_DIR)/os_crashasm.o \
@@ -172,7 +189,10 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_aes.o $(BUILD_DIR)/os_nand.o \
            $(BUILD_DIR)/os_fwdump.o \
            $(BUILD_DIR)/os_account.o $(BUILD_DIR)/os_qr.o \
-           $(BUILD_DIR)/os_http.o
+           $(BUILD_DIR)/os_http.o $(BUILD_DIR)/os_uisound.o \
+           $(BUILD_DIR)/os_wifitcp.o $(BUILD_DIR)/os_tls.o \
+           $(BUILD_DIR)/os_tlsroots.o $(BUILD_DIR)/os_appnet.o \
+           $(BEARSSL_OBJS)
 
 CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/SystemMenu11.o $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o $(BUILD_DIR)/Net11.o $(BUILD_DIR)/Wpa11.o $(BUILD_DIR)/Crypto.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o $(BUILD_DIR)/Stereo11.o $(BUILD_DIR)/P3d11.o $(BUILD_DIR)/Run11.o                $(BUILD_DIR)/os_i2c11.o $(BUILD_DIR)/os_power11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
@@ -334,6 +354,31 @@ $(BUILD_DIR)/os_qr.o: $(OS_DIR)/Qr.c $(wildcard $(INC_DIR)/*.h) | dirs
 $(BUILD_DIR)/os_http.o: $(OS_DIR)/Http.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_uisound.o: $(OS_DIR)/UiSound.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_wifitcp.o: $(OS_DIR)/WiFiTcp.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_appnet.o: $(OS_DIR)/AppNet.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_tls.o: $(OS_DIR)/Tls.c $(wildcard $(INC_DIR)/*.h) $(BEARSSL_HDRS) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -I$(BEARSSL_DIR)/inc -c $< -o $@
+
+$(BUILD_DIR)/os_tlsroots.o: $(OS_DIR)/TlsRoots.c $(BEARSSL_HDRS) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -I$(BEARSSL_DIR)/inc -c $< -o $@
+
+$(BUILD_DIR)/bearssl/%.o: $(BEARSSL_DIR)/src/%.c $(BEARSSL_HDRS) | dirs
+	@mkdir -p $(dir $@)
+	@echo [CC9 ] Compiling $<
+	$(CC) $(BEARSSL_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_p3d9.o: $(OS_DIR)/P3d9.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
