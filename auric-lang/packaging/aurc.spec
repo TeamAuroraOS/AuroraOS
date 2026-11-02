@@ -30,6 +30,10 @@ AURORA_SOURCES = [
     (os.path.join("os", "WiFiJoin.c"), os.path.join("aurora_src", "os")),
     (os.path.join("os", "Crypto.c"), os.path.join("aurora_src", "os")),
     (os.path.join("os", "Json.c"), os.path.join("aurora_src", "os")),
+    (os.path.join("os", "WiFiTcp.c"), os.path.join("aurora_src", "os")),
+    (os.path.join("os", "Tls.c"), os.path.join("aurora_src", "os")),
+    (os.path.join("os", "TlsRoots.c"), os.path.join("aurora_src", "os")),
+    ("power.c", "aurora_src"),
 ]
 
 datas = [
@@ -45,6 +49,11 @@ for src, dest in AURORA_SOURCES:
     datas.append((os.path.join(AURORA, "src", src), dest))
 for h in sorted(glob.glob(os.path.join(AURORA, "include", "*.h"))):
     datas.append((h, "aurora_include"))
+# BearSSL for https://, laid out as in lib/bearssl.
+BEARSSL = os.path.join(AURORA, "lib", "bearssl")
+for f in sorted(glob.glob(os.path.join(BEARSSL, "**", "*.[ch]"), recursive=True)):
+    sub = os.path.relpath(os.path.dirname(f), BEARSSL)
+    datas.append((f, os.path.join("bearssl", sub)))
 
 a = Analysis(
     [os.path.join(HERE, "aurc_main.py")],

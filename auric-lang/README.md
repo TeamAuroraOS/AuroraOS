@@ -169,7 +169,7 @@ auric-lang/
                sound_prep.py | small mono WAV copies for an app's sound folder
   examples/    hello.aur, demo.aur, paint.aur (both screens and touch),
                net.aur (the network: HTTP and JSON)
-  docs/        language.md | the full v0.5 language reference
+  docs/        language.md | the full v0.6 language reference
   tests/       unittest suite for every compiler stage + end-to-end build
   packaging/   PyInstaller spec + build_exe.py for the standalone aurc.exe
 ```
@@ -189,7 +189,7 @@ See [`docs/language.md`](docs/language.md) for the complete reference. In brief:
   `touch_y`, `touch_in`), frame control (`buffered`, `present`),
   timing (`millis`, `rand`, `delay`), sound from the SD card
   (`load_sound`, `play_sound`, `play_music`, `stop_music`, `stop_sounds`),
-  and the network over the Wi-Fi network saved in Settings: plain HTTP
+  and the network over the Wi-Fi network saved in Settings: HTTP and HTTPS
   (`net_connect`, `http_get`, `http_post`, `http_param`, `http_download`)
   and values from JSON replies (`json_string`, `json_int`, ...).
 * `==` and `!=` compare strings by their text.

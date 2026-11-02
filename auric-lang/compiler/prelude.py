@@ -47,7 +47,7 @@ BUILTINS: dict[str, Builtin] = {
     "play_music":  Builtin(("int",), "void", "aur_play_music"),
     "stop_music":  Builtin((), "void", "aur_stop_music"),
     "stop_sounds": Builtin((), "void", "aur_stop_sounds"),
-    # The network: the Wi-Fi network saved in Settings, plain HTTP. Strings
+    # The network: the Wi-Fi network saved in Settings, HTTP and HTTPS. Strings
     # these return stay valid until the next request.
     "net_connect": Builtin((), "bool", "aur_net_connect"),
     "net_online":  Builtin((), "bool", "aur_net_online"),

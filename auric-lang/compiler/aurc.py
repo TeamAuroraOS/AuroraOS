@@ -8,13 +8,20 @@ Usage:
 """
 from __future__ import annotations
 
-import argparse
 import os
-import shutil
-import subprocess
 import sys
-import tempfile
-from pathlib import Path
+
+# Run as a script, this folder heads the path, and its ast.py would hide the
+# standard library's from what the imports below pull in.
+if __package__ in (None, "") and not getattr(sys, "frozen", False):
+    sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+import argparse  # noqa: E402
+import concurrent.futures  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 # Runs both as a module and as a script.
 if __package__ in (None, ""):
@@ -31,6 +38,7 @@ if getattr(sys, "frozen", False):
     TOOLS_DIR = BUNDLE / "tools"
     AURORA_INCLUDE = BUNDLE / "aurora_include"
     AURORA_SRC = BUNDLE / "aurora_src"
+    AURORA_BEARSSL = BUNDLE / "bearssl"
     DEFAULT_BUILD_DIR = Path.cwd() / "build"   # bundle dir is read-only/temp
 else:
     COMPILER_DIR = Path(__file__).resolve().parent
@@ -40,6 +48,7 @@ else:
     TOOLS_DIR = AURIC_ROOT / "tools"
     AURORA_INCLUDE = AURORA_ROOT / "include"
     AURORA_SRC = AURORA_ROOT / "src"
+    AURORA_BEARSSL = AURORA_ROOT / "lib" / "bearssl"
     DEFAULT_BUILD_DIR = AURIC_ROOT / "build"
 
 AURORA_SCREEN = AURORA_SRC / "screen.c"
@@ -55,10 +64,12 @@ AURORA_SOUND = [AURORA_SRC / name for name in
                 ("wavload.c", "ff.c", "ffunicode.c", "diskio.c", "sdmmc.c",
                  "string.c")]
 # The network built-ins: the OS's client for apps, the join's request and
-# WPA2 key, and the JSON reader. Dropped again from an app that does not
-# use them.
+# WPA2 key, the JSON reader, and HTTPS (Tls.c with its roots, the TCP rings
+# and the clock its certificate checks read). Dropped again from an app that
+# does not use them.
 AURORA_NET = [AURORA_SRC / "os" / name for name in
-              ("AppNet.c", "WiFiJoin.c", "Crypto.c", "Json.c")]
+              ("AppNet.c", "WiFiJoin.c", "Crypto.c", "Json.c", "WiFiTcp.c",
+               "Tls.c", "TlsRoots.c")] + [AURORA_SRC / "power.c"]
 
 RUNTIME_C = RUNTIME_DIR / "auric_runtime.c"
 RUNTIME_NET = RUNTIME_DIR / "auric_net.c"
@@ -122,6 +133,32 @@ def _run(cmd: list[str], verbose: bool) -> None:
         print(proc.stderr.strip())
 
 
+def _bearssl_objects(cc: str, build_dir: Path, verbose: bool) -> list:
+    """BearSSL (lib/bearssl), the TLS behind https://: compiled once into
+    the build folder and reused until one of its files changes."""
+    out = build_dir / "bearssl"
+    out.mkdir(parents=True, exist_ok=True)
+    flags = ARM9_CFLAGS + ["-I" + str(AURORA_BEARSSL / "inc"),
+                           "-I" + str(AURORA_BEARSSL / "src")]
+    headers = [*(AURORA_BEARSSL / "inc").glob("*.h"),
+               *(AURORA_BEARSSL / "src").glob("*.h")]
+    newest = max((h.stat().st_mtime for h in headers), default=0.0)
+    objs, jobs = [], []
+    for src in sorted((AURORA_BEARSSL / "src").glob("*/*.c")):
+        obj = out / f"{src.parent.name}_{src.stem}.o"
+        objs.append(obj)
+        if not obj.exists() or obj.stat().st_mtime < max(newest,
+                                                          src.stat().st_mtime):
+            jobs.append([cc, *flags, "-c", str(src), "-o", str(obj)])
+    if jobs:
+        print(f"Compiling BearSSL for https:// ({len(jobs)} files, once)...")
+        workers = min(len(jobs), os.cpu_count() or 2)
+        with concurrent.futures.ThreadPoolExecutor(workers) as pool:
+            for f in [pool.submit(_run, j, verbose) for j in jobs]:
+                f.result()
+    return objs
+
+
 def _pack(payload: Path, output: Path, load_addr: int, magic: str) -> None:
     """Invoke the AUR1 packer in-process (tools/aur_pack.py)."""
     sys.path.insert(0, str(TOOLS_DIR))
@@ -155,7 +192,8 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     head_s = work / "aur_head_gen.s"
     head_s.write_text(head_asm, encoding="utf-8")
 
-    includes = ["-I" + str(AURORA_INCLUDE), "-I" + str(RUNTIME_DIR)]
+    includes = ["-I" + str(AURORA_INCLUDE), "-I" + str(RUNTIME_DIR),
+                "-I" + str(AURORA_BEARSSL / "inc")]
 
     head_o = work / "aur_head_gen.o"
     prog_o = work / f"{stem}.o"
@@ -189,12 +227,13 @@ def compile_file(src_path: Path, output: Path, *, build_dir: Path,
     for src, obj in zip(AURORA_SOUND + AURORA_NET, sound_o + netlib_o):
         _run([cc, *ARM9_CFLAGS, *includes, "-c", str(src), "-o", str(obj)], verbose)
     _run([cc, *ARM9_ASFLAGS, "-c", str(RUNTIME_START), "-o", str(start_o)], verbose)
+    bearssl_o = _bearssl_objects(cc, build_dir, verbose)
 
     # Link. Section placement (icon header first, then _start) is fixed by the
     # linker script, so object order here is not significant.
     _run([cc, *ARM9_LDFLAGS, str(head_o), str(start_o), str(prog_o), str(runtime_o),
           str(net_o), str(screen_o), str(i2c_o), str(gpu9_o), str(touch9_o),
-          *map(str, sound_o), *map(str, netlib_o),
+          *map(str, sound_o), *map(str, netlib_o), *map(str, bearssl_o),
           "-o", str(elf), "-lgcc"], verbose)
 
     _run([objcopy, "-O", "binary", str(elf), str(payload)], verbose)

@@ -10,7 +10,6 @@ from .errors import AuricError
 
 
 class T(Enum):
-    """Token kinds."""
     INT = auto()
     FLOAT = auto()
     STRING = auto()

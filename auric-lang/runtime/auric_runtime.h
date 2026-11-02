@@ -67,7 +67,7 @@ void aur_check_home(void);
 int aur_str_eq(const char *a, const char *b);
 
 /* The network (src/os/AppNet.c): the Wi-Fi network saved in Settings > Wi-Fi,
- * plain HTTP. Each call waits until it is done; the screens keep their last
+ * HTTP and HTTPS. Each call waits until it is done; the screens keep their last
  * frame meanwhile and HOME leaves once it is over. A string these return
  * stays valid until the next request (http_get, http_post, http_download). */
 /* net_connect(): joins the saved network unless already on one. */
