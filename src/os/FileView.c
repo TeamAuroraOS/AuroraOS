@@ -10,6 +10,7 @@
 #include "lang.h"
 #include "touch.h"
 #include "ui.h"
+#include "uisound.h"
 
 #define TSH     TOP_SCREEN_HEIGHT
 #define BSH     BOT_SCREEN_HEIGHT
@@ -158,6 +159,10 @@ int fv_confirm(const char *title, const char *subtitle, const char *yes,
   int answer;
   anim_popup(CF_X, CF_Y, CF_W, CF_H);
   answer = fv_confirm_run(title, subtitle, yes, no);
+  if (answer)
+    ui_sound_select();
+  else
+    ui_sound_back();
   anim_transition(ANIM_FADE, ANIM_BOT);
   return answer;
 }

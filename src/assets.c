@@ -1,6 +1,7 @@
 /* Reads SD:\Aurora\assets.pak and RLE-decodes every entry into a fixed arena.
- * All-or-nothing: any inconsistency leaves assets_ok() false. Layout in
- * docs/assets.md. */
+ * All-or-nothing: any inconsistency leaves assets_ok() false. The sounds after
+ * the images are only indexed here, and a bad sound table costs only the
+ * sounds. Layout in docs/assets.md. */
 
 #include "assets.h"
 #include "aurora.h"
@@ -13,7 +14,8 @@
 #define ASSETS_RETRY_DELAY   60000u
 
 typedef struct {
-  uint32_t magic, version, count, data_off, arena, reserved[3];
+  uint32_t magic, version, count, data_off, arena, sound_off, sound_count;
+  uint32_t reserved;
 } PakHead;
 
 typedef struct {
@@ -22,12 +24,29 @@ typedef struct {
   uint32_t off, csize, usize;
 } PakEntry;
 
+/* A sound's payload: 8 predictor pairs (16 Q11 coefficients), then DSP-ADPCM
+ * frames of a header byte (pair << 4 | shift) and 14 four-bit residuals. */
+typedef struct {
+  uint32_t id, format, rate, samples, off, size;
+} PakSound;
+
+#define SND_DSPADPCM    0u
+#define SND_COEF_BYTES  32u
+#define SND_FRAME_BYTES 8u
+#define SND_FRAME_N     14u
+/* mkassets.py keeps |c| below 2.0; this bound keeps the decoder's sums in
+ * 32 bits. */
+#define SND_COEF_MAX    16383
+#define SND_SHIFT_MAX   12u
+#define SND_MAX_SAMPLES 0x01000000u
+
 /* The pack is written by a Python script packing raw little-endian fields, so
  * any padding the compiler adds here would silently misread every entry. */
 typedef char assets_layout_check[
     (sizeof(PakHead) == 32 && sizeof(PakEntry) == 24 &&
-     sizeof(AssetFontHead) == 16 && sizeof(AssetGlyph) == 10 &&
-     ASSET_ARENA_NEEDED <= ASSETS_ARENA_MAX)
+     sizeof(PakSound) == 24 && sizeof(AssetFontHead) == 16 &&
+     sizeof(AssetGlyph) == 10 && ASSET_ARENA_NEEDED <= ASSETS_ARENA_MAX &&
+     ASSET_MAX_CSIZE >= SND_FRAME_BYTES)
         ? 1
         : -1];
 
@@ -37,6 +56,8 @@ static const char *g_err = "not loaded";
 
 static PakEntry g_table[ASSET_COUNT];
 static uint8_t g_scratch[ASSET_MAX_CSIZE];
+
+static PakSound g_sounds[ASSET_SOUND_COUNT]; /* size 0: not in the pack */
 
 /* 0x01..0x7F: run of n copies of the next byte. 0x81..0xFF: n literals. */
 static int rle_decode(const uint8_t *src, uint32_t csize, uint8_t *dst,
@@ -110,6 +131,43 @@ int assets_load(void) {
       delay(ASSETS_RETRY_DELAY);
   }
   return ok;
+}
+
+static void sounds_clear(void) {
+  for (uint32_t i = 0; i < ASSET_SOUND_COUNT; i++)
+    g_sounds[i].size = 0;
+}
+
+/* Ids this build does not know, from a newer pack, are skipped. */
+static void sounds_read(FIL *f, const PakHead *head, FSIZE_t file_size) {
+  PakSound s;
+  UINT br;
+
+  sounds_clear();
+  if (!head->sound_count || head->sound_off < head->data_off ||
+      head->sound_off > file_size ||
+      head->sound_count > (file_size - head->sound_off) / sizeof(PakSound) ||
+      f_lseek(f, head->sound_off) != FR_OK)
+    return;
+  for (uint32_t i = 0; i < head->sound_count; i++) {
+    uint32_t frames;
+    if (f_read(f, &s, sizeof(s), &br) != FR_OK || br != sizeof(s)) {
+      sounds_clear();
+      return;
+    }
+    if (s.id >= ASSET_SOUND_COUNT)
+      continue;
+    frames = (s.samples + SND_FRAME_N - 1u) / SND_FRAME_N;
+    if (g_sounds[s.id].size || s.format != SND_DSPADPCM || !s.samples ||
+        s.samples > SND_MAX_SAMPLES || s.rate < 1000u || s.rate > 96000u ||
+        s.size != SND_COEF_BYTES + frames * SND_FRAME_BYTES ||
+        s.off < head->data_off || s.off > file_size ||
+        s.size > file_size - s.off) {
+      sounds_clear();
+      return;
+    }
+    g_sounds[s.id] = s;
+  }
 }
 
 int assets_read(void) {
@@ -217,9 +275,129 @@ int assets_read(void) {
     return fail("required font missing");
   }
 
+  sounds_read(&f, &head, file_size);
   f_close(&f);
   g_err = "";
   g_ok = 1;
+  return 1;
+}
+
+static int snd_coef_ok(const int16_t *coef) {
+  for (int i = 0; i < 16; i++)
+    if (coef[i] < -SND_COEF_MAX || coef[i] > SND_COEF_MAX)
+      return 0;
+  return 1;
+}
+
+/* Decodes `frames` whole frames at `src`, as far as s->total. */
+static int snd_frames(AssetSoundStream *s, const uint8_t *src, uint32_t frames) {
+  int16_t *dst = s->dst;
+  uint32_t done = s->done, total = s->total;
+  int32_t h1 = s->h1, h2 = s->h2;
+
+  for (uint32_t k = 0; k < frames; k++) {
+    const uint8_t *fr = src + k * SND_FRAME_BYTES;
+    uint32_t pair = fr[0] >> 4, shift = fr[0] & 15u;
+    if (pair > 7u || shift > SND_SHIFT_MAX)
+      return 0;
+    int32_t c1 = s->coef[2 * pair], c2 = s->coef[2 * pair + 1];
+    int32_t step = (int32_t)(2048u << shift);
+    for (uint32_t n = 0; n < SND_FRAME_N && done < total; n++) {
+      int32_t q = (n & 1u) ? (fr[1 + n / 2] & 15) : (fr[1 + n / 2] >> 4);
+      if (q >= 8)
+        q -= 16;
+      int32_t v = (q * step + 1024 + c1 * h1 + c2 * h2) >> 11;
+      if (v > 32767)
+        v = 32767;
+      else if (v < -32768)
+        v = -32768;
+      h2 = h1;
+      h1 = v;
+      dst[done++] = (int16_t)v;
+    }
+  }
+  s->done = done;
+  s->h1 = h1;
+  s->h2 = h2;
+  return 1;
+}
+
+uint32_t asset_sound_read(uint32_t id, int16_t *dst, uint32_t max,
+                          uint32_t *rate) {
+  static FIL f;
+  AssetSoundStream s;
+  UINT br;
+
+  if (!g_ok || id >= ASSET_SOUND_COUNT || !g_sounds[id].size ||
+      g_sounds[id].samples > max)
+    return 0;
+  s.dst = dst;
+  s.total = g_sounds[id].samples;
+  s.done = 0;
+  s.h1 = s.h2 = 0;
+  if (f_open(&f, PAK_PATH, FA_READ) != FR_OK)
+    return 0;
+  if (f_lseek(&f, g_sounds[id].off) != FR_OK ||
+      f_read(&f, s.coef, sizeof(s.coef), &br) != FR_OK ||
+      br != sizeof(s.coef) || !snd_coef_ok(s.coef))
+    goto fail;
+
+  while (s.done < s.total) {
+    uint32_t frames = (s.total - s.done + SND_FRAME_N - 1u) / SND_FRAME_N;
+    if (frames > ASSET_MAX_CSIZE / SND_FRAME_BYTES)
+      frames = ASSET_MAX_CSIZE / SND_FRAME_BYTES;
+    if (f_read(&f, g_scratch, frames * SND_FRAME_BYTES, &br) != FR_OK ||
+        br != frames * SND_FRAME_BYTES || !snd_frames(&s, g_scratch, frames))
+      goto fail;
+  }
+  f_close(&f);
+  *rate = g_sounds[id].rate;
+  return s.done;
+
+fail:
+  f_close(&f);
+  return 0;
+}
+
+uint32_t asset_sound_open(uint32_t id, void *buf, uint32_t buf_bytes,
+                          int16_t *dst, uint32_t max, AssetSoundStream *s,
+                          uint32_t *rate) {
+  static FIL f;
+  const uint8_t *b = buf;
+  UINT br;
+  int ok;
+
+  if (!g_ok || id >= ASSET_SOUND_COUNT || !g_sounds[id].size ||
+      g_sounds[id].samples > max || g_sounds[id].size > buf_bytes)
+    return 0;
+  if (f_open(&f, PAK_PATH, FA_READ) != FR_OK)
+    return 0;
+  ok = f_lseek(&f, g_sounds[id].off) == FR_OK &&
+       f_read(&f, buf, g_sounds[id].size, &br) == FR_OK &&
+       br == g_sounds[id].size;
+  f_close(&f);
+  if (!ok)
+    return 0;
+  for (int i = 0; i < 16; i++)
+    s->coef[i] = (int16_t)(b[2 * i] | (b[2 * i + 1] << 8));
+  if (!snd_coef_ok(s->coef))
+    return 0;
+  s->src = b + SND_COEF_BYTES;
+  s->dst = dst;
+  s->total = g_sounds[id].samples;
+  s->done = 0;
+  s->h1 = s->h2 = 0;
+  *rate = g_sounds[id].rate;
+  return s->total;
+}
+
+int asset_sound_decode(AssetSoundStream *s, uint32_t frames) {
+  uint32_t left = (s->total - s->done + SND_FRAME_N - 1u) / SND_FRAME_N;
+  if (frames > left)
+    frames = left;
+  if (!snd_frames(s, s->src, frames))
+    return 0;
+  s->src += frames * SND_FRAME_BYTES;
   return 1;
 }
 

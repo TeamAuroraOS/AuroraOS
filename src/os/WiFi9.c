@@ -6,6 +6,7 @@
 #include "audio.h"
 #include "gpu.h"
 #include "timer.h"
+#include "tls.h"
 #include "ui.h"
 #include "wifi.h"
 
@@ -22,11 +23,14 @@ static u32 shared_seq(void) {
 }
 
 /* arg0 goes in the command block, not WifiShared, where a line the ARM11 has
- * dirtied could be written back over it. */
+ * dirtied could be written back over it. The operands the caller wrote
+ * (WifiNetIo, the request) reach memory before the counter: one flush for
+ * all would write the command block's line back first. */
 static void post(u32 cmd, u32 arg0) {
   posted = shared_seq();
   ctrl->arg0 = arg0;
   ctrl->cmd = cmd;
+  os_cache_sync();
   ctrl->cmd_seq = ctrl->cmd_seq + 1;
   os_cache_sync();
 }
@@ -36,7 +40,11 @@ void wifi_probe(void) { post(AUDIO_CMD_WIFI, 0); }
 /* The firmware must already be staged. */
 void wifi_boot(u32 opts) { post(AUDIO_CMD_WIFI_BOOT, opts); }
 
-int wifi_done(void) { return shared_seq() != posted; }
+/* Also done with no command outstanding at all, after one AppNet.c posted
+ * itself (the Terminal's curl). */
+int wifi_done(void) {
+  return shared_seq() != posted || ctrl->ack_seq == ctrl->cmd_seq;
+}
 
 int wifi_online(void) { return online; }
 
@@ -69,11 +77,14 @@ void wifi_direct_on(void) {
   direct = 1;
 }
 
+/* Every command runs between wifi_direct_on and this, AppNet.c's for the
+ * Terminal's curl among them, so this is where the core's word is taken. */
 int wifi_direct_off(void) {
   if (!direct)
     return 1;
   if (!wifi_done())
     return 0;
+  online = ((volatile WifiShared *)WIFI_SHARED_ADDR)->session == 1u;
   if (direct_back)
     screen_use_backbuffer(1);
   direct = 0;
@@ -136,7 +147,6 @@ uint32_t wifi_net(uint32_t op, uint32_t ip, uint32_t seq, const char *name,
   r->from = io->from;
   r->icmp = io->icmp;
   r->dns_rcode = io->dns_rcode;
-  online = ((volatile WifiShared *)WIFI_SHARED_ADDR)->session == 1u;
   return r->status;
 }
 
@@ -173,6 +183,51 @@ uint32_t wifi_http(uint32_t ip, uint32_t port, const char *req,
     resp[i] = a[i];
   *got = n;
   *stage = io->stage;
-  online = ((volatile WifiShared *)WIFI_SHARED_ADDR)->session == 1u;
   return io->status;
+}
+
+static void (*tls_tick)(u32 ms);
+
+static int tls_start(void) {
+  post(AUDIO_CMD_WIFI_NET, WIFI_NETOP_TCP);
+  return 1;
+}
+
+static void tls_tick_ui(u32 ms) {
+  if (tls_tick)
+    tls_tick(ms);
+  ui_idle();
+}
+
+u32 wifi_now_ms(void) {
+  static u32 last, ms, rest;
+  u32 t = timer_ticks(), hz = timer_hz();
+  unsigned long long r = rest + (unsigned long long)(t - last) * 1000u;
+  last = t;
+  if (!hz)
+    return ms;
+  ms += (u32)(r / hz);
+  rest = (u32)(r % hz);
+  return ms;
+}
+
+uint32_t wifi_https(const char *host, uint32_t ip, uint32_t port,
+                    const char *req, uint32_t req_len, char *resp,
+                    uint32_t max, uint32_t *got, uint32_t *stage,
+                    uint32_t timeout_ms, int *tls_err,
+                    void (*tick)(uint32_t ms)) {
+  static const TlsLink link = {tls_start, wifi_done, tls_tick_ui, wifi_now_ms};
+  u32 st;
+  *got = 0;
+  *stage = 0;
+  *tls_err = 0;
+  if (!wifi_direct_off() || ctrl->version < AUDIO_TCP_VERSION)
+    return WIFI_NETS_BUSY;
+  tls_tick = tick;
+  wifi_direct_on();
+  st = tls_exchange(&link, host, ip, port, req, req_len, 0, resp, max, got,
+                    stage, timeout_ms, tls_err);
+  wifi_direct_off();
+  tls_tick = 0;
+  return st;
 }

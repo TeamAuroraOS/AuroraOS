@@ -182,14 +182,25 @@
 #define ASSET_PERSON_SAIITANAA_40        176u
 #define ASSET_PERSON_KYAERO_40           177u
 #define ASSET_PERSON_SECRET_40           178u
-#define ASSET_WALLPAPER                  179u
-#define ASSET_FONT_SMALL                 180u
-#define ASSET_FONT_UI                    181u
-#define ASSET_FONT_BOLD                  182u
-#define ASSET_FONT_TITLE                 183u
+#define ASSET_PERSON_LEWECK_40           179u
+#define ASSET_WALLPAPER                  180u
+#define ASSET_FONT_SMALL                 181u
+#define ASSET_FONT_UI                    182u
+#define ASSET_FONT_BOLD                  183u
+#define ASSET_FONT_TITLE                 184u
 
-#define ASSET_COUNT 184u
-#define ASSET_ARENA_NEEDED 723968u
+#define ASSET_COUNT 185u
+#define ASSET_ARENA_NEEDED 730368u
 #define ASSET_MAX_CSIZE 72035u
+
+#define ASSET_SOUND_STARTUP              0u
+#define ASSET_SOUND_SHOP                 1u
+#define ASSET_SOUND_DL_DONE              2u
+#define ASSET_SOUND_SELECT               3u
+#define ASSET_SOUND_BACK                 4u
+#define ASSET_SOUND_MOVE                 5u
+#define ASSET_SOUND_HOME                 6u
+
+#define ASSET_SOUND_COUNT 7u
 
 #endif

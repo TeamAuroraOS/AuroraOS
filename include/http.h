@@ -4,8 +4,8 @@
 #include "aurora.h"
 
 /* HTTP/1.0 exchanges with the account server's console host (ACCOUNT_HOST,
- * account.h) over the joined Wi-Fi network: one WIFI_NETOP_HTTP each, so a
- * reply has to fit the core's buffer (WIFI_HTTP_RESP_MAX), headers included.
+ * account.h) over HTTPS on the joined Wi-Fi network: one TLS connection
+ * each (Tls.c), and a reply has to fit WIFI_HTTP_RESP_MAX, headers included.
  * Larger bodies are fetched in byte ranges. See docs/account.md and
  * docs/store.md. */
 
@@ -18,6 +18,7 @@ typedef struct {
   u32 from;      /* Content-Range: the first byte and the whole length; */
   u32 total;     /* total is 0 without the header */
   char etag[24]; /* "" without one */
+  int tls;       /* net WIFI_NETS_TLS: why (tls_error_text) */
 } HttpReply;
 
 /* 1 while the console is on a network the core keeps up. When it is not,

@@ -221,6 +221,9 @@ static WifiCmd *wifi_logcmd(WifiShared *w, uint16_t cmd16, uint32_t arg) {
 /* STAT0 | STAT1 << 16 when the last CMD53 ended, success or not. */
 static uint32_t g_cmd53_stat;
 
+/* In a network operation, on a 1-bit bus. */
+static int g_net_bus;
+
 /* CMD53 (IO_RW_EXTENDED) through the 16-bit FIFO. blksz 0 is byte mode, which
  * the BMI bootloader needs; otherwise len/blksz blocks. `buf` must be 4-byte
  * aligned. Returns 0, or negative on error or timeout. */
@@ -313,6 +316,12 @@ static int wifi_cmd53(WifiShared *w, uint32_t func, uint32_t addr,
    * the next command would go out on top of it: start it clean. */
   wifi_timeout(w);
   wifi_ctrl_init();
+  /* The chip may still be inside the transfer, which only the CCCR's I/O abort
+   * ends (SDIO spec). The boot has no need: it starts the chip over instead. */
+  if (g_net_bus) {
+    WifiCmd t;
+    wifi_cmd(w, &t, WCMD52, WCMD52_WR(0, 0x06, func));
+  }
   return err;
 }
 
@@ -822,12 +831,14 @@ static int g_fw_asserted;
 static int wifi_htc_pending(WifiShared *w, uint32_t *look) {
   WifiCmd t;
   uint8_t r[12];
+  uint32_t errs = g_bus_errs;
 
   for (int i = 0; i < 12; i++) {
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, 0x400 + i));
     r[i] = (uint8_t)(t.resp & 0xFFu);
   }
-  if ((r[3] & 0x01u) && t.ok == 1u && !g_fw_asserted) {
+  /* Only from a pass that read clean: nothing clears this but a new boot. */
+  if ((r[3] & 0x01u) && g_bus_errs == errs && !g_fw_asserted) {
     g_fw_asserted = 1;
     w->fw_assert = 1;
     w->fw_assert_t = wifi_now();
@@ -914,6 +925,9 @@ static int wifi_htc_send(WifiShared *w, uint8_t ep, uint8_t flags,
 static int g_htc_got;
 static uint8_t g_htc_rx_ep;
 
+/* Frames in a row that could not be read as announced. */
+static uint32_t g_rx_bad;
+
 /* Once joining starts, a poll waits this long by the timer instead of
  * wifi_ms(HTC_TICK_MS), which runs several times longer than it says. */
 static uint32_t g_tick_us;
@@ -940,13 +954,12 @@ static void wifi_htc_trailer(WifiShared *w, const uint8_t *t, uint32_t n) {
 /* Network operations take frames a block per CMD53 on a faster clock; the
  * boot and the join keep a byte per CMD52 at 523 kHz, about 0.3 s for a full
  * frame. The clock goes as high as the card's registers still read right,
- * and a command failing on it steps it down for the rest of the core's life.
+ * and a command failing on it steps it down for the rest of the session.
  * A CMD53 read failing on the slow clock goes back to CMD52. */
 static const uint8_t bus_divs[] = {0x01, 0x02, 0x04, 0x08}; /* 16.8 to 2.1 MHz */
 #define BUS_DIVS sizeof(bus_divs)
 #define BUS_SLOW 0x20u
 static uint32_t g_bus_step; /* into bus_divs; BUS_DIVS: BUS_SLOW only */
-static int g_net_bus;       /* in a network operation, on a 1-bit bus */
 static int g_rx53_bad;
 
 static uint32_t bus_div(void) { return WB16(WR_CLKCTL) & 0xFFu; }
@@ -1016,8 +1029,9 @@ static uint32_t wifi_htc_recv(WifiShared *w, uint8_t *buf, uint32_t max,
       wifi_ms(HTC_TICK_MS);
   }
   /* A lookahead read wrong would drain the wrong number of bytes. */
-  if (g_net_bus && g_bus_errs != errs && bus_fast()) {
-    wifi_bus_down();
+  if (g_net_bus && g_bus_errs != errs) {
+    if (bus_fast())
+      wifi_bus_down();
     return 0;
   }
   if (!have)
@@ -1026,6 +1040,7 @@ static uint32_t wifi_htc_recv(WifiShared *w, uint8_t *buf, uint32_t max,
   uint32_t len = (look >> 16) & 0xFFFFu; /* payload length */
   uint32_t total = htc_pad(HTC_HDR_LENGTH + len);
   if (total > HTC_FRAME_MAX) {
+    g_rx_bad++;
     return 0; /* not a length this handshake ever produces */
   }
   int fast = bus_fast(), r53 = g_net_bus && !g_rx53_bad;
@@ -1036,14 +1051,17 @@ static uint32_t wifi_htc_recv(WifiShared *w, uint8_t *buf, uint32_t max,
     wifi_cmd(w, &t, WCMD52, WCMD52_RD(1, WIFI_MBOX0 + i));
     frame[i] = (uint8_t)(t.resp & 0xFFu);
   }
-  /* ath6kl checks a frame's header against its lookahead too. */
-  if ((fast || r53) && (g_bus_errs != errs || frame32[0] != look)) {
+  /* ath6kl checks a frame's header against its lookahead too. A frame dropped
+   * here takes any credit report in its trailer with it. */
+  if ((fast || g_net_bus) && (g_bus_errs != errs || frame32[0] != look)) {
+    g_rx_bad++;
     if (fast)
       wifi_bus_down();
-    else
+    else if (r53)
       g_rx53_bad = 1;
     return 0;
   }
+  g_rx_bad = 0;
   w->htc_look = look;
   g_htc_got = 1;
   g_htc_rx_ep = frame[0];
@@ -1558,6 +1576,12 @@ static volatile int g_wpa_hit;
 
 #define NET_BIT(t) (1u << (t))
 
+/* wifi_now restarts with every command, so on its own it says much the same
+ * thing each time, and a server can hold a connection for a minute after it
+ * closes: a SYN on that port with a lower sequence number only draws an ACK of
+ * the old one. So ports run on in turn, from where the join's length left them. */
+static uint32_t g_tcp_port;
+
 static void wifi_join_reset(uint32_t opts) {
   const WifiReq *q = (const WifiReq *)WIFI_REQ_ADDR;
   g_want_len = 0;
@@ -1599,6 +1623,8 @@ static void wifi_pump(WifiShared *w, uint32_t ms, volatile int *stop) {
 /* An Ethernet II frame out on the best-effort endpoint, the way ath6kl hands
  * data to the firmware: the data prefix (802.3 data, priority 0), then the
  * frame as 802.3 with an LLC/SNAP header carrying the type. */
+static uint32_t g_send_fails; /* in a row */
+
 static int wifi_data_send(WifiShared *w, const uint8_t *f, uint32_t len) {
   static uint8_t b[2u + NET_TX_MAX + 8u];
   if (len < 14u || len > NET_TX_MAX || g_fw_asserted)
@@ -1623,11 +1649,18 @@ static int wifi_data_send(WifiShared *w, const uint8_t *f, uint32_t len) {
   b[23] = f[13];
   for (uint32_t i = 0; i < pl; i++)
     b[24 + i] = f[14 + i];
+  int fast = g_net_bus && bus_fast();
   int r = wifi_htc_send(w, w->svc_ep[0], w->htc_credit <= 2u ? 0x01u : 0u, b,
                         24u + pl, g_style);
   if (r == 0) {
     w->htc_credit--;
     w->tx_frames++;
+    g_send_fails = 0;
+  } else {
+    g_send_fails++;
+    /* The failure left the slow clock on; wifi_bus_up comes back a step down. */
+    if (fast && g_bus_step < BUS_DIVS)
+      g_bus_step++;
   }
   return r;
 }
@@ -1899,9 +1932,9 @@ static void wifi_wpa_rx(WifiShared *w, const uint8_t *f, uint32_t n) {
 /* WMI_ADD_CIPHER_KEY in the AR6014's layout: index, cipher, usage (0
  * pairwise, 1 group), length, RSC, the key in 32 bytes, and KEY_OP_INIT_VAL
  * (3). */
-static void wifi_add_key(WifiShared *w, uint32_t idx, uint32_t cipher,
-                         uint32_t usage, const uint8_t *key, uint32_t klen,
-                         const uint8_t *rsc) {
+static int wifi_add_key(WifiShared *w, uint32_t idx, uint32_t cipher,
+                        uint32_t usage, const uint8_t *key, uint32_t klen,
+                        const uint8_t *rsc) {
   uint8_t c[45];
   for (uint32_t i = 0; i < sizeof(c); i++)
     c[i] = 0;
@@ -1918,18 +1951,20 @@ static void wifi_add_key(WifiShared *w, uint32_t idx, uint32_t cipher,
   crypto_wipe(c, sizeof(c));
   if (r == 0)
     w->wpa_keys |= usage ? 2u : 1u;
+  return r;
 }
 
 /* Whatever keys the handshake has ready. A TKIP group key goes in with its
- * MIC halves swapped, as wpa_supplicant hands it to a driver. */
+ * MIC halves swapped, as wpa_supplicant hands it to a driver. A key that could
+ * not be sent stays ready for the next call: without the new group key no ARP
+ * request is understood, and the router soon cannot reach this station. */
 static void wifi_wpa_keys(WifiShared *w) {
-  if (g_wpa.ptk_ready) {
-    wifi_add_key(w, 0, 4, 0, g_wpa.ptk + 32, 16, 0);
+  if (g_wpa.ptk_ready && wifi_add_key(w, 0, 4, 0, g_wpa.ptk + 32, 16, 0) == 0)
     g_wpa.ptk_ready = 0;
-  }
   if (g_wpa.gtk_ready) {
     uint8_t k[32];
     uint32_t tkip = g_wpa.group == 2u, len = tkip ? 32u : 16u;
+    int r = 0;
     if (g_wpa.gtk_len >= len) {
       for (uint32_t i = 0; i < 16; i++)
         k[i] = g_wpa.gtk[i];
@@ -1937,10 +1972,12 @@ static void wifi_wpa_keys(WifiShared *w) {
         k[16 + i] = g_wpa.gtk[24 + i];
         k[24 + i] = g_wpa.gtk[16 + i];
       }
-      wifi_add_key(w, g_wpa.gtk_idx, tkip ? 3 : 4, 1, k, len, g_wpa.gtk_rsc);
+      r = wifi_add_key(w, g_wpa.gtk_idx, tkip ? 3 : 4, 1, k, len,
+                       g_wpa.gtk_rsc);
       crypto_wipe(k, sizeof(k));
     }
-    g_wpa.gtk_ready = 0;
+    if (r == 0)
+      g_wpa.gtk_ready = 0;
   }
   dcache_clean();
 }
@@ -2066,6 +2103,12 @@ static void wifi_join(WifiShared *w, int style, int stay) {
   if (stay && g_link == 1 && g_net.ip && g_net.have_gw_mac) {
     g_session = 1;
     w->session = 1;
+    g_tcp_port += wifi_now();
+    /* A new chip: nothing learned about the last one holds. */
+    g_bus_step = 0;
+    g_rx53_bad = 0;
+    g_rx_bad = 0;
+    g_send_fails = 0;
     dcache_clean();
     return;
   }
@@ -2624,6 +2667,14 @@ static int http_over(NetState *n, WifiNetIo *io) {
   return 0;
 }
 
+static void wifi_tcp_open(WifiShared *w, WifiNetIo *io, uint8_t *rx,
+                          uint32_t cap) {
+  uint32_t r = wifi_now() ^ w->wmi_mac0;
+  g_tcp_port++;
+  net_tcp_open(&g_net, io->ip, (uint16_t)(0xC000u | (g_tcp_port & 0x3FFFu)),
+               (uint16_t)io->port, (r + g_tcp_port) * 2654435761u, rx, cap);
+}
+
 /* The request goes out in segments as the server's window allows. Unanswered
  * for the retransmission timeout (1 s, doubling to 4 s), everything from the
  * first unacknowledged byte goes again. Once the reply is in, a FIN ends the
@@ -2645,10 +2696,7 @@ static void wifi_op_http(WifiShared *w, WifiNetIo *io, uint32_t ms) {
     io->status = WIFI_NETS_NOHOST;
     return;
   }
-  uint32_t r = wifi_now() ^ w->wmi_mac0;
-  net_tcp_open(n, io->ip, (uint16_t)(0xC000u | ((r >> 3) & 0x3FFFu)),
-               (uint16_t)io->port, r * 2654435761u, (uint8_t *)WIFI_HTTP_RESP,
-               WIFI_HTTP_RESP_MAX);
+  wifi_tcp_open(w, io, (uint8_t *)WIFI_HTTP_RESP, WIFI_HTTP_RESP_MAX);
   base = n->tcp_iss + 1u;
   una = n->snd_una;
   g_net_want = NET_BIT(NET_RX_TCP);
@@ -2719,6 +2767,183 @@ static void wifi_op_http(WifiShared *w, WifiNetIo *io, uint32_t ms) {
     io->status = WIFI_NETS_NOLINK;
 }
 
+/* Bytes of tx the server has acknowledged: none while the SYN is out, and
+ * the FIN, once acknowledged, is not one of them. */
+static uint32_t tcp_acked(const NetState *n, uint32_t base, uint32_t head) {
+  uint32_t acked = n->snd_una - base;
+  return (int32_t)acked < 0 ? 0u : acked > head ? head : acked;
+}
+
+static void tcp_publish(WifiTcp *t, NetState *n, uint32_t base, uint32_t head,
+                        uint32_t state) {
+  t->tx_tail = tcp_acked(n, base, head);
+  t->rx_head = n->tcp_rx_len;
+  t->eof = (uint32_t)n->tcp_fin;
+  t->state = state;
+  dcache_clean();
+}
+
+/* WIFI_NETOP_TCP: a connection the ARM9 drives through WifiTcp. Bytes it puts
+ * in tx go out as the server's window allows and stay until acknowledged
+ * (resent from the first unacknowledged one after the retransmission timeout,
+ * 1 s doubling to 4 s); what the server sends goes into rx as the ARM9 makes
+ * room, with a window update once a segment's worth has freed up. It ends
+ * when the ARM9 says so (a FIN after the last byte, or a RST), the server
+ * resets, nothing is acknowledged for `ms`, or the ARM9 stops bumping
+ * `alive` for WIFI_TCP_ALIVE_MS. */
+static void wifi_op_tcp(WifiShared *w, WifiNetIo *io, uint32_t ms) {
+  static uint8_t f[NET_TX_MAX];
+  WifiTcp *t = (WifiTcp *)WIFI_TCP_ADDR;
+  NetState *n = &g_net;
+  uint32_t rto = 1000000u, base, head = 0, una, una_t, last, t0, alive;
+  uint32_t alive_t, fin_seq = 0, fin_t = 0;
+  int fin = 0, graceful = 0;
+  uint8_t mac[6];
+  io->stage = 0;
+  io->resent = 0;
+  t->tx_tail = t->rx_head = t->eof = 0;
+  t->state = WIFI_TCP_CONNECTING;
+  dcache_clean();
+  if (!io->port || io->port > 0xFFFFu) {
+    io->status = WIFI_NETS_TOOBIG;
+    t->state = WIFI_TCP_CLOSED;
+    dcache_clean();
+    return;
+  }
+  if (!wifi_mac_for(w, io->ip, mac, ms)) {
+    io->status = WIFI_NETS_NOHOST;
+    t->state = WIFI_TCP_CLOSED;
+    dcache_clean();
+    return;
+  }
+  wifi_tcp_open(w, io, (uint8_t *)t->rx, WIFI_TCP_RX);
+  base = n->tcp_iss + 1u;
+  una = n->snd_una;
+  g_net_want = NET_BIT(NET_RX_TCP);
+  io->stage = WIFI_HTTP_CONNECT;
+  io->status = WIFI_NETS_TIMEOUT;
+  wifi_data_send(w, f, net_tcp_seg(n, f, mac, NET_TCP_SYN, n->tcp_iss, 0, 0));
+  t0 = last = una_t = alive_t = wifi_now();
+  alive = t->alive;
+
+  while (g_link > 0 && !g_fw_asserted) {
+    dcache_clean_inval(); /* the ARM9's line and tx */
+    uint32_t now = wifi_now(), tail = t->rx_tail, how = t->close;
+    if (t->alive != alive) {
+      alive = t->alive;
+      alive_t = now;
+    }
+    /* Only forward, and never past what came in or what tx can hold. */
+    if (tail - n->tcp_rx_done <= n->tcp_rx_len - n->tcp_rx_done)
+      n->tcp_rx_done = tail;
+    if (!fin &&
+        t->tx_head - head <= WIFI_TCP_TX - (head - tcp_acked(n, base, head)))
+      head = t->tx_head;
+
+    if (n->tcp_state == NET_TCP_RESET) {
+      io->status = WIFI_NETS_REFUSED;
+      break;
+    }
+    if (how == WIFI_TCP_ABORT) {
+      io->status = WIFI_NETS_OK;
+      break;
+    }
+    if (now - alive_t >= WIFI_TCP_ALIVE_MS * 1000u)
+      break;
+    if (n->snd_una != una || n->snd_una == n->snd_nxt) {
+      una = n->snd_una;
+      una_t = now;
+      rto = 1000000u;
+      last = now;
+    }
+    if (n->snd_una != n->snd_nxt) {
+      if (now - una_t >= ms * 1000u)
+        break; /* nothing acknowledged for that long */
+      if (now - last >= rto) {
+        io->resent++;
+        rto = rto < 4000000u ? rto * 2u : rto;
+        last = now;
+        if (n->tcp_state == NET_TCP_SYN_SENT) {
+          wifi_data_send(w, f,
+                         net_tcp_seg(n, f, mac, NET_TCP_SYN, n->tcp_iss, 0, 0));
+        } else {
+          n->snd_nxt = n->snd_una;
+          if (fin && n->snd_una - base <= head)
+            fin = 0; /* the FIN goes again after the data */
+        }
+      }
+    }
+
+    while (n->tcp_state == NET_TCP_OPEN && n->snd_nxt - base < head) {
+      uint32_t off = n->snd_nxt - base, flight = n->snd_nxt - n->snd_una;
+      uint32_t pos = off & (WIFI_TCP_TX - 1u), seg = head - off;
+      if (flight >= n->tcp_wnd)
+        break;
+      if (seg > n->tcp_mss)
+        seg = n->tcp_mss;
+      if (seg > NET_TCP_SEG)
+        seg = NET_TCP_SEG;
+      if (seg > n->tcp_wnd - flight)
+        seg = n->tcp_wnd - flight;
+      if (seg > WIFI_TCP_TX - pos)
+        seg = WIFI_TCP_TX - pos;
+      uint32_t fl = NET_TCP_ACK | (off + seg == head ? NET_TCP_PSH : 0u);
+      if (wifi_data_send(w, f, net_tcp_seg(n, f, mac, fl, n->snd_nxt,
+                                           (const uint8_t *)t->tx + pos,
+                                           seg)) != 0)
+        break;
+      n->snd_nxt += seg;
+      last = now;
+    }
+    if (how == WIFI_TCP_FIN && !fin_t)
+      fin_t = now;
+    if (n->tcp_state == NET_TCP_OPEN && how == WIFI_TCP_FIN && !fin &&
+        n->snd_nxt - base == head) {
+      if (wifi_data_send(w, f, net_tcp_seg(n, f, mac,
+                                           NET_TCP_FIN | NET_TCP_ACK,
+                                           n->snd_nxt, 0, 0)) == 0) {
+        fin = 1;
+        fin_seq = n->snd_nxt;
+        n->snd_nxt++;
+        last = now;
+      }
+    }
+    if (fin && n->snd_una == fin_seq + 1u &&
+        (n->tcp_fin || now - fin_t >= 500000u)) {
+      io->status = WIFI_NETS_OK;
+      graceful = 1;
+      break;
+    }
+    if (fin_t && now - fin_t >= 3000000u) {
+      io->status = WIFI_NETS_OK; /* the ARM9 is done, whatever became of the FIN */
+      break;
+    }
+    if (n->tcp_state == NET_TCP_SYN_SENT && now - t0 >= ms * 1000u)
+      break;
+    if (n->tcp_state == NET_TCP_OPEN && !n->tcp_fin &&
+        net_tcp_window(n) >= n->tcp_wnd_sent + NET_TCP_MSS)
+      wifi_data_send(w, f, net_tcp_seg(n, f, mac, NET_TCP_ACK, n->snd_nxt,
+                                       0, 0));
+
+    if (n->tcp_state == NET_TCP_OPEN)
+      io->stage = n->snd_una - base >= head ? WIFI_HTTP_WAIT : WIFI_HTTP_SEND;
+    tcp_publish(t, n, base, head,
+                n->tcp_state == NET_TCP_OPEN ? WIFI_TCP_OPEN
+                                             : WIFI_TCP_CONNECTING);
+    g_net_hit = 0;
+    wifi_pump(w, 2, &g_net_hit);
+  }
+
+  if (n->tcp_state == NET_TCP_OPEN && !graceful)
+    wifi_data_send(w, f, net_tcp_seg(n, f, mac, NET_TCP_RST | NET_TCP_ACK,
+                                     n->snd_nxt, 0, 0));
+  g_net_want = 0;
+  n->tcp_state = NET_TCP_CLOSED;
+  if (g_link <= 0 && io->status == WIFI_NETS_TIMEOUT)
+    io->status = WIFI_NETS_NOLINK;
+  tcp_publish(t, n, base, head, WIFI_TCP_CLOSED);
+}
+
 /* The faster bus for a network operation (see bus_divs): the highest clock
  * left that reads bus_sig as the slow one does. Only on a 1-bit bus, the one a
  * failed CMD53 resets the controller to. */
@@ -2745,6 +2970,67 @@ static void wifi_bus_up(WifiShared *w) {
 /* While a network operation waits for frames, it polls this often. */
 #define NET_TICK_US 1000u
 
+/* Failures in a row that say the chip, not the air, is the trouble. */
+#define NET_BAD_IN_A_ROW 8u
+
+/* A flagged frame asks for a credit report (wifi_data_send), and once nothing
+ * has been sent for this long every buffer in the chip is free again. No credit
+ * by then means the reports were lost with frames that read wrong, and nothing
+ * else ever gives them back. */
+#define NET_CREDIT_WAIT_US 2000000u
+
+/* What has already ended the session (a WIFI_END_*), or 0. */
+static uint32_t wifi_session_lost(void) {
+  return g_link <= 0                       ? WIFI_END_LINK
+         : g_fw_asserted                   ? WIFI_END_ASSERT
+         : g_send_fails >= NET_BAD_IN_A_ROW ? WIFI_END_SEND
+         : g_rx_bad >= NET_BAD_IN_A_ROW     ? WIFI_END_RECV
+                                            : 0u;
+}
+
+/* Whether the chip answers its registers, asked again on the slow clock before
+ * giving up: failing only on the fast one means a step down. */
+static int wifi_chip_answers(WifiShared *w) {
+  uint32_t errs = g_bus_errs;
+  bus_sig(w);
+  if (g_bus_errs == errs)
+    return 1;
+  int fast = bus_fast();
+  if (fast)
+    bus_clock(BUS_SLOW);
+  errs = g_bus_errs;
+  bus_sig(w);
+  if (g_bus_errs != errs)
+    return 0;
+  if (fast)
+    wifi_bus_down();
+  return 1;
+}
+
+/* wifi_session_lost, after finding out what only the chip can say. */
+static uint32_t wifi_session_check(WifiShared *w) {
+  uint32_t t0 = wifi_now(), why = wifi_session_lost();
+  if (why)
+    return why;
+  if (!wifi_chip_answers(w))
+    return WIFI_END_CHIP;
+  while (!w->htc_credit && !wifi_session_lost() &&
+         wifi_now() - t0 < NET_CREDIT_WAIT_US)
+    wifi_wmi_events(w, 0, 1, 4);
+  why = wifi_session_lost();
+  return why ? why : w->htc_credit ? 0u : WIFI_END_CREDITS;
+}
+
+/* The ARM9 sees session go to 0, and whoever needs the network next joins
+ * again, which resets the chip and everything counted here. */
+static void wifi_session_end(WifiShared *w, uint32_t why) {
+  g_session = 0;
+  g_net_on = 0;
+  w->session_ends++;
+  w->session_end = why;
+  w->session_reason = w->conn_reason;
+}
+
 /* One AUDIO_CMD_WIFI_NET operation on the session a WIFI_OPT_STAY join left.
  * Nothing reads the chip between commands, so what queued up meanwhile is
  * taken first: a DISCONNECT there ends the session. */
@@ -2752,7 +3038,8 @@ static void wifi_net_op(uint32_t op) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
   WifiNetIo *io = (WifiNetIo *)WIFI_NET_ADDR;
   wifi_timer_start();
-  uint32_t ms = io->timeout_ms, cap = op == WIFI_NETOP_HTTP ? 20000u : 10000u;
+  uint32_t ms = io->timeout_ms;
+  uint32_t cap = op == WIFI_NETOP_HTTP || op == WIFI_NETOP_TCP ? 20000u : 10000u;
   ms = ms < 100u ? 2000u : ms > cap ? cap : ms;
   io->status = WIFI_NETS_NOLINK;
   io->rtt_us = 0;
@@ -2761,7 +3048,7 @@ static void wifi_net_op(uint32_t op) {
   io->from = 0;
   io->icmp = 0;
   io->dns_rcode = 0;
-  if (g_session && !g_fw_asserted) {
+  if (g_session) {
     g_tick_us = NET_TICK_US;
     wifi_bus_up(w);
     for (int i = 0; i < 64 && g_link > 0; i++) {
@@ -2771,9 +3058,9 @@ static void wifi_net_op(uint32_t op) {
     }
     if (g_wpa_on && g_link > 0)
       wifi_wpa_keys(w); /* a group rekey that came meanwhile */
-    if (g_link <= 0 || g_fw_asserted) {
-      g_session = 0;
-      g_net_on = 0;
+    uint32_t why = wifi_session_check(w);
+    if (why) {
+      wifi_session_end(w, why);
     } else if (op == WIFI_NETOP_STATUS) {
       io->status = WIFI_NETS_OK;
     } else if (op == WIFI_NETOP_DNS) {
@@ -2782,20 +3069,22 @@ static void wifi_net_op(uint32_t op) {
       wifi_op_ping(w, io, ms);
     } else if (op == WIFI_NETOP_HTTP) {
       wifi_op_http(w, io, ms);
+    } else if (op == WIFI_NETOP_TCP) {
+      wifi_op_tcp(w, io, ms);
     } else if (op == WIFI_NETOP_LEAVE) {
       uint8_t c[2] = {0, 0};
       g_disc = 0;
       wifi_wmi_send(w, WMI_DISCONNECT_CMDID, c, 0, g_style);
       wifi_pump(w, 1000, &g_disc);
-      g_session = 0;
-      g_net_on = 0;
+      wifi_session_end(w, WIFI_END_LEFT);
       io->status = WIFI_NETS_OK;
     }
-    if (g_wpa_on && g_link > 0)
-      wifi_wpa_keys(w);
-    if (g_link <= 0) {
-      g_session = 0;
-      g_net_on = 0;
+    if (g_session) {
+      if (g_wpa_on && g_link > 0)
+        wifi_wpa_keys(w);
+      why = wifi_session_lost();
+      if (why)
+        wifi_session_end(w, why);
     }
     if (!g_session && g_wpa_on) {
       wpa_end(&g_wpa);

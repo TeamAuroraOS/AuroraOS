@@ -6,12 +6,13 @@
  * so this posts the core's Wi-Fi commands itself, as WiFi9.c does for the
  * OS, and joins as wifi_net_join() does. HTTP/1.0 with Connection: close
  * suits the core's TCP client, which reads until the server closes or the
- * Content-Length is in. */
+ * Content-Length is in, and Tls.c, which does the same over TLS. The OS
+ * links it too, for the Terminal's curl. */
 #include "appnet.h"
 #include "audio.h"
 #include "ff.h"
 #include "gpu.h"
-#include "loader.h"
+#include "tls.h"
 #include "wifi.h"
 
 extern void os_cache_sync(void);
@@ -34,6 +35,7 @@ static int g_busy;
 /* The last failure was the network's (no answer, a dropped link), not the
  * request's: worth trying again. */
 static int g_transient;
+static int g_tls_err; /* the last WIFI_NETS_TLS's reason */
 
 static u32 len_of(const char *s) {
   u32 n = 0;
@@ -108,9 +110,8 @@ static void err(const char *a, const char *b, const char *c) {
 const char *appnet_error(void) { return g_err; }
 
 int appnet_ready(void) {
-  const volatile u32 *desc = (const volatile u32 *)AURORA_RETURN_DESC_ADDR;
   os_cache_sync();
-  if (desc[0] != AURORA_RETURN_READY_MAGIC || ctrl->magic != AUDIO_MAGIC) {
+  if (!appnet_launched() || ctrl->magic != AUDIO_MAGIC) {
     err("the network needs the app started from the Home Menu", 0, 0);
     return 0;
   }
@@ -218,6 +219,9 @@ static void net_err(u32 st, const char *host) {
       break;
     case WIFI_NETS_TOOBIG:
       err("the reply is larger than 1020 KB", 0, 0);
+      break;
+    case WIFI_NETS_TLS:
+      err(host ? host : "the server", ": ", tls_error_text(g_tls_err));
       break;
     default:
       err("the Wi-Fi chip did not finish in time", 0, 0);
@@ -476,9 +480,39 @@ int appnet_exchange(u32 ip, u32 port, const void *data, u32 len, u32 *got) {
   return 1;
 }
 
+static int tls_start(void) {
+  send(AUDIO_CMD_WIFI_NET, WIFI_NETOP_TCP);
+  return 1;
+}
+
+static int tls_done(void) {
+  if (!core_done())
+    return 0;
+  g_busy = 0;
+  return 1;
+}
+
+/* exchange() over TLS (Tls.c), the reply decrypted into WIFI_HTTP_RESP. */
+static u32 exchange_tls(const char *host, u32 ip, u32 port, const void *data,
+                        u32 len, int head_only, u32 *got, u32 *stage) {
+  static const TlsLink link = {tls_start, tls_done, appnet_waiting,
+                               appnet_ms};
+  u32 st;
+  *got = 0;
+  *stage = 0;
+  if (!claim())
+    return WIFI_NETS_BUSY;
+  st = tls_exchange(&link, host, ip, port, data, len, head_only,
+                    (char *)WIFI_HTTP_RESP, WIFI_HTTP_RESP_MAX - 1u, got,
+                    stage, APPNET_TIMEOUT_MS, &g_tls_err);
+  ((char *)WIFI_HTTP_RESP)[*got] = 0;
+  return st;
+}
+
 typedef struct {
   char host[256];
   u32 port;
+  int tls; /* https:// */
   char path[APPNET_URL_MAX];
 } Url;
 
@@ -506,17 +540,16 @@ static int url_parse(const char *url, Url *u) {
   Out o;
   while (*s == ' ')
     s++;
+  u->tls = 0;
   if (prefix_ci(s, "https://")) {
-    err("https:// needs TLS, which AuroraOS does not have yet: use http://", 0,
-        0);
-    return 0;
-  }
-  if (prefix_ci(s, "http://")) {
+    s += 8;
+    u->tls = 1;
+  } else if (prefix_ci(s, "http://")) {
     s += 7;
   } else {
     for (const char *t = s; *t && *t != '/'; t++)
       if (t[0] == ':' && t[1] == '/' && t[2] == '/') {
-        err("only http:// addresses are supported", 0, 0);
+        err("only http:// and https:// addresses are supported", 0, 0);
         return 0;
       }
   }
@@ -534,7 +567,7 @@ static int url_parse(const char *url, Url *u) {
     err("the address has no host name", 0, 0);
     return 0;
   }
-  u->port = 80;
+  u->port = u->tls ? 443u : 80u;
   if (*s == ':') {
     u32 p = 0, d = 0;
     for (s++; *s >= '0' && *s <= '9' && p <= 0xFFFFu; s++, d++)
@@ -606,15 +639,16 @@ static int has_header(const char *headers, const char *name) {
 
 static char g_req[WIFI_HTTP_REQ_MAX];
 
+/* `secret`: leave out the caller's Authorization and Cookie lines. */
 static u32 build(const char *method, const Url *u, const char *headers,
-                 const void *body, u32 blen) {
+                 int secret, const void *body, u32 blen) {
   Out o = {g_req, g_req + sizeof(g_req), 0};
   out_str(&o, method);
   out_str(&o, " ");
   out_str(&o, u->path);
   out_str(&o, " HTTP/1.0\r\nHost: ");
   out_str(&o, u->host);
-  if (u->port != 80u) {
+  if (u->port != (u->tls ? 443u : 80u)) {
     out_str(&o, ":");
     out_num(&o, u->port);
   }
@@ -632,12 +666,15 @@ static u32 build(const char *method, const Url *u, const char *headers,
     const char *e = h;
     while (*e && *e != '\r' && *e != '\n')
       e++;
-    for (const char *c = h; c < e; c++) {
-      char t[2] = {*c, 0};
-      out_str(&o, t);
+    if (!secret ||
+        (!prefix_ci(h, "authorization:") && !prefix_ci(h, "cookie:"))) {
+      for (const char *c = h; c < e; c++) {
+        char t[2] = {*c, 0};
+        out_str(&o, t);
+      }
+      if (e > h)
+        out_str(&o, "\r\n");
     }
-    if (e > h)
-      out_str(&o, "\r\n");
     while (*e == '\r' || *e == '\n')
       e++;
     h = e;
@@ -788,8 +825,9 @@ static int redirect(int st) {
 int appnet_http(const char *method, const char *url, const char *headers,
                 const void *body, u32 blen, AppNetReply *r) {
   static Url u;
-  static char loc[APPNET_URL_MAX];
-  u32 ip, len, got, stage, st;
+  static char loc[APPNET_URL_MAX], first_host[sizeof(u.host)];
+  u32 ip, len, got, stage, st, first_port;
+  int first_tls;
   r->status = 0;
   r->head = r->body = (char *)"";
   r->len = r->from = r->total = 0;
@@ -797,13 +835,28 @@ int appnet_http(const char *method, const char *url, const char *headers,
   g_transient = 0;
   if (!appnet_ready() || !url_parse(url, &u))
     return 0;
+  for (u32 i = 0; i < sizeof(u.host); i++)
+    first_host[i] = u.host[i];
+  first_port = u.port;
+  first_tls = u.tls;
   for (int hops = 0;; hops++) {
+    if (u.tls && ctrl->version < AUDIO_TCP_VERSION) {
+      err("https:// needs a newer AuroraOS (Beta 7 or later)", 0, 0);
+      return hops ? r->status : 0;
+    }
     if (!appnet_resolve(u.host, &ip))
       return 0;
-    len = build(method, &u, headers, body, blen);
+    /* A key the caller meant for one server goes to no other, and never in
+     * clear text after asking for TLS. */
+    len = build(method, &u, headers,
+                !same_ci(u.host, first_host) || u.port != first_port ||
+                    u.tls != first_tls,
+                body, blen);
     if (!len)
       return 0;
-    st = exchange(ip, u.port, g_req, len, &got, &stage);
+    st = u.tls ? exchange_tls(u.host, ip, u.port, g_req, len,
+                              same_ci(method, "HEAD"), &got, &stage)
+               : exchange(ip, u.port, g_req, len, &got, &stage);
     wipe(g_req, len); /* it may carry a key */
     if (st != WIFI_NETS_OK) {
       if (stage <= WIFI_HTTP_CONNECT)
@@ -823,20 +876,15 @@ int appnet_http(const char *method, const char *url, const char *headers,
       err("too many redirects", 0, 0);
       return r->status;
     }
-    if (prefix_ci(loc, "https://")) {
-      err("redirected to https://, which needs TLS: AuroraOS does not have it "
-          "yet", 0, 0);
-      return r->status;
-    }
     if (loc[0] == '/' && loc[1] == '/') {
       static char abs[APPNET_URL_MAX + 8];
       Out o = {abs, abs + sizeof(abs) - 1u, 0};
-      out_str(&o, "http:");
+      out_str(&o, u.tls ? "https:" : "http:");
       out_str(&o, loc);
       *o.p = 0;
       if (!url_parse(abs, &u))
         return r->status;
-    } else if (prefix_ci(loc, "http://")) {
+    } else if (prefix_ci(loc, "http://") || prefix_ci(loc, "https://")) {
       if (!url_parse(loc, &u))
         return r->status;
     } else if (!url_relative(&u, loc)) {
@@ -926,9 +974,19 @@ int appnet_download(const char *url, const char *headers, const char *path,
       }
       break;
     }
-    tries = 0;
     if (st == 200 && done == 0) {
-      /* The server sent the whole file. */
+      /* The server sent the whole file, unless the connection cut it short. */
+      char cl[12];
+      u32 want;
+      if (appnet_header(&r, "content-length", cl, sizeof(cl))) {
+        read_num(cl, &want);
+        if (want != r.len && ++tries < 3)
+          continue;
+        if (want != r.len) {
+          err("the download was cut short: ", path, 0);
+          break;
+        }
+      }
       if (!put_file(&f, r.body, r.len)) {
         err("could not write ", path, 0);
         break;
@@ -952,6 +1010,7 @@ int appnet_download(const char *url, const char *headers, const char *path,
       }
       break;
     }
+    tries = 0;
     ms = appnet_ms() - t0;
     if (ms) {
       u32 next = (u32)((u64)r.len * PIECE_MS / ms) & ~0xFFFu;

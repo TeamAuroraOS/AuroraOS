@@ -7,9 +7,10 @@
 #include "aurora.h"
 
 /* The network for apps (src/os/AppNet.c), linked by the C SDK and the Auric
- * runtime: joining the network saved in Settings > Wi-Fi, DNS, ping, one TCP
- * exchange, and HTTP over it. Every call posts to the ARM11 core and waits
- * until it is done; a failure leaves a one-line reason in appnet_error(). */
+ * runtime, and by the OS for the Terminal: joining the network saved in
+ * Settings > Wi-Fi, DNS, ping, one TCP exchange, and HTTP and HTTPS over it.
+ * Every call posts to the ARM11 core and waits until it is done; a failure
+ * leaves a one-line reason in appnet_error(). */
 
 /* The first core that keeps replies at WIFI_HTTP_RESP. */
 #define APPNET_CORE_VERSION 115u
@@ -17,7 +18,7 @@
 #define APPNET_TIMEOUT_MS 15000u
 #define APPNET_URL_MAX 1024u
 
-/* The runtime that links AppNet.c defines these three. */
+/* The runtime that links AppNet.c defines these four. */
 /* A millisecond clock. */
 u32 appnet_ms(void);
 /* The SD card mounted as FatFs's default drive, and left mounted; 1 when it
@@ -27,6 +28,9 @@ int appnet_mount(void);
  * milliseconds waited. The core is busy meanwhile: nothing may be posted to
  * it (presents, sounds). */
 void appnet_waiting(u32 ms);
+/* 1 when a core that runs these calls is up: an app started from the Home
+ * Menu, or the OS itself. */
+int appnet_launched(void);
 
 /* Launched from the Home Menu, with a core that runs these calls; else 0 and
  * the reason. */
@@ -62,12 +66,14 @@ typedef struct {
   u32 from, total; /* a 206's Content-Range: its first byte, the file size */
 } AppNetReply;
 
-/* One HTTP/1.0 request to an http:// URL, redirects followed (up to five).
+/* One HTTP/1.0 request to an http:// or https:// URL (https:// over TLS,
+ * Tls.c, with a core from Beta 7 on), redirects followed (up to five).
  * `headers` (may be 0) are extra lines; a body gets its Content-Length. The
  * reply is read in place at WIFI_HTTP_RESP and stays there until the next
  * call. Returns the status, or 0 when no reply came. A redirect that cannot
- * be followed (to https://, or a sixth) is returned as it is, with the reason
- * in appnet_error(). */
+ * be followed (a sixth, or to https:// on an older core) is returned as it
+ * is, with the reason in appnet_error(). Authorization and Cookie lines in
+ * `headers` go only to the first URL's host, port and scheme. */
 int appnet_http(const char *method, const char *url, const char *headers,
                 const void *body, u32 blen, AppNetReply *r);
 /* Header `name` (no colon, any case) of a reply, copied; 0 if it has none. */

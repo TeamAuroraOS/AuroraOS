@@ -24,6 +24,8 @@
 
 #define MAX_INST  512
 #define MAX_DEPTH 32
+/* walk()'s depth for a node drawn alone, in place, without its children. */
+#define WALK_ALONE (-1)
 
 /* The light baked into vertex colours: ambient, a key light from the front,
  * above and to the right, and a dimmer fill from behind so no side is flat. */
@@ -200,6 +202,8 @@ static int walk(Ctx *c, int idx, const float *parent, int depth) {
       inst[ninst].m[i] = world[i];
     ninst++;
   }
+  if (depth == WALK_ALONE)
+    return 1;
   kids = json_get(j, node, "children");
   for (u32 i = 0; i < json_count(j, kids); i++)
     if (!walk(c, json_int(j, json_at(j, kids, i), -1), world, depth + 1))
@@ -267,8 +271,9 @@ static int acc_open(Ctx *c, int idx, Acc *a) {
     return 0;
   off = (u32)json_int(j, json_get(j, t, "byteOffset"), 0);
   a->stride = vstride ? vstride : cs * (u32)a->n;
-  need = (a->count - 1u) * a->stride + cs * (u32)a->n;
-  if (off > vlen || need > vlen - off)
+  need = cs * (u32)a->n;
+  if (off > vlen || need > vlen - off ||
+      a->count - 1u > (vlen - off - need) / a->stride)
     return 0;
   a->p = v + off;
   return 1;
@@ -397,6 +402,8 @@ static int count(Ctx *c, u32 *nv, u32 *ni) {
       }
       *nv += pos.count;
       *ni += 3u * prim_tris(mode, n);
+      if (*nv > GLB_ARENA_SIZE / sizeof(GlbVertex))
+        return fail(c, "the model does not fit in memory");
     }
   }
   return 1;
@@ -934,7 +941,7 @@ int glb_load(const char *path, GlbModel *m, GlbProgress cb, char *err,
     /* No scene: every node is drawn in place. */
     for (u32 i = 0; i < json_count(&c.js, json_get(&c.js, c.root, "nodes"));
          i++)
-      if (!walk(&c, (int)i, ident, MAX_DEPTH))
+      if (!walk(&c, (int)i, ident, WALK_ALONE))
         return 0;
   }
 

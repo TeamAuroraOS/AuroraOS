@@ -1,8 +1,9 @@
-/* HTTP/1.0 to the account server's console host, as its API.md asks. See
- * include/http.h. */
+/* HTTP/1.0 over TLS to the account server's console host, as its API.md
+ * asks. See include/http.h. */
 #include "http.h"
 #include "account.h"
 #include "lang.h"
+#include "tls.h"
 #include "wifi.h"
 
 #define HTTP_TIMEOUT_MS 15000u
@@ -156,9 +157,8 @@ static void parse(char *b, u32 n, HttpReply *r) {
 
 int http_online(void) {
   WifiNetResult nr;
-  if (wifi_online())
-    return 1;
-  /* The core may still hold a join the OS forgot, after an app. */
+  /* Asked each time: the core may hold a join the OS forgot, after an app, and
+   * the link can have gone while nothing read the chip. */
   if (wifi_net(WIFI_NETOP_STATUS, 0, 0, 0, 1000u, &nr, 0) == WIFI_NETS_OK)
     return 1;
   host_ip = 0;
@@ -176,6 +176,7 @@ int http_call(const char *method, const char *path, const char *token,
   r->body = 0;
   r->len = r->from = r->total = 0;
   r->etag[0] = 0;
+  r->tls = 0;
   if (!host_ip) {
     r->net = wifi_net(WIFI_NETOP_DNS, 0, 0, ACCOUNT_HOST, 3000u, &nr, tick);
     if (r->net != WIFI_NETS_OK)
@@ -189,8 +190,9 @@ int http_call(const char *method, const char *path, const char *token,
   }
   if (!buf)
     max = WIFI_HTTP_RESP_MAX - 1u;
-  r->net = wifi_http(host_ip, 80, req, len, buf, max, &got, &r->stage,
-                     HTTP_TIMEOUT_MS, tick);
+  r->net = wifi_https(ACCOUNT_HOST, host_ip, 443, req, len,
+                      buf ? buf : (char *)WIFI_HTTP_RESP, max, &got,
+                      &r->stage, HTTP_TIMEOUT_MS, &r->tls, tick);
   for (u32 i = 0; i < len; i++) /* the token was in it */
     ((volatile char *)req)[i] = 0;
   if (r->net == WIFI_NETS_OK)
@@ -213,6 +215,7 @@ void http_why(const HttpReply *r, char *out) {
       [WIFI_NETS_BUSY] = STR_AC_E_CHIP,
       [WIFI_NETS_REFUSED] = STR_AC_E_REFUSED,
       [WIFI_NETS_TOOBIG] = STR_AC_E_REPLY,
+      [WIFI_NETS_TLS] = STR_AC_E_TLS,
   };
   if (r->status) {
     put_num(put(out, "HTTP "), (u32)r->status);
@@ -220,6 +223,10 @@ void http_why(const HttpReply *r, char *out) {
   }
   if (r->net == WIFI_NETS_OK) {
     put(out, L(STR_AC_E_REPLY));
+    return;
+  }
+  if (r->net == WIFI_NETS_TLS && tls_error_is_clock(r->tls)) {
+    put(out, L(STR_AC_E_CLOCK));
     return;
   }
   put(out, L(r->net < sizeof(net) / sizeof(net[0]) && net[r->net]

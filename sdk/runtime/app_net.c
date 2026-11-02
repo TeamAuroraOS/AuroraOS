@@ -21,6 +21,8 @@ u32 appnet_ms(void) { return sys_millis(); }
 
 int appnet_mount(void) { return app_fs_mount(); }
 
+int appnet_launched(void) { return app_from_home(); }
+
 void appnet_waiting(u32 ms) {
   crash_poll_arm11();
   if (!g_home && app_from_home() && app_home_pressed())

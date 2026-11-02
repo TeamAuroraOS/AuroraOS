@@ -214,7 +214,25 @@ typedef struct {
   volatile uint32_t bus_div;
   volatile uint32_t bus_rx53;
   volatile uint32_t bus_errs;
+  /* Sessions ended since the core started, why the last one ended (WIFI_END_*)
+   * and its conn_reason then. A join leaves these alone, so they outlive it. */
+  volatile uint32_t session_ends;
+  volatile uint32_t session_end;
+  volatile uint32_t session_reason;
 } WifiShared;
+
+/* Why the core ended a session. All but WIFI_END_LEFT mean only a new join,
+ * which resets the chip, can bring the network back. */
+enum {
+  WIFI_END_NONE = 0,
+  WIFI_END_LEFT,    /* WIFI_NETOP_LEAVE                           */
+  WIFI_END_LINK,    /* the link dropped; session_reason says how  */
+  WIFI_END_ASSERT,  /* the firmware stopped                       */
+  WIFI_END_CHIP,    /* its registers no longer answer             */
+  WIFI_END_CREDITS, /* no send credit came back                   */
+  WIFI_END_SEND,    /* frames kept failing to go out              */
+  WIFI_END_RECV,    /* frames kept reading wrong                  */
+};
 
 /* How far joining got (WifiShared.conn_stage). */
 enum {
@@ -265,6 +283,8 @@ enum {
                             request at WIFI_HTTP_REQ goes out, the reply
                             comes back at WIFI_HTTP_RESP until the server
                             closes or its Content-Length is in            */
+  WIFI_NETOP_TCP,        /* a TCP connection with ip:port that the ARM9
+                            drives through WifiTcp until it closes it     */
 };
 
 enum {
@@ -278,11 +298,12 @@ enum {
   WIFI_NETS_ICMPERR,  /* ping: unreachable or time exceeded; see icmp  */
   WIFI_NETS_NOSEND,   /* the frame could not be sent (no credit)       */
   WIFI_NETS_BUSY,     /* ARM9: the core did not take or finish it      */
-  WIFI_NETS_REFUSED,  /* HTTP: the server reset the connection (RST)   */
+  WIFI_NETS_REFUSED,  /* HTTP, TCP: the server reset it (RST)          */
   WIFI_NETS_TOOBIG,   /* HTTP: the request or the reply does not fit   */
+  WIFI_NETS_TLS,      /* ARM9: the TLS layer failed (Tls.c says why)   */
 };
 
-/* HTTP stages, how far WIFI_NETOP_HTTP got (WifiNetIo.stage). */
+/* How far WIFI_NETOP_HTTP or _TCP got (WifiNetIo.stage). */
 enum {
   WIFI_HTTP_CONNECT = 1, /* SYN sent                                      */
   WIFI_HTTP_SEND,        /* connected, the request going out              */
@@ -310,12 +331,52 @@ typedef struct {
   volatile uint32_t icmp;       /* PING: type << 8 | code of an ICMP error */
   volatile uint32_t dns_rcode;  /* DNS: the answer's RCODE */
   volatile char name[256];      /* DNS: the host name */
-  volatile uint32_t port;       /* HTTP: the server's TCP port */
+  volatile uint32_t port;       /* HTTP, TCP: the server's port */
   volatile uint32_t req_len;    /* HTTP: bytes at WIFI_HTTP_REQ */
   volatile uint32_t resp_len;   /* HTTP: bytes at WIFI_HTTP_RESP */
   volatile uint32_t stage;      /* HTTP: WIFI_HTTP_* */
-  volatile uint32_t resent;     /* HTTP: segments sent again */
+  volatile uint32_t resent;     /* HTTP, TCP: segments sent again */
 } WifiNetIo;
+
+/* WIFI_NETOP_TCP's two rings. Each side writes only its own cache line of
+ * counters; a counter is a byte total since the connection started, and its
+ * ring position is the total modulo the ring's size. The ARM9 cleans what it
+ * wrote before moving tx_head, and invalidates before reading. */
+#define WIFI_TCP_ADDR 0x233F0000u
+#define WIFI_TCP_TX   0x4000u
+#define WIFI_TCP_RX   0x8000u
+/* The core drops a connection whose ARM9 side stopped bumping `alive`. */
+#define WIFI_TCP_ALIVE_MS 15000u
+
+enum {
+  WIFI_TCP_IDLE = 0,   /* not started yet                              */
+  WIFI_TCP_CONNECTING, /* SYN sent                                     */
+  WIFI_TCP_OPEN,
+  WIFI_TCP_CLOSED,     /* over; WifiNetIo.status says how              */
+};
+
+enum {
+  WIFI_TCP_KEEP = 0,
+  WIFI_TCP_FIN,   /* close once everything in tx is acknowledged */
+  WIFI_TCP_ABORT, /* reset it now                                */
+};
+
+typedef struct {
+  /* The ARM9's line. */
+  volatile uint32_t tx_head; /* bytes put in tx                          */
+  volatile uint32_t rx_tail; /* bytes taken out of rx                    */
+  volatile uint32_t close;   /* WIFI_TCP_KEEP, _FIN or _ABORT            */
+  volatile uint32_t alive;   /* bumped while the ARM9 still works on it  */
+  volatile uint32_t arm9_pad[4];
+  /* The core's line, written by the ARM9 only before the post. */
+  volatile uint32_t state;   /* WIFI_TCP_*                               */
+  volatile uint32_t tx_tail; /* bytes of tx the server acknowledged      */
+  volatile uint32_t rx_head; /* bytes put in rx                          */
+  volatile uint32_t eof;     /* 1 once the server closed after rx_head   */
+  volatile uint32_t core_pad[4];
+  volatile uint8_t tx[WIFI_TCP_TX];
+  volatile uint8_t rx[WIFI_TCP_RX];
+} WifiTcp;
 
 /* How far the scan got (WifiShared.wmi_stage). */
 enum {
@@ -408,6 +469,9 @@ int wifi_direct_active(void);
  * with the milliseconds waited; it may draw with the CPU only. 1 when the core
  * finished. */
 int wifi_wait(void (*tick)(uint32_t ms), uint32_t max_ms);
+/* Milliseconds, counted on so they run smoothly where the tick counter
+ * wraps (about every 18 hours). */
+uint32_t wifi_now_ms(void);
 
 /* WifiNetIo's results, as the core left them. */
 typedef struct {
@@ -428,6 +492,31 @@ uint32_t wifi_http(uint32_t ip, uint32_t port, const char *req,
                    uint32_t req_len, char *resp, uint32_t max, uint32_t *got,
                    uint32_t *stage, uint32_t timeout_ms,
                    void (*tick)(uint32_t ms));
+
+/* The same over TLS (Tls.c), with `host` the name the certificate must
+ * carry. WIFI_NETS_TLS when the TLS layer failed: *tls_err says why
+ * (tls_error_text). */
+uint32_t wifi_https(const char *host, uint32_t ip, uint32_t port,
+                    const char *req, uint32_t req_len, char *resp,
+                    uint32_t max, uint32_t *got, uint32_t *stage,
+                    uint32_t timeout_ms, int *tls_err,
+                    void (*tick)(uint32_t ms));
+
+/* WiFiTcp.c, OS and apps: the ARM9 side of WIFI_NETOP_TCP. wifi_tcp_setup
+ * fills the operands; the caller then posts the operation and, while the
+ * core runs it, moves bytes with the calls below, each of which looks at the
+ * rings afresh. */
+void wifi_tcp_setup(uint32_t ip, uint32_t port, uint32_t timeout_ms);
+uint32_t wifi_tcp_state(void); /* WIFI_TCP_* */
+/* Copies what fits into tx; returns how much. */
+uint32_t wifi_tcp_write(const void *p, uint32_t n);
+/* Takes up to n bytes out of rx; returns how many. */
+uint32_t wifi_tcp_read(void *p, uint32_t n);
+/* 1 once the server has closed and everything it sent was read. */
+int wifi_tcp_eof(void);
+void wifi_tcp_close(uint32_t how); /* WIFI_TCP_FIN or WIFI_TCP_ABORT */
+/* Tells the core this side is still working on the connection. */
+void wifi_tcp_alive(void);
 
 /* os_main.c: joins the network saved in Settings > Wi-Fi and keeps it up for
  * wifi_net. 1 when it is up; otherwise `why` says what stopped it. Staging

@@ -68,8 +68,12 @@ static ImageResult decode_bmp(const u8 *d, u32 len, int *ow, int *oh) {
 
   const u8 *pal = d + 14 + hdr;
   u32 pal_n = rd32le(d + 46);
-  if (bpp == 8 && pal_n == 0)
-    pal_n = 256;
+  if (bpp == 8) {
+    if (pal_n == 0 || pal_n > 256u)
+      pal_n = 256;
+    if (hdr > len - 14u || pal_n > (len - 14u - hdr) / 4u)
+      return IMG_ERR_DATA;
+  }
 
   u32 stride = (((u32)w * bpp + 31u) / 32u) * 4u;
   /* Division rather than stride*h, which could overflow before the compare. */

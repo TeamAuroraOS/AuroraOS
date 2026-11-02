@@ -162,12 +162,19 @@ case-insensitive.
 ### The network
 
 Apps reach the internet over the Wi-Fi network saved in Settings > Wi-Fi, by
-plain HTTP. AuroraOS has no TLS yet, so `https://` addresses fail, and a site
-that sends `http://` visitors on to `https://` answers with its redirect (the
-response comes back as it is, and `net_error()` says so).
+HTTP or, from SDK 1.4, HTTPS: an `https://` address goes over TLS 1.2 (BearSSL
+on the ARM9, [`../docs/tls.md`](../docs/tls.md)), with the server's
+certificate checked against the roots the OS trusts, and redirects to either
+kind are followed; your `Authorization` and `Cookie` headers are not sent on
+once a redirect changes the host, the port or drops TLS. HTTPS needs an AuroraOS
+from Beta 7 on (ARM11 core 121 or later); on
+an older one an `https://` request fails and `net_error()` says so. A
+certificate that does not check out (expired, for another name, from an
+authority not trusted) fails the request, with the reason in `net_error()`.
+Apps built with SDK 1.3 or older have no TLS: rebuild them.
 
 ```c
-HttpResponse *r = net_connect() ? http_get("http://example.com/") : NULL;
+HttpResponse *r = net_connect() ? http_get("https://example.com/") : NULL;
 if (r) {
   printf("%d, %u bytes\n%s\n", r->status, (unsigned)r->length, r->body);
   http_free(r);
@@ -193,7 +200,8 @@ if (r) {
   also presents frames, plays sounds and reads touch and the circle pad, so
   while a call runs the screens keep their last frame, no new sound starts
   (`snd_play()` does nothing then) and touch and the circle pad do not
-  change. A request usually takes well under a second, at most 15.
+  change. A request usually takes well under a second, at most 15 per wait;
+  an `https://` one adds its handshake, a second or two.
 * `net_on_wait(fn)` gives a function to call about ten times a second while a
   call waits: it can draw (a spinner, the seconds) and `gfx_present()`, which
   the CPU then copies to the screens. It must not make network calls itself.
@@ -430,9 +438,10 @@ out the heap, and the locks do nothing (one thread).
 
 * One screen layer each, 24-bit colour, no 3D or stereoscopic drawing yet
   (the OS's PICA200 3D pipeline is not exposed).
-* The network is plain HTTP over the saved Wi-Fi network: no HTTPS (no TLS
-  yet), no BSD sockets, no listening or UDP, one call at a time, requests up
-  to 2 KB and responses up to 1020 KB (`http_download()` for bigger files).
+* The network is HTTP and HTTPS (TLS 1.2 only) over the saved Wi-Fi network:
+  no BSD sockets, no listening or UDP, no TLS for `net_tcp_exchange()`, one
+  call at a time, requests up to 2 KB and responses up to 1020 KB
+  (`http_download()` for bigger files).
 * The New 3DS's extra buttons (ZL, ZR, C-stick) are not read.
 * One thread; no interrupts.
 * `stdin` is empty; there is no on-screen keyboard API yet.
@@ -448,7 +457,8 @@ out the heap, and the locks do nothing (one thread).
 
 The runtime and the OS code an app links are part of AuroraOS: GPL-3.0, with
 `src/os/Gpu9.c` under GPL-2.0, and the network code (`src/os/AppNet.c`,
-`WiFiJoin.c`, `Crypto.c`, part of the Wi-Fi driver) under GPL-2.0 too (see
-the main [README](../README.md#license)).
+`WiFiJoin.c`, `Crypto.c`, `WiFiTcp.c`, part of the Wi-Fi driver) under
+GPL-2.0 too (see the main [README](../README.md#license)). BearSSL
+(`../lib/bearssl`, for HTTPS) is under the MIT licence.
 newlib is under its own BSD-style licences. An app built with the SDK
 contains that code, so its distribution follows those licences.

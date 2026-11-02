@@ -8,6 +8,9 @@
 #define AOS_ARM11_LOAD_ADDR 0x24000000u
 #define AOS_ARM11_MAILBOX   0x27000000u
 #define AURORA_APP_STAGE_ADDR       0x24000000u /* staged app ARM9 payload   */
+/* An app runs from the OS's own place up to the ARM11 core. */
+#define AURORA_APP_LOAD_ADDR        0x22000000u
+#define AURORA_APP_MAX_SIZE         0x01000000u
 #define AURORA_APP_TRAMPOLINE_ADDR  0x25000000u /* relocated copy+jump stub  */
 #define AURORA_RETURN_STUB_ADDR     0x25004000u /* persistent return stub    */
 #define AURORA_RETURN_DESC_ADDR     0x25008000u /* [magic, os_image_size]    */

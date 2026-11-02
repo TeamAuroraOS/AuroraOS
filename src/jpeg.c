@@ -258,6 +258,7 @@ ImageResult jpeg_decode_scaled(const u8 *d, u32 len, u8 *rgb, u32 rgb_max,
         comp[i].v = p[7 + i * 3] & 15;
         comp[i].tq = p[8 + i * 3];
         comp[i].dc = 0;
+        comp[i].td = comp[i].ta = 0;
         if (comp[i].h < 1 || comp[i].h > 4 || comp[i].v < 1 || comp[i].v > 4 ||
             comp[i].tq > 3)
           return IMG_ERR_UNSUPPORTED;
@@ -417,7 +418,9 @@ ImageResult jpeg_decode_scaled(const u8 *d, u32 len, u8 *rgb, u32 rgb_max,
                 if (shift) {
                   /* A block's mean is its dequantised DC term over 8. */
                   int m = blk[0] >= 0 ? (blk[0] + 4) / 8 : -((4 - blk[0]) / 8);
-                  comp[c].plane[(u32)py * (u32)comp[c].pw + px] = clamp8(m + 128);
+                  if (px < comp[c].pw && py < comp[c].ph)
+                    comp[c].plane[(u32)py * (u32)comp[c].pw + px] =
+                        clamp8(m + 128);
                 } else if (px + 8 <= comp[c].pw && py + 8 <= comp[c].ph) {
                   idct_block(blk, comp[c].plane + (u32)py * (u32)comp[c].pw + px,
                              comp[c].pw);

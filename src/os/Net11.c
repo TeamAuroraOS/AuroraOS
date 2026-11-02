@@ -304,6 +304,18 @@ void net_tcp_open(NetState *n, uint32_t ip_, uint16_t lport, uint16_t rport,
   n->tcp_rx = rx;
   n->tcp_rx_cap = rx_cap;
   n->tcp_rx_len = 0;
+  n->tcp_rx_done = 0;
+  n->tcp_rx_pos = 0;
+  n->tcp_wnd_sent = 0;
+}
+
+static uint32_t tcp_room(const NetState *n) {
+  return n->tcp_rx_cap - (n->tcp_rx_len - n->tcp_rx_done);
+}
+
+uint32_t net_tcp_window(const NetState *n) {
+  uint32_t room = tcp_room(n);
+  return room > NET_TCP_WND ? NET_TCP_WND : room;
 }
 
 uint32_t net_tcp_seg(NetState *n, uint8_t *f, const uint8_t *dmac,
@@ -311,9 +323,9 @@ uint32_t net_tcp_seg(NetState *n, uint8_t *f, const uint8_t *dmac,
                      uint32_t len) {
   uint8_t *t = f + 14 + 20;
   uint32_t hl = flags & NET_TCP_SYN ? 24u : 20u;
-  uint32_t room = n->tcp_rx_cap - n->tcp_rx_len;
   if (len > NET_TCP_SEG)
     len = NET_TCP_SEG;
+  n->tcp_wnd_sent = net_tcp_window(n);
   eth(f, dmac, n->mac, ETH_IP);
   put16(t, n->tcp_lport);
   put16(t + 2, n->tcp_rport);
@@ -321,7 +333,7 @@ uint32_t net_tcp_seg(NetState *n, uint8_t *f, const uint8_t *dmac,
   put32(t + 8, flags & NET_TCP_ACK ? n->rcv_nxt : 0u);
   t[12] = (uint8_t)(hl << 2);
   t[13] = (uint8_t)flags;
-  put16(t + 14, room > NET_TCP_WND ? NET_TCP_WND : room);
+  put16(t + 14, n->tcp_wnd_sent);
   put16(t + 16, 0);
   put16(t + 18, 0);
   if (hl == 24u) {
@@ -371,7 +383,7 @@ static int tcp_rx(NetState *n, const uint8_t *f, const uint8_t *t,
   if (fl & NET_TCP_RST) {
     if (n->tcp_state == NET_TCP_SYN_SENT
             ? (fl & NET_TCP_ACK) && ack == n->snd_nxt
-            : seq - n->rcv_nxt <= n->tcp_rx_cap - n->tcp_rx_len)
+            : seq - n->rcv_nxt <= tcp_room(n))
       n->tcp_state = NET_TCP_RESET;
     return NET_RX_TCP;
   }
@@ -410,8 +422,15 @@ static int tcp_rx(NetState *n, const uint8_t *f, const uint8_t *t,
     seq = n->rcv_nxt;
   }
   if (seq == n->rcv_nxt && !n->tcp_fin) {
-    uint32_t room = n->tcp_rx_cap - n->tcp_rx_len, take = dl < room ? dl : room;
-    copy(n->tcp_rx + n->tcp_rx_len, d, take);
+    uint32_t room = tcp_room(n), take = dl < room ? dl : room;
+    uint32_t first = n->tcp_rx_cap - n->tcp_rx_pos;
+    if (first > take)
+      first = take;
+    copy(n->tcp_rx + n->tcp_rx_pos, d, first);
+    copy(n->tcp_rx, d + first, take - first);
+    n->tcp_rx_pos += take;
+    if (n->tcp_rx_pos >= n->tcp_rx_cap)
+      n->tcp_rx_pos -= n->tcp_rx_cap;
     n->tcp_rx_len += take;
     n->rcv_nxt += take;
     if ((fl & NET_TCP_FIN) && take == dl) {
