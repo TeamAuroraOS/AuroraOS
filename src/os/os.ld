@@ -30,6 +30,10 @@ SECTIONS
      * _os_image_end) to restore itself after an app; .bss is NOLOAD and
      * re-cleared on restart. */
     _os_image_end = .;
+    /* That snapshot (0x26000000) ends where the decoded image (0x26100000)
+     * starts. */
+    ASSERT(_os_image_end - 0x22000000 <= 0x100000,
+           "the OS image is over 1 MB: its HOME snapshot would overrun")
 
     .bss (NOLOAD) :
     {

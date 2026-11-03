@@ -162,18 +162,39 @@ int audio_ready_ms(void) {
   return (int)ready_ms;
 }
 
-void audio_play_tone(uint32_t freq_hz) { post(AUDIO_CMD_TONE, freq_hz); }
+/* The one-request block may hold a present these would replace. */
+void audio_play_tone(uint32_t freq_hz) {
+  gpu_wait_idle();
+  post(AUDIO_CMD_TONE, freq_hz);
+}
 
-void audio_stop(void) { post(AUDIO_CMD_STOP, 0); }
+void audio_stop(void) {
+  gpu_wait_idle();
+  post(AUDIO_CMD_STOP, 0);
+}
 
 void audio_error_beep(void) { post(AUDIO_CMD_ERROR, 0); }
 
-void audio_voices_stop(void) {
+void audio_voices_stop(void) { audio_voices_stop_mask(AUDIO_VOICE_ALL); }
+
+void audio_voices_stop_mask(uint32_t mask) {
   if (!audio_alive())
     return;
-  /* The GPU is about to use the one-request block, so wait until the core has
-   * taken this request. An older core acks it without acting on it. */
-  post_wait(AUDIO_CMD_VOICE_STOP, AUDIO_VOICE_ALL);
+  /* The one-request block may hold a present, and the GPU uses it next, so
+   * wait on both sides. An older core acks this without acting on it. */
+  gpu_wait_idle();
+  post_wait(AUDIO_CMD_VOICE_STOP, mask);
+}
+
+void audio_voice_play(uint32_t voice, uint32_t addr, uint32_t samples,
+                      uint32_t rate, uint32_t flags) {
+  if (!audio_alive())
+    return;
+  gpu_wait_idle();
+  ctrl->arg1 = addr;
+  ctrl->arg2 = samples * 2u;
+  ctrl->arg3 = rate;
+  post_wait(AUDIO_CMD_VOICE, voice | AUDIO_VOICE_PCM16 | flags);
 }
 
 void audio_set_brightness(uint32_t level) {
@@ -186,6 +207,7 @@ void audio_set_brightness(uint32_t level) {
 }
 
 void audio_play_pcm(uint32_t samples, uint32_t rate, uint32_t depth) {
+  gpu_wait_idle();
   os_cache_sync(); /* flush the caller's PCM writes at AUDIO_PCM_ADDR to RAM */
   ctrl->cmd = AUDIO_CMD_PCM;
   ctrl->arg0 = AUDIO_PCM_ADDR;

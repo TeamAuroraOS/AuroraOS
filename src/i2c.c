@@ -77,7 +77,6 @@ static bool i2cStartTransfer(I2cDevice devId, uint8_t regAddr, bool read,
             continue;
         }
 
-        /* Select the register. */
         regs->REG_I2C_DATA = regAddr;
         regs->REG_I2C_CNT  = I2C_ENABLE | I2C_IRQ_ENABLE | I2C_DIRE_WRITE;
         if (!i2cWaitBusy(regs))

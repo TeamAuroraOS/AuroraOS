@@ -31,8 +31,11 @@ typedef struct {
   uint16_t dns_id, dns_port;
   uint32_t dns_rcode;
   /* One TCP connection at a time, ours to tcp_ip:tcp_rport. Our first data
-   * byte is tcp_iss + 1. What the server sends goes into tcp_rx in order;
-   * a segment that skips ahead is dropped and the server sends it again. */
+   * byte is tcp_iss + 1. What the server sends goes into the ring tcp_rx in
+   * order; a segment that skips ahead is dropped and the server sends it
+   * again. tcp_rx_len counts every byte put in, tcp_rx_done those the reader
+   * took out (0 for a reply read once it is all in), so the free room is
+   * cap - (len - done). */
   uint32_t tcp_state; /* NET_TCP_* */
   uint32_t tcp_ip;
   uint16_t tcp_lport, tcp_rport;
@@ -40,7 +43,9 @@ typedef struct {
   uint32_t tcp_mss, tcp_wnd; /* the server's */
   int tcp_fin;               /* the server closed its side */
   uint8_t *tcp_rx;
-  uint32_t tcp_rx_cap, tcp_rx_len;
+  uint32_t tcp_rx_cap, tcp_rx_len, tcp_rx_done;
+  uint32_t tcp_rx_pos;   /* where the next byte goes */
+  uint32_t tcp_wnd_sent; /* the window our last segment announced */
 } NetState;
 
 enum {
@@ -108,6 +113,8 @@ void net_tcp_open(NetState *n, uint32_t ip, uint16_t lport, uint16_t rport,
 uint32_t net_tcp_seg(NetState *n, uint8_t *f, const uint8_t *dmac,
                      uint32_t flags, uint32_t seq, const uint8_t *data,
                      uint32_t len);
+/* The receive window a segment sent now would announce. */
+uint32_t net_tcp_window(const NetState *n);
 /* 1 once `b` holds an HTTP response's headers and as much body as their
  * Content-Length says. */
 int net_http_done(const uint8_t *b, uint32_t len);

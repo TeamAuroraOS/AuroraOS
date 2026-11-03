@@ -23,6 +23,8 @@ u32 appnet_ms(void) { return aur_ticks() / AUR_TICKS_PER_MS; }
 
 int appnet_mount(void) { return aur_mount(); }
 
+int appnet_launched(void) { return aur_from_home(); }
+
 static int aur_home_later; /* HOME pressed while the core was busy */
 
 void appnet_waiting(u32 ms) {

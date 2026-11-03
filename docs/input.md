@@ -57,6 +57,7 @@ not been measured.
 
 From core 120 (PR 29) `get_keys()` waits while the lid is closed, so every
 screen stops at its next button read, and the core turns the backlights off.
+Before it waits, `get_keys()` stops the Home Menu's song.
 The first `get_keys_down()` after the lid opens reports nothing and treats
 every button still held as already down, so nothing is pressed by opening
 the console; that holds whichever `get_keys()` call did the waiting. The C
@@ -86,7 +87,8 @@ Default or Custom.
 A kept calibration is in use at once and saved in `SD:\Aurora\USER.dat`. From
 offset 40 the record holds a flag byte and then `x_min`, `x_max`, `y_min` and
 `y_max` as little-endian 16-bit values. `USER_DAT_VERSION` 2 added it (3, in
-Beta 7, added the brightness at offset 51); a version 1 file has zeros there
+Beta 7, added the brightness at offset 51; byte 52 holds the four sound
+switches, zero in older files); a version 1 file has zeros there
 and reads as no calibration. At boot a saved calibration
 that `touch_cal_set()` refuses is ignored.
 

@@ -30,13 +30,14 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta 7 v0.1.6.**
 | Screenshots | working | L+R saves both screens as a BMP; see [`docs/input.md`](docs/input.md) |
 | aShop (store) | working | the apps and games published on the Aurora Network: sections, news, app pages, search, and downloads into `SD:/Aurora/Apps` (apps in C into `SD:/Aurora/Apps/C`, marked "C SDK" under their name), checked by SHA-256. Needs a linked Aurora account (it offers to link one) and keeps the catalogue on the card for offline browsing. Apps are published at account.aurora3ds.xyz/developer. Works on a New 3DS (2026-10-05); see [`docs/store.md`](docs/store.md) |
 | Aurora Account | working | Settings > Aurora Account (and the setup wizard's Account step) links the console to an account on account.aurora3ds.xyz: the console shows a code and a QR code, the person approves it on a phone or computer, and the token is kept in `SD:/Aurora/account.txt`. Create an account sends the person to sign up first. Works on a New 3DS (2026-10-04); see [`docs/account.md`](docs/account.md) |
-| Terminal | working | **X** on the Home Menu: a Linux-style shell with a touch keyboard, file commands, `ping` over Wi-Fi, `systemctl`, `info` and app launching; see [`docs/terminal.md`](docs/terminal.md) |
+| Terminal | working | **X** on the Home Menu: a Linux-style shell with a touch keyboard, file commands, `ping` and `curl` (new: HTTP and HTTPS) over Wi-Fi, `systemctl`, `info` and app launching; see [`docs/terminal.md`](docs/terminal.md) |
 | Images | working | BMP, PNG and baseline JPEG, scaled to fit |
 | WAV playback | working | 8/16-bit PCM, mono or stereo (MP3 not yet) |
 | Display | working | GPU-composited; see [`docs/gpu.md`](docs/gpu.md) |
 | Animations | working | screens slide over each other with parallax, dialogs pop up, the selection springs, tiles lift and lists scroll; each screen is triple buffered and switches frames at the vertical blank, without tearing; see [`docs/ui.md`](docs/ui.md) |
 | GPU (PICA200) | working | PSC fill + PPF blit, verified on hardware |
 | Audio | working | ARM11 CSND core, eight voices for apps; see [`docs/audio.md`](docs/audio.md) |
+| System sounds | new | a startup sound after a cold boot, select, back and move clicks in the Home Menu, Settings and aShop, a looping song on the Home Menu that starts after the startup sound and stops when anything opens or the lid closes, and aShop's own looping music with a chime when an install finishes, from `assets.pak` (mono, 4-bit DSP-ADPCM: the 2.9 MB aShop song is 319 KB); Settings > Startup sound, Home music, aShop music and Menu sounds turn them off; reported working on a console (2026-11-01); the Home Menu's song is by LeweckBanana; see [`docs/audio.md`](docs/audio.md) |
 | Touchscreen | working | CTR codec on the ARM11, with calibration in Settings |
 | Circle pad | working | read from the same codec by the ARM11 core; also moves the selection in every menu, like the D-pad; see [`docs/input.md`](docs/input.md) |
 | 3D models (GLB) | working on a New 3DS | **3D Model** on the Home Menu shows `SD:/Aurora/model.glb` with its textures: circle pad orbits, D-pad pans, Y and A zoom; the nearest part sets the 3D depth and is named on the bottom screen; see [`docs/glb.md`](docs/glb.md) |
@@ -49,10 +50,11 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta 7 v0.1.6.**
 | Closing the lid | new | both backlights go off and the OS (and apps built with this release's runtimes, C SDK 1.3) wait until the lid opens, with the apps' clocks stopped meanwhile; keys held as it opens are ignored. Sound keeps playing and the console stays powered: it is a pause, not the hardware's sleep mode (core 120); see [`docs/power.md`](docs/power.md) |
 | Console model | working | New/Old from CFG11_SOCINFO ("New 3DS/2DS", "Old 3DS/2DS"); "N" in the status bar |
 | Crash handler | working | register dump plus a three-beep error tone on a fault |
-| Apps ([Auric](auric-lang/README.md)) | working | sound from the SD card; drawing on the bottom screen and touch input (Auric v0.4, works on a New 3DS, 2026-10-05); the network (Auric v0.5: HTTP and JSON, works on a New 3DS, 2026-10-08); see [`docs/apps.md`](docs/apps.md) |
-| Apps in C ([SDK](sdk/README.md)) | new | `#include <aurora_app.h>`: both screens, shapes, the Figtree fonts, PNG/JPEG/BMP images, buttons, touch, circle pad, sound, files, clock, the network (HTTP over the saved Wi-Fi network); the C library through newlib (`printf` on screen, `malloc`, `fopen` on the SD card); built by `sdk/aurcc.py` into `AURC` apps (the `AUR1` container with its own magic, so Aurora knows a C app) that go in `SD:/Aurora/Apps/C` and keep their data in `SD:/Aurora/Apps/C/<Name>`, which Aurora makes; HOME and crashes return to the Home Menu. Published on aShop like Auric apps. Checked on a PC against stubbed hardware; one C app, the CPU stress test, ran on a New 3DS (2026-10-08), the examples are untested on a console |
+| Apps ([Auric](auric-lang/README.md)) | working | sound from the SD card; drawing on the bottom screen and touch input (Auric v0.4, works on a New 3DS, 2026-10-05); the network (Auric v0.5: HTTP and JSON, works on a New 3DS, 2026-10-08; v0.6 adds HTTPS); see [`docs/apps.md`](docs/apps.md) |
+| Apps in C ([SDK](sdk/README.md)) | new | `#include <aurora_app.h>`: both screens, shapes, the Figtree fonts, PNG/JPEG/BMP images, buttons, touch, circle pad, sound, files, clock, the network (HTTP and, from SDK 1.4, HTTPS over the saved Wi-Fi network); the C library through newlib (`printf` on screen, `malloc`, `fopen` on the SD card); built by `sdk/aurcc.py` into `AURC` apps (the `AUR1` container with its own magic, so Aurora knows a C app) that go in `SD:/Aurora/Apps/C` and keep their data in `SD:/Aurora/Apps/C/<Name>`, which Aurora makes; HOME and crashes return to the Home Menu. Published on aShop like Auric apps. Checked on a PC against stubbed hardware; one C app, the CPU stress test, ran on a New 3DS (2026-10-08), the examples are untested on a console |
 | CPU stress test | works on a New 3DS | `cpu-stress/`: the same benchmark as an AuroraOS C app and as Horizon homebrew, on ARM11 core 0 at 804 MHz in both (AuroraOS runs it through core 116's `AUDIO_CMD_RUN11`), with a graph and a results file; see [`cpu-stress/README.md`](cpu-stress/README.md) |
-| Wi-Fi | working | Settings > Wi-Fi searches, saves a network and joins it: open and WPA2-PSK networks, the password typed on the console, an address over DHCP (New 3DS, 2026-10-03). The terminal's `ping` looks up names and pings any address. The firmware is copied from the console's own NAND the first time (read only; works on hardware). Core 114 adds a small TCP client for one HTTP exchange at a time, which Aurora accounts use (works on hardware, 2026-10-04); core 115 reads it faster, about 160 KB/s for aShop downloads (New 3DS, 2026-10-08). Auric and C apps can use the network too. Not yet: WPA3, TLS: [`docs/wifi.md`](docs/wifi.md) |
+| Wi-Fi | working | Settings > Wi-Fi searches, saves a network and joins it: open and WPA2-PSK networks, the password typed on the console, an address over DHCP (New 3DS, 2026-10-03). The terminal's `ping` looks up names and pings any address. The firmware is copied from the console's own NAND the first time (read only; works on hardware). Core 114 adds a small TCP client for one HTTP exchange at a time, which Aurora accounts use (works on hardware, 2026-10-04); core 115 reads it faster, about 160 KB/s for aShop downloads (New 3DS, 2026-10-08). Auric and C apps can use the network too. A session that stops working ends by itself and the next request joins again (core 123, not yet on a console). Not yet: WPA3: [`docs/wifi.md`](docs/wifi.md) |
+| HTTPS (TLS) | new | TLS 1.2 on the ARM9 (BearSSL) over a TCP connection the ARM11 core keeps open (from core 121): Aurora accounts and aShop now talk to the server over HTTPS, and C apps (SDK 1.4), Auric apps (0.6) and the terminal's `curl` can fetch `https://` addresses. Certificates are checked against 46 built-in root authorities and any added in `SD:/Aurora/certs`, with dates checked against the console's clock (never earlier than the build date). Checked on a PC against real servers, then reported working on a console (2026-11-01); see [`docs/tls.md`](docs/tls.md) |
 
 The UI renders into a cached FCRAM backbuffer and the GPU moves each finished
 screen to the panel in one blit, rather than rasterizing straight into uncached
@@ -69,7 +71,8 @@ ARM9 runs the OS; the ARM11 handles the hardware the ARM9 cannot reach.
 |-----------|------|-------|
 | Audio (codec output, CSND) | `src/os/Audio9.c` | `src/os/Audio11.c` |
 | Touchscreen | `src/os/Touch9.c` | `src/os/Touch11.c` |
-| Wi-Fi | `src/os/WiFi9.c`, `src/os/WiFiJoin.c` (the join, shared with apps), `src/os/AppNet.c` (the network for apps), `src/os/Crypto.c` (the PMK) | `src/os/WiFi11.c`, `src/os/Wpa11.c` (WPA2), `src/os/Net11.c` (DHCP, ARP, DNS, ping, TCP) |
+| Wi-Fi | `src/os/WiFi9.c`, `src/os/WiFiJoin.c` (the join, shared with apps), `src/os/AppNet.c` (the network for apps and `curl`), `src/os/WiFiTcp.c` (the TCP rings), `src/os/Crypto.c` (the PMK) | `src/os/WiFi11.c`, `src/os/Wpa11.c` (WPA2), `src/os/Net11.c` (DHCP, ARP, DNS, ping, TCP) |
+| HTTPS | `src/os/Tls.c` (the TLS client, over BearSSL in `lib/bearssl`), `src/os/TlsRoots.c` (the roots, made by `tools/mkroots.py` from `assets/certs/roots.pem`) | the TCP connection in `src/os/WiFi11.c` |
 | GPU | `src/os/Gpu9.c` | `src/os/Gpu11.c` |
 | GPU 3D pipeline (P3D) | `src/os/P3d9.c` (command lists) | `src/os/P3d11.c` (runs them) |
 | Stereoscopic top screen | `src/os/Stereo9.c` (slider, model) | `src/os/Stereo11.c` (mode, barrier) |
@@ -94,7 +97,8 @@ operations in `src/os/FileOps.c`, screenshots in `src/os/Screenshot.c`, touch
 calibration in `src/os/TouchCal.c`, the terminal in `src/os/Terminal.c` with its
 commands in `src/os/TermCmds.c`, the render test in `src/os/RenderTest.c`, and
 the Home Menu in `src/os/HomeMenu.c` with its arrangement in
-`src/os/HomeLayout.c`, the aShop store in `src/os/Store.c`, Aurora accounts
+`src/os/HomeLayout.c`, the aShop store in `src/os/Store.c`, the startup sound,
+menu sounds, the Home Menu's song and aShop's music in `src/os/UiSound.c`, Aurora accounts
 in `src/os/Account.c` with the QR encoder in `src/os/Qr.c` and the HTTP
 client both use in `src/os/Http.c`, the Wi-Fi
 firmware copy in `src/os/FwDump.c` (with the read-only NAND reader in
@@ -111,9 +115,11 @@ and devkitARM's newlib), the build tool `sdk/aurcc.py` and examples in
 `sdk/examples/`. `cpu-stress/` is a CPU benchmark built both as an AuroraOS C
 app and as Horizon homebrew, to compare the two systems.
 
-Art and fonts are built into `Aurora/assets.pak` by `tools/mkassets.py` (with
-`tools/png_read.py` and `tools/ttf.py`) from `icons/` and `assets/fonts/`, and
-loaded at boot by `src/assets.c`. Run `make assets` after changing either.
+Art, fonts and the OS's sounds are built into `Aurora/assets.pak` by
+`tools/mkassets.py` (with `tools/png_read.py`, `tools/ttf.py` and
+`tools/dspadpcm.py`) from `icons/`, `assets/fonts/` and `assets/audio/`, and
+loaded by `src/assets.c` (art at boot, each sound when it plays). Run
+`make assets` after changing any of them.
 
 ## Documentation
 
@@ -133,6 +139,7 @@ loaded at boot by `src/assets.c`. Run `make assets` after changing either.
 * [`docs/audio.md`](docs/audio.md): CSND playback and the channel registers
 * [`docs/power.md`](docs/power.md): MCU real-time clock, battery, power off and reboot, closing the lid, screen brightness, the About page
 * [`docs/wifi.md`](docs/wifi.md): Wi-Fi bring-up, state and findings, and copying the firmware from the console
+* [`docs/tls.md`](docs/tls.md): HTTPS: the TLS client, the roots it trusts, certificates on the SD card, the clock, randomness
 * [`auric-lang/README.md`](auric-lang/README.md): the Auric language and compiler
 * [`sdk/README.md`](sdk/README.md): writing apps in C: the API, the C library, memory, building with `aurcc.py`, publishing on aShop
 * [`cpu-stress/README.md`](cpu-stress/README.md): the CPU stress test on AuroraOS and Horizon, and the results on a New 3DS
@@ -157,6 +164,12 @@ The UI font is **Figtree** under the **SIL Open Font License 1.1** (Copyright
 it covers both the TTFs in `assets/fonts/` and the glyph atlases rendered from
 them into `Aurora/assets.pak`. The OFL is compatible with GPL-3.0 for
 distribution; it is kept as-is and recorded here and in `docs/assets.md`.
+
+HTTPS uses **BearSSL** by Thomas Pornin, under the **MIT license**
+(`lib/bearssl/LICENSE.txt`), which both GPL-2.0 and GPL-3.0 code may use. The
+root certificates in `assets/certs/roots.pem` (and `src/os/TlsRoots.c`, made
+from them) come from the Mozilla CA store as curl publishes it, which is
+distributed under the MPL-2.0; see `docs/tls.md`.
 
 ## How To Install:
 - Place `Aurora.firm` in `SD:\luma\payloads`

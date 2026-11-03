@@ -1,19 +1,22 @@
 # Assets
 
-Aurora's icons, wallpaper and type come from `SD:\Aurora\assets.pak`, built by
-`tools/mkassets.py` from the art in `icons/` and the fonts in `assets/fonts/`.
+Aurora's icons, wallpaper, type and its own few sounds come from
+`SD:\Aurora\assets.pak`, built by `tools/mkassets.py` from the art in `icons/`,
+the fonts in `assets/fonts/` and the WAV files in `assets/audio/`.
 
 The pack is optional. Without it the OS still boots and draws its own built-in
-1bpp icons and 8x8 font; `assets_ok()` reports which is in use.
+1bpp icons and 8x8 font, silently; `assets_ok()` reports which is in use.
 
 | Piece | File |
 |-------|------|
 | Pack builder | `tools/mkassets.py` |
 | PNG reader | `tools/png_read.py` |
 | TrueType reader and rasteriser | `tools/ttf.py` |
+| Resampler, DSP-ADPCM encoder | `tools/dspadpcm.py` |
 | Runtime loader | `src/assets.c`, `include/assets.h` |
 | Generated ids | `include/asset_ids.h` |
 | Drawing | `src/screen.c` (`draw_asset`, `draw_text`) |
+| Playing the sounds | `src/os/UiSound.c` (see [`audio.md`](audio.md)) |
 
 ## Why a pack, and not runtime scaling
 
@@ -51,7 +54,7 @@ to get wrong, because its alpha channel is a solid card silhouette; reduced to
 coverage it flattens to a plain white block, and only its 30 grey tones carry
 the artwork. If a new icon comes out as a featureless shape, that is why.
 
-The five faces in `icons/people/` are the credits on the About page's More Info
+The seven faces in `icons/people/` are the credits on the About page's More Info
 screen. They are full-colour too, listed in `PEOPLE` rather than `COLOR` because
 the builder cuts them to a circle (`round_corners` at half the size) instead of
 to `ROUND_FRAC`.
@@ -96,10 +99,16 @@ Little-endian throughout; `src/assets.c` maps these directly onto structs, and a
 compile-time check there fails the build if the compiler pads them.
 
 ```
-PakHead   32 bytes  magic "APAK", version, count, data_off, arena, 3 reserved
+PakHead   32 bytes  magic "APAK", version, count, data_off, arena,
+                    sound_off, sound_count, 1 reserved
 PakEntry  24 bytes  id, type, w, h, pad, off, csize, usize    (count of them)
 payloads            byte-RLE, one run per entry at its own `off`
+PakSound  24 bytes  id, format, rate, samples, off, size  (sound_count, at sound_off)
+sounds              one payload per sound at its own `off`
 ```
+
+The sound table and its payloads come after every image payload. A pack from
+before them has `sound_off` and `sound_count` zero, and simply has no sounds.
 
 `type` is 0 for ALPHA8 (`w*h` coverage bytes), 1 for RGBA (`w*h*4`), 2 for a
 font. A font payload is:
@@ -120,6 +129,84 @@ coverage at 4bpp instead saved only another 2KB across the whole pack and would
 have flattened the wallpaper's alpha-5 pattern to nothing, so the pack stays at
 8bpp.
 
+## Sounds
+
+| Id | Source | When it plays |
+|----|--------|---------------|
+| `ASSET_SOUND_STARTUP` | `startup.wav` | once, when the Home Menu appears after a cold boot |
+| `ASSET_SOUND_SHOP` | `Aurora-SHOP.wav` | in aShop, looped |
+| `ASSET_SOUND_DL_DONE` | `DL-complete.wav` | in aShop, when an install finishes |
+| `ASSET_SOUND_SELECT` | `select.wav` | A or a tap opens or does something in the Home Menu, Settings or aShop |
+| `ASSET_SOUND_BACK` | `back.wav` | B or a Back button leaves a folder, screen or pop-up there |
+| `ASSET_SOUND_MOVE` | `move.wav` | the selection moves there |
+| `ASSET_SOUND_HOME` | `Aurora-HOME.wav` | while the Home Menu is on screen, looped, at 70% |
+
+`mkassets.py` reads WAV only, so a song that arrives as `.m4a` is converted
+first: `ffmpeg -i Aurora-HOME.m4a -map 0:a:0 -map_metadata -1 -bitexact -c:a
+pcm_s16le Aurora-HOME.wav` (the `-map` leaves out the cover art). ffmpeg honours
+the file's gapless information, so the WAV is exactly the 1,732,810 frames the
+m4a says it holds. Only the WAV goes in the repository: `.gitignore` keeps
+`assets/audio/*.m4a` out, as nothing builds from them.
+
+Exactly where the last three play is in [`audio.md`](audio.md), "Menu sounds".
+
+The sources are 44.1 or 48 kHz stereo. The builder stores only what the
+console plays:
+
+- **Mono.** A voice sends one channel to both speakers, and the song's two
+  channels are 97% the same anyway.
+- **32,728.5 Hz**, the CSND mixer's rate. The core turns the stored rate,
+  32728, into the divider `0x3FEC3FC / 32728 = 2048`, which is exactly that
+  rate, so a channel passes the samples through unchanged. `resample()` in
+  `tools/dspadpcm.py` is a 64-tap Blackman-windowed sinc cut off at 14.7 kHz.
+  The song has 0.3% of its energy above 11 kHz.
+- **DSP-ADPCM**, the 4-bit format of the GameCube and 3DS DSPs. For each sound
+  the builder designs 8 predictor pairs: (0, 0) plus a k-means of the frames'
+  least-squares predictors. Then for every frame of 14 samples it picks the
+  pair and shift with the least error.
+
+`SOUNDS` in `tools/mkassets.py` also says which digital silence (exact zeros)
+to cut: none, the start (`TRIM_LEAD`) or both ends (`TRIM_BOTH`). Both songs are
+17 ms of silence and then whole bars at 110 BPM (8 for aShop's, 18 for the Home
+Menu's), so looped as they were, every pass would land 17 ms late. DL-complete
+had 0.35 s of silence before its chime.
+The menu sounds come as 3.2 s files, of which select and back sound for 0.66 s
+and move for 0.1 s; the rest is cut.
+
+| Sound | Source | Stored | Bytes | SNR |
+|-------|--------|--------|-------|-----|
+| startup | 2.595 s, 498,276 bytes | 84,917 samples, 2.595 s | 48,560 | 65 dB |
+| shop | 17.475 s, 3,082,666 bytes | 571,360 samples, 17.458 s | 326,528 | 37.6 dB |
+| DL_DONE | 1.853 s, 355,876 bytes | 49,279 samples, 1.506 s | 28,192 | 66 dB |
+| select | 3.200 s, 614,444 bytes | 21,457 samples, 0.656 s | 12,296 | 66.9 dB |
+| back | 3.200 s, 614,444 bytes | 21,456 samples, 0.656 s | 12,296 | 69.6 dB |
+| move | 3.200 s, 614,444 bytes | 3,270 samples, 0.100 s | 1,904 | 46.2 dB |
+| home | 39.293 s, 6,931,284 bytes | 1,285,431 samples, 39.276 s | 734,568 | 42.8 dB |
+
+Move's lower figure still puts the error near -71 dBFS, since the sound itself
+peaks at -25 dBFS. The three menu sounds added 26 KB to the pack, and the Home
+Menu's song 735 KB (1,516,068 bytes now).
+
+The SNR compares the decoded sound with the mono 32.7 kHz signal, so it counts
+only the ADPCM's loss. On the song, IMA-ADPCM (the format CSND decodes
+itself) reached 21 dB at the same size, which is audible grit. 8-bit mu-law
+needs 1.75 times the space for about the same 37 dB. The builder is plain Python
+(the Makefile's interpreter has no numpy), so `make assets` takes about a
+minute, most of it the song.
+
+A sound payload is 16 little-endian int16 coefficients (8 pairs, Q11), then
+8-byte frames. A frame header is `pair << 4 | shift`, followed by 14 signed
+4-bit residuals, high nibble first. Each sample is
+
+```
+s = (n * (2048 << shift) + 1024 + c1 * h1 + c2 * h2) >> 11, clamped to 16 bits
+```
+
+where `h1` and `h2` are the two samples decoded before it, both 0 at the
+start. The builder keeps every coefficient below 2.0 (4075), and the loader
+refuses one beyond 8.0, a pair above 7 or a shift above 12. Together those keep
+the sum inside 32 bits.
+
 ## On the console
 
 `assets_load()` mounts the card, validates the header, decodes every entry into
@@ -136,9 +223,33 @@ present. A card that does not answer at once gets three tries. When the pack
 still fails, the OS says so once at boot ("assets.pak not loaded / Using
 built-in art. Press A.") and carries on with the 8x8 font and 1-bit icons.
 
+Sounds are not decoded into the arena (it has 55 KB left), and they do
+not take part in the all-or-nothing rule. `assets_read()` only reads their
+table, and an inconsistent table drops every sound while the art stays. A
+valid entry has an id seen once, format 0, a rate from 1000 to 96000, a size
+that matches its sample count, and a payload inside the file. Ids this build
+does not know, from a newer pack, are skipped. `asset_sound_read(id, dst, max,
+&rate)` decodes one sound into the caller's buffer through the loader's
+scratch buffer, on a card the caller has mounted. It returns 0 for a sound
+longer than `max` samples, and for a payload that does not read back or
+decode. For a long sound, `asset_sound_open(id, buf, buf_bytes, dst, max, &s,
+&rate)` reads it packed into `buf`, after which the card is not needed, and
+`asset_sound_decode(&s, frames)` decodes it a slice at a time; `s.done ==
+s.total` when it is finished.
+
+Older loaders read nothing past the images, so the OS and apps built before the
+sounds still load this pack. HEAD's `assets.c` loaded it in a PC test, as did
+the new loader with the pack from before the sounds and with damaged sound
+tables (its art loaded every time). That test also showed `asset_sound_read`
+gives bit-identical samples to `decode()` in `tools/dspadpcm.py`, for all six
+sounds once the menu sounds were added. On 2026-11-01 a PC run of the real
+`assets.c` showed the same for the Home Menu's song, through both
+`asset_sound_read()` and slices of `asset_sound_decode()` of varying size; a
+damaged frame stops the stream, and a buffer too small is refused.
+
 The arena is at `0x23F40000`, in the 768KB gap between the bottom backbuffer
 (which ends by `0x23F38400`) and the app-launch staging area at `0x24000000`.
-The current pack (184 assets) decodes to 723,968 bytes, 92% of the gap. `ASSET_ARENA_NEEDED` is emitted into
+The current pack (185 assets) decodes to 730,368 bytes, 93% of the gap. A pack with a different count is refused, so a C app built against an older one falls back to the built-in font until it is rebuilt (`gfx_fonts_loaded()`); it still runs. `ASSET_ARENA_NEEDED` is emitted into
 `asset_ids.h` and checked against `ASSETS_ARENA_MAX` at compile time, so a pack
 that outgrew the gap fails the build rather than the console.
 
@@ -159,6 +270,14 @@ Because the pack lives on the card, the payload only grew by about 5KB.
 
 The builder asserts that every payload survives an RLE round-trip, so a pack
 that writes successfully decodes correctly.
+
+A sound: put the WAV (8- or 16-bit PCM, any rate, mono or stereo) in
+`assets/audio/` and add it to `SOUNDS`. `make assets` gives it an
+`ASSET_SOUND_*` id, and `-v` prints each sound's size and SNR. A sound id does
+not move any art id, so a pack with new sounds still suits an older OS. The
+OS's buffers hold 4 s for each short sound, 4 s for the three menu sounds
+together and 28 s for the music ([`audio.md`](audio.md)); a longer sound is
+refused, not cut.
 
 ## Themes
 

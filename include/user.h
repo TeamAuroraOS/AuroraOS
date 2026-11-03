@@ -7,7 +7,7 @@
 #define USER_DAT_PATH     "Aurora/USER.dat"
 #define USER_DAT_DIR      "Aurora"
 #define USER_DAT_MAGIC    "ADAT"    /* 4 bytes, not NUL-terminated on disk */
-#define USER_DAT_VERSION  3         /* 3 added the brightness               */
+#define USER_DAT_VERSION  3
 #define USER_DAT_SIZE     64        /* fixed on-disk record size            */
 #define USER_NAME_MAX     24        /* incl. NUL terminator                 */
 
@@ -23,6 +23,15 @@
 /* Offset of the brightness level (0..4). Older files have a zero here, the
  * darkest level, so it is read only from version 3 files. */
 #define USER_DAT_BRIGHTNESS 51
+
+/* Offset of the sound switches, USER_SOUND_* bits for the sounds turned off.
+ * Older files have a zero here, which is every sound on. */
+#define USER_DAT_SOUND 52
+#define USER_SOUND_STARTUP_OFF 0x01u
+#define USER_SOUND_SHOP_OFF    0x02u /* aShop's music and its chime */
+#define USER_SOUND_MENU_OFF    0x04u /* select, back and move       */
+#define USER_SOUND_HOME_OFF    0x08u
+#define USER_SOUND_MASK        0x0Fu
 
 enum {
   LANG_ENGLISH = 0,
@@ -47,6 +56,7 @@ typedef struct {
   TouchCal touch;
   s16  clock_offset;  /* minutes added to the RTC; see g_rtc_offset */
   u8   brightness;    /* 0..4, applied by the ARM11 LCD driver */
+  u8   sound_off;     /* USER_SOUND_* */
 } UserConfig;
 
 void user_config_defaults(UserConfig *cfg);

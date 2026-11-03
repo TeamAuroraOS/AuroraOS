@@ -50,8 +50,9 @@ WavResult wav_load(const char *path, u8 *dst, u32 max, int halve,
     return WAV_ERR_FORMAT;
   }
 
-  /* Walk the chunk list; "fmt " and "data" can be in either order and other
-   * chunks (LIST, fact, cue) sit between them. */
+  /* Walk the chunk list up to "data"; other chunks (LIST, fact, cue) can sit
+   * around "fmt ". A chunk that claims more than the file holds ends the walk,
+   * since a seek past it could otherwise wrap around and repeat forever. */
   for (;;) {
     u8 ch[8];
     if (f_read(&f, ch, 8, &br) != FR_OK || br != 8) {
@@ -59,9 +60,11 @@ WavResult wav_load(const char *path, u8 *dst, u32 max, int halve,
       return have_fmt ? WAV_ERR_DATA : WAV_ERR_FORMAT;
     }
     u32 clen = rd32(ch + 4);
+    u32 left = (u32)(f_size(&f) - f_tell(&f));
     if (ch[0] == 'f' && ch[1] == 'm' && ch[2] == 't' && ch[3] == ' ') {
       u8 fm[16];
-      if (clen < 16 || f_read(&f, fm, 16, &br) != FR_OK || br != 16) {
+      if (clen < 16 || clen > left || f_read(&f, fm, 16, &br) != FR_OK ||
+          br != 16) {
         f_close(&f);
         return WAV_ERR_DATA;
       }
@@ -70,7 +73,7 @@ WavResult wav_load(const char *path, u8 *dst, u32 max, int halve,
       rate = rd32(fm + 4);
       depth = rd16(fm + 14);
       have_fmt = 1;
-      if (clen > 16 && f_lseek(&f, f_tell(&f) + (clen - 16)) != FR_OK) {
+      if (f_lseek(&f, f_tell(&f) + (clen - 16) + (clen & 1u)) != FR_OK) {
         f_close(&f);
         return WAV_ERR_DATA;
       }
@@ -78,7 +81,7 @@ WavResult wav_load(const char *path, u8 *dst, u32 max, int halve,
       data_len = clen;
       break;
     } else {
-      if (f_lseek(&f, f_tell(&f) + clen + (clen & 1u)) != FR_OK) {
+      if (clen > left || f_lseek(&f, f_tell(&f) + clen + (clen & 1u)) != FR_OK) {
         f_close(&f);
         return WAV_ERR_DATA;
       }

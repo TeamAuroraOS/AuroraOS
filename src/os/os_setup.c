@@ -1472,7 +1472,27 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_DELETE_DATA_FAILED */ {"Could not delete all of its data",
                                   "No se pudieron eliminar todos sus datos",
                                   "Impossible de tout supprimer",
-     "N\u00E3o foi poss\u00EDvel eliminar todos os dados desta aplica\u00E7\u00E3o"},
+                                  "N\u00E3o foi poss\u00EDvel apagar os dados"},
+
+    /* STR_ON */ {"On", "Activado", "Activ\u00E9", "Ligado"},
+    /* STR_STARTUP_SOUND */ {"Startup sound", "Sonido de inicio",
+                             "Son de d\u00E9marrage", "Som de inicio"},
+    /* STR_HOME_MUSIC */ {"Home music", "M\u00FAsica del men\u00FA",
+                          "Musique du menu", "M\u00FAsica do menu"},
+    /* STR_SHOP_MUSIC */ {"aShop music", "M\u00FAsica do menu",
+                          "Musique d'aShop", "M\u00FAsica da aShop"},
+    /* STR_MENU_SOUNDS */ {"Menu sounds", "Sonidos del men\u00FA",
+                           "Sons des menus", "Sons do menu"},
+    /* STR_AC_E_TLS     */
+    {"The secure connection failed.",
+     "Fall\u00F3 la conexi\u00F3n segura.",
+     "La connexion s\u00E9curis\u00E9e a \u00E9chou\u00E9.",
+     "Falha na liga\u00E7\u00E3o segura."},
+    /* STR_AC_E_CLOCK   */
+    {"Secure connection failed: check the clock.",
+     "Conexi\u00F3n segura fallida: revisa la hora.",
+     "Connexion s\u00E9curis\u00E9e \u00E9chou\u00E9e : v\u00E9rifiez l'heure.",
+     "Falha na liga\u00E7\u00E3o segura: verifique o rel\u00F3gio."},
 };
 
 const char *L(StringId id) {
@@ -2611,6 +2631,7 @@ void user_config_defaults(UserConfig *cfg) {
   touch_cal_default(&cfg->touch);
   cfg->clock_offset = 0;
   cfg->brightness = 3;
+  cfg->sound_off = 0;
 }
 
 static s16 get16(const u8 *p) { return (s16)(p[0] | (p[1] << 8)); }
@@ -2668,6 +2689,8 @@ int user_config_load(UserConfig *cfg) {
   if (br > USER_DAT_BRIGHTNESS && s_buf[4] >= 3 &&
       s_buf[USER_DAT_BRIGHTNESS] <= 4)
     cfg->brightness = s_buf[USER_DAT_BRIGHTNESS];
+  if (br > USER_DAT_SOUND)
+    cfg->sound_off = s_buf[USER_DAT_SOUND] & USER_SOUND_MASK;
 
   if (cfg->language >= LANG_COUNT)
     cfg->language = LANG_ENGLISH;
@@ -2701,6 +2724,7 @@ int user_config_save(const UserConfig *cfg) {
     s_buf[12 + i] = (u8)cfg->name[i];
   put16(s_buf + USER_DAT_CLOCK, cfg->clock_offset);
   s_buf[USER_DAT_BRIGHTNESS] = cfg->brightness <= 4 ? cfg->brightness : 3;
+  s_buf[USER_DAT_SOUND] = cfg->sound_off & USER_SOUND_MASK;
   if (cfg->touch_set) {
     u8 *t = s_buf + USER_DAT_TOUCH;
     t[0] = 1;

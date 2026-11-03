@@ -118,7 +118,7 @@ void status_bar_draw(void) {
     grid(x + 3, 6);
 
   x -= 6 + 16;
-  Color wc = wifi_online() ? COLOR_WHITE : COLOR_HM_TEXT2; /* joined */
+  Color wc = wifi_online() ? COLOR_WHITE : COLOR_HM_TEXT2;
   if (pack)
     ui_icon(fb, x, iy, 16, SH, ASSET_ICON_WIFI_16, 0, wc);
   else

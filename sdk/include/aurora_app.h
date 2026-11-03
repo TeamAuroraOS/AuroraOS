@@ -2,10 +2,10 @@
  *
  * Everything an app written in C needs from AuroraOS: both screens and
  * drawing, buttons, touch and the circle pad, sound, files, time, system
- * information and the network (HTTP). The C standard library (devkitARM's
- * newlib) works alongside it: printf() and friends write to an on-screen
- * console, malloc() has a 16 MB heap, fopen() and the rest of stdio reach the
- * SD card, and time() reads the console's clock.
+ * information and the network (HTTP and HTTPS). The C standard library
+ * (devkitARM's newlib) works alongside it: printf() and friends write to an
+ * on-screen console, malloc() has a 16 MB heap, fopen() and the rest of stdio
+ * reach the SD card, and time() reads the console's clock.
  *
  * A minimal app:
  *
@@ -35,7 +35,7 @@
 extern "C" {
 #endif
 
-#define AURORA_SDK_VERSION "1.3"
+#define AURORA_SDK_VERSION "1.4"
 
 #define AURORA_PRINTF(fmt, args) __attribute__((format(printf, fmt, args)))
 
@@ -370,14 +370,16 @@ uint32_t sys_accent(void); /* the accent colour, 0xRRGGBB */
 void sys_power_off(void) __attribute__((noreturn));
 void sys_reboot(void) __attribute__((noreturn));
 
-/* The network, over the Wi-Fi network saved in Settings > Wi-Fi. Plain HTTP
- * only: AuroraOS has no TLS yet, so https:// addresses fail. Every call waits
+/* The network, over the Wi-Fi network saved in Settings > Wi-Fi: HTTP, and
+ * HTTPS (TLS 1.2, the server's certificate checked against the roots the OS
+ * trusts) with an AuroraOS from Beta 7 on (ARM11 core 121). Every call waits
  * until it is done. The first net_connect() takes about 25 seconds, a request
- * usually well under one (at most 15). Meanwhile the screens keep their last
+ * usually well under one (an https:// one a second or two more for its
+ * handshake; at most 15 per wait). Meanwhile the screens keep their last
  * frame and the core can play no new sound or read touch and the circle pad,
  * unless a net_on_wait() handler draws something. HOME leaves once the call is
- * over. Needs app_from_home() and an AuroraOS as new as this SDK (ARM11
- * core 115 or later).
+ * over. Needs app_from_home() and ARM11 core 115 or later (121 for
+ * https://).
  *
  *   HttpResponse *r = net_connect() ? http_get("http://example.com/") : NULL;
  *   if (r) {
@@ -423,9 +425,12 @@ typedef struct {
   char *headers;  /* the status line and headers, "\r\n" between lines */
 } HttpResponse;
 
-/* One HTTP request to an http:// address (a port and a query may follow the
- * host). Redirects are followed, up to five; one to https:// comes back as it
- * is, with net_error() saying so. NULL when no reply came. The request, with
+/* One HTTP request to an http:// or https:// address (a port and a query
+ * may follow the host). Redirects are followed, up to five, to either kind;
+ * Authorization and Cookie lines go only to the first URL's host, port and
+ * scheme.
+ * NULL when no reply came; for https:// that includes a certificate that does
+ * not check out, with net_error() saying why. The request, with
  * its headers and body, must fit in 2 KB; the reply in 1020 KB (use
  * http_download() for bigger files). Free the result with http_free(). */
 HttpResponse *http_get(const char *url);

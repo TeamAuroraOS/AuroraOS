@@ -24,6 +24,10 @@
 
 #define AURORA_VERSION_NUM "0.1.6"
 #define AURORA_VERSION     "Beta 7 v" AURORA_VERSION_NUM
+/* When this version was made, YYYYMMDD; move it with the version. HTTPS
+ * takes it as the earliest the date can be, whatever the clock says, and a
+ * fixed date keeps builds byte-identical where __DATE__ would not. */
+#define AURORA_BUILD_DATE  20261028u
 
 #define REG_SDMMC_BASE      0x10006000
 

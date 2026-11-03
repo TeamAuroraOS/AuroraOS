@@ -54,6 +54,35 @@ int assets_read(void);
 /* Null when the pack is absent or `id` is out of range. */
 const Asset *asset_get(uint32_t id);
 
+/* Decodes sound `id` (ASSET_SOUND_*) into `dst` as signed 16-bit mono, on a
+ * card the caller has mounted, and gives its rate. Sounds stay on the card
+ * until asked for. Returns the sample count; 0 when the pack has no such
+ * sound, it is longer than `max` samples, or it does not read back. */
+uint32_t asset_sound_read(uint32_t id, int16_t *dst, uint32_t max,
+                          uint32_t *rate);
+
+/* A long sound decoded a slice at a time, so that it does not hold up the
+ * caller's screen. */
+typedef struct {
+  const uint8_t *src;
+  int16_t *dst;
+  int16_t coef[16];
+  int32_t h1, h2;
+  uint32_t total, done;
+} AssetSoundStream;
+
+/* Reads sound `id` packed into `buf`, on a card the caller has mounted, and
+ * sets up `s` to decode it into `dst`; the card is not needed after this.
+ * Returns the sample count, or 0 as asset_sound_read() does, also when the
+ * packed sound does not fit in `buf_bytes`. */
+uint32_t asset_sound_open(uint32_t id, void *buf, uint32_t buf_bytes,
+                          int16_t *dst, uint32_t max, AssetSoundStream *s,
+                          uint32_t *rate);
+
+/* Decodes up to `frames` more frames (14 samples each). The sound is finished
+ * when s->done == s->total. Returns 0 on a damaged frame. */
+int asset_sound_decode(AssetSoundStream *s, uint32_t frames);
+
 /* 0 if unavailable. */
 int asset_font(uint32_t id, Font *out);
 

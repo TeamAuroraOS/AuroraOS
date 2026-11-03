@@ -77,7 +77,8 @@ the ARM11. A change to either file changes the core, so it needs an
 Closing the shell turns both backlights off and holds the OS where it reads
 the buttons; opening it brings the light and the input back. It is a pause,
 not the console's sleep mode: the LCDs stay powered, both CPUs keep running
-(the ARM9 in a busy-wait loop), sound keeps playing, the Wi-Fi chip is left
+(the ARM9 in a busy-wait loop), sound keeps playing (except the Home Menu's
+song, which stops and restarts when the lid opens), the Wi-Fi chip is left
 as it is, and the framebuffers are kept as they were. Added by PR 29
 (2026-10-24, core 120); its author reports that it works on a console, and no
 other result is recorded here.
@@ -228,8 +229,9 @@ while it is open and calls `f_getfree_step()` (added to `src/ff.c` and
 most four FAT sectors, so B and More Info answer at once; the count is cached
 in the mounted volume when it completes. Its **More Info** button opens a page laid out like
 the stock System Settings, with the version, a software-update line that says
-there is none, the eMMC CID and the device; the bottom screen credits the team,
-with their faces from the asset pack (`PEOPLE` in `tools/mkassets.py`).
+there is none, the eMMC CID and the device; the bottom screen credits the team
+and LeweckBanana, who made the Home Menu's song, with their faces from the
+asset pack (`PEOPLE` in `tools/mkassets.py`).
 
 Two of those rows are limited by what a bare-metal ARM9 can see:
 

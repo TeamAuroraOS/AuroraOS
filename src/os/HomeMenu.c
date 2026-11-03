@@ -9,6 +9,7 @@
 #include "statusbar.h"
 #include "touch.h"
 #include "ui.h"
+#include "uisound.h"
 
 #define BW  BOT_SCREEN_WIDTH
 #define BSH BOT_SCREEN_HEIGHT
@@ -646,8 +647,10 @@ static void message(int err) {
   for (;;) {
     u32 k = get_keys_down();
     int tx, ty;
-    if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty))
+    if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty)) {
+      ui_sound_close(k);
       break;
+    }
     ui_idle();
   }
   anim_transition(ANIM_FADE, ANIM_BOT);
@@ -696,6 +699,7 @@ static void open_folder(int f) {
 
 static void go_up(void) {
   int f = view, p = hl_parent(f), at = hl_index(p, HL_FOLDER(f));
+  ui_sound_back();
   select_k(at);
   show_view(p, at + 1, 0);
 }
@@ -855,12 +859,15 @@ static void drag_to(int x, int y) {
   } else if (kind == 2 && anim_ms(hov_t0) >= EDGE_MS && page > 0) {
     page--;
     hov_t0 = anim_now();
+    ui_sound_move();
     place(0);
   } else if (kind == 3 && anim_ms(hov_t0) >= EDGE_MS && page + 1 < pages()) {
     page++;
     hov_t0 = anim_now();
+    ui_sound_move();
     place(0);
   } else if (kind == 4 && anim_ms(hov_t0) >= SPRING_MS) {
+    ui_sound_select();
     open_folder(HL_FOLDER_ID(arg));
   }
 }
@@ -885,15 +892,19 @@ static void carry_keys(u32 k) {
     if (g > n)
       g = n;
     if (g != gap) {
+      ui_sound_move();
       gap = g;
       select_k(gap);
       refresh();
     }
   }
-  if (k & BUTTON_A)
+  if (k & BUTTON_A) {
+    ui_sound_select();
     drop();
-  else if (k & BUTTON_B)
+  } else if (k & BUTTON_B) {
+    ui_sound_back();
     cancel_carry();
+  }
 }
 
 enum { MI_MOVE, MI_MOVE_TO, MI_NEW, MI_RENAME, MI_REMOVE, MI_DELETE_APP,
@@ -1020,8 +1031,10 @@ static int menu_run(int e) {
       return item;
     if (kd & (BUTTON_B | BUTTON_Y))
       return -1;
-    if (item != prev)
+    if (item != prev) {
+      ui_sound_move();
       menu_draw(e, item, on);
+    }
     ui_idle();
   }
 }
@@ -1082,8 +1095,10 @@ static int pick_run(int e) {
       return to[item];
     if (kd & BUTTON_B)
       return -2;
-    if (item != prev)
+    if (item != prev) {
+      ui_sound_move();
       pick_draw(e, to, n, item, top);
+    }
     ui_idle();
   }
 }
@@ -1138,6 +1153,10 @@ static void act(int item, int k) {
   }
   if (item == MI_MOVE_TO) {
     int c = pick_run(e);
+    if (c == -2)
+      ui_sound_back();
+    else
+      ui_sound_select();
     anim_transition(ANIM_FADE, ANIM_BOT);
     if (c != -2) {
       int i = hl_index(view, e), got = hl_take(view, i);
@@ -1185,7 +1204,13 @@ static void act(int item, int k) {
 }
 
 static void menu(int k) {
-  int item = menu_run(entry_at(k));
+  int item;
+  ui_sound_select();
+  item = menu_run(entry_at(k));
+  if (item < 0)
+    ui_sound_back();
+  else
+    ui_sound_select();
   anim_transition(ANIM_FADE, ANIM_BOT);
   if (item < 0)
     back_home();
@@ -1205,6 +1230,7 @@ static void activate(int k) {
   int e = entry_at(k);
   if (e == HL_NONE)
     return;
+  ui_sound_select();
   press(k);
   if (HL_IS_FOLDER(e)) {
     open_folder(HL_FOLDER_ID(e));
@@ -1235,7 +1261,7 @@ static void system_menu_draw(const int *rows, int n, int selected) {
   static const Color cyan = {0x64, 0xE8, 0xC8};
   static const StringId labels[SYS_COUNT] = {
       STR_RETURN_HOME, STR_POWER_OFF, STR_CANCEL};
-  const char *title = "Aurore Tools";
+  const char *title = "Aurora Tools"; // Used to be Aurore tools lol -Moonii
 
   clear_screen(fb, BOT_FB_SIZE, black);
   ui_text(fb, 8, 8, BSH, title, cyan, black, &ui_small);
@@ -1315,11 +1341,13 @@ void home_system_menu(void) {
 
 static void button(int b) {
   if (b == BTN_POWER) {
+    ui_sound_select();
     power_ask();
   } else if (b == BTN_BACK) {
     if (view != HOME_ROOT)
       go_up();
   } else {
+    ui_sound_select();
     hk->settings();
     back_home();
   }
@@ -1356,6 +1384,8 @@ static int hit(int x, int y) {
 
 static void tap(int h) {
   if (h >= HIT_DOT) {
+    if (page != h - HIT_DOT)
+      ui_sound_move();
     page = h - HIT_DOT;
     refresh();
   } else if (h >= HIT_BTN) {
@@ -1435,11 +1465,13 @@ static void touch_step(void) {
       anim_jump(&scroll, off);
       dirty = 1;
     } else {
-      int dx = t_x - t_x0;
+      int dx = t_x - t_x0, was = page;
       if (dx <= -SWIPE && page + 1 < pages())
         page++;
       else if (dx >= SWIPE && page > 0)
         page--;
+      if (page != was)
+        ui_sound_move();
       tstate = T_IDLE;
       refresh();
     }
@@ -1483,6 +1515,7 @@ static void nav_keys(u32 k) {
     if (k & (BUTTON_DDOWN | BUTTON_B))
       b = -1;
     if (b != bar) {
+      ui_sound_move();
       bar = b;
       refresh();
     }
@@ -1525,6 +1558,7 @@ static void nav_keys(u32 k) {
       }
     }
     if (p != page || s != sel || bar >= 0) {
+      ui_sound_move();
       page = p;
       sel = s;
       refresh();
@@ -1589,16 +1623,20 @@ void home_run(void) {
     }
 
     if (held != HL_NONE) {
-      if (!by_touch)
+      if (!by_touch) {
         carry_keys(k);
-      else if (k & BUTTON_B)
+      } else if (k & BUTTON_B) {
+        ui_sound_back();
         cancel_carry();
+      }
     } else {
       nav_keys(k);
       if (k & BUTTON_START) {
+        ui_sound_select();
         hk->settings();
         back_home();
       } else if (k & BUTTON_X) {
+        ui_sound_select();
         hk->terminal();
         back_home();
       }

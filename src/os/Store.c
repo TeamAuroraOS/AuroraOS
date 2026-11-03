@@ -23,6 +23,7 @@
 #include "timer.h"
 #include "touch.h"
 #include "ui.h"
+#include "uisound.h"
 #include "wifi.h"
 #include <string.h>
 
@@ -983,8 +984,10 @@ static void message(const char *title, const char *sub) {
   touch_arm();
   while (1) {
     u32 k = get_keys_down();
-    if ((k & (BUTTON_A | BUTTON_B)) || tapped(&x, &y))
+    if ((k & (BUTTON_A | BUTTON_B)) || tapped(&x, &y)) {
+      ui_sound_close(k);
       break;
+    }
     ui_idle();
   }
   settle();
@@ -1567,6 +1570,7 @@ static void dl_finish(void) {
     f_unlink(dl.old);
   dl.state = DL_DONE;
   installs++;
+  ui_sound_shop_chime();
   dl.title = L(STR_ST_INSTALLED);
   dl.line1 = a->name;
   dl.line2 = L(STR_ST_ON_HOME);
@@ -1765,6 +1769,7 @@ static void download_screen(App *a) {
     u32 k = get_keys_down();
     int p;
     if ((k & BUTTON_B) || dl.cancel || (tapped(&tx, &ty) && ty >= BB_Y - 4)) {
+      ui_sound_back();
       flash(paint_dl, 0);
       dl_close(1);
       dl.state = DL_CANCELLED;
@@ -1795,6 +1800,7 @@ static void download_screen(App *a) {
       u32 k = get_keys_down();
       if ((k & (BUTTON_A | BUTTON_B)) ||
           (tapped(&tx, &ty) && ty >= BB_Y - 4)) {
+        ui_sound_close(k);
         flash(paint_dl, 0);
         break;
       }
@@ -1834,10 +1840,12 @@ static int page_screen(int it, int push_top) {
       b = btn_at(pb, n, tx, ty);
     }
     if ((k & (BUTTON_B | BUTTON_START)) || b == 0) {
+      ui_sound_back();
       flash(paint_page, 0);
       break;
     }
     if (n == 2 && ((k & BUTTON_A) || b == 1)) {
+      ui_sound_select();
       flash(paint_page, 1);
       download_screen(&apps[it]);
       page_top(it, anim_px(&sc));
@@ -1925,6 +1933,7 @@ static void list_screen(List *l) {
     }
 
     if (l->sel != prev) {
+      ui_sound_move();
       anim_list_to(&l->al, l->sel);
       if (!anim_list_moving(&l->al)) {
         paint_list();
@@ -1934,11 +1943,13 @@ static void list_screen(List *l) {
     }
 
     if ((k & (BUTTON_B | BUTTON_START)) || b == 0) {
+      ui_sound_back();
       flash(paint_list, 0);
       break;
     }
     if ((k & BUTTON_A) || open || b == 1) {
       int sc;
+      ui_sound_select();
       flash(paint_list, 1);
       sc = page_screen(l->items[l->sel], 0);
       cur_list = l;
@@ -1948,6 +1959,7 @@ static void list_screen(List *l) {
         fade_top_page(l->items[l->sel], 0);
       touch_arm();
     } else if ((k & BUTTON_Y) || b == 2) {
+      ui_sound_select();
       flash(paint_list, 2);
       search_screen();
       cur_list = l;
@@ -2103,12 +2115,18 @@ static int options_menu(void) {
         if (touch_in(tx, ty, OP_BX, OP_BY(i), OP_BW, OP_BH))
           pick = item = i;
     }
+    if (item != was && pick < 0)
+      ui_sound_move();
     if (item != was || pick >= 0)
       options_draw(item);
     ui_idle();
   }
-  if (pick >= 0)
+  if (pick >= 0) {
+    ui_sound_select();
     wait_ms(90);
+  } else {
+    ui_sound_back();
+  }
   settle();
   anim_transition(ANIM_FADE, ANIM_BOT);
   return pick;
@@ -2329,6 +2347,10 @@ static int need_account(const char *owner) {
         break;
       ui_idle();
     }
+    if (b == 0)
+      ui_sound_back();
+    else
+      ui_sound_select();
     flash(paint_need, b);
     settle();
     if (b == 0) {
@@ -2372,6 +2394,7 @@ static void notice(const char *title, const char *line) {
   for (;;) {
     u32 k = get_keys_down();
     if ((k & (BUTTON_A | BUTTON_B)) || (tapped(&tx, &ty) && ty >= BB_Y - 4)) {
+      ui_sound_close(k);
       flash(paint_notice, 0);
       break;
     }
@@ -2494,16 +2517,21 @@ static void main_screen(void) {
       act = 0;
     if (k & BUTTON_X)
       act = 2;
-    if (k & (BUTTON_B | BUTTON_START))
+    if (k & (BUTTON_B | BUTTON_START)) {
+      ui_sound_back();
       break;
+    }
 
     if (m_sel != prev) {
+      ui_sound_move();
       anim_to(&m_scroll, m_sel * TILE_STEP);
       m_title_t0 = anim_now();
     }
 
     if (act >= 0) {
       down = drag = 0;
+      if (act != 1 || nsecs)
+        ui_sound_select();
       if (act == 1 && nsecs) {
         flash(paint_main, 1);
         open_section(m_sel);
@@ -2555,6 +2583,8 @@ int store_screen(const char *owner) {
   } else {
     anim_transition(ANIM_PUSH, ANIM_BOTH);
   }
+  if (mounted)
+    ui_sound_shop_start();
   bar_draw(0);
   res = sync();
   if (res == SYNC_OK) {
@@ -2570,6 +2600,7 @@ int store_screen(const char *owner) {
     notice(L(STR_ST_NO_REACH), why);
   }
   wifi_direct_off();
+  ui_sound_shop_stop();
   if (mounted)
     f_mount(NULL, "", 0);
   mounted = 0;

@@ -11,6 +11,7 @@
  * staging area (0x24000000), and the top of FCRAM above the ARM11 mailbox. */
 #define GLB_ARENA_ADDR 0x24000000u
 #define GLB_ARENA_SIZE 0x01000000u /* 16 MB, to 0x25000000 */
+/* Also where the Home Menu's song sits while the menu shows (UiSound.c). */
 #define GLB_FILE_ADDR  0x27100000u
 #define GLB_FILE_MAX   0x00B00000u /* 11 MB, to 0x27C00000 */
 #define GLB_TOK_ADDR   0x27C00000u

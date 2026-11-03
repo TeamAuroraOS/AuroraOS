@@ -2,6 +2,7 @@
  * the console allows; info and running apps are Aurora's own. */
 
 #include "term.h"
+#include "appnet.h"
 #include "audio.h"
 #include "container.h"
 #include "files.h"
@@ -218,6 +219,9 @@ static void t_canon(char *path) {
     while (*e && *e != '/')
       e++;
     len = (int)(e - s);
+    /* A short name can come back longer, so the sum may no longer fit. */
+    if (n + 1 + len >= T_PATH)
+      return;
     if (n > 3)
       out[n++] = '/';
     at = n;
@@ -880,7 +884,7 @@ static int app_sane(const aos_header_t *h, u32 size) {
  * decide them, so the answer matches what opening the file would do. */
 static void info_file(const char *arg, const char *path, const FILINFO *fno) {
   static FIL f;
-  static char v[200];
+  static char v[T_PATH + 64]; /* a whole path and the words around it */
   static u8 hdr[64];
   const char *name = fno->fname, *ext = name;
   u32 size = (u32)fno->fsize, got;
@@ -1258,6 +1262,27 @@ static const char *const unit_desc[U_COUNT] = {
     "PICA200 GPU", "Wi-Fi (AR6014)", "SD card",
     "Battery and clock (MCU)"};
 
+static const char *wifi_end_text(u32 why) {
+  switch (why) {
+    case WIFI_END_LEFT:
+      return "left on request";
+    case WIFI_END_LINK:
+      return "the link dropped";
+    case WIFI_END_ASSERT:
+      return "the Wi-Fi firmware stopped";
+    case WIFI_END_CHIP:
+      return "the Wi-Fi chip stopped answering";
+    case WIFI_END_CREDITS:
+      return "the Wi-Fi chip took no more frames";
+    case WIFI_END_SEND:
+      return "frames kept failing to go out";
+    case WIFI_END_RECV:
+      return "frames kept reading wrong";
+    default:
+      return "not known";
+  }
+}
+
 /* 1 active, 0 inactive, -1 failed. `sub` is the state's detail in systemd's
  * words; `note` a few words about the unit. */
 static int unit_state(int u, const char **sub, char *note) {
@@ -1317,6 +1342,10 @@ static int unit_state(int u, const char **sub, char *note) {
     }
     case U_WIFI: {
       static WifiShared w;
+      WifiNetResult r;
+      /* The core knows; what the OS remembers is from the last command. */
+      if (core && wifi_online())
+        wifi_net(WIFI_NETOP_STATUS, 0, 0, 0, 1000u, &r, 0);
       if (!wifi_online()) {
         t_cpy(p, "not joined; ping joins the network saved in Settings");
         return 0;
@@ -1408,6 +1437,34 @@ static void unit_missing(const char *s) {
   m_end();
 }
 
+static void wifi_status_more(void) {
+  static WifiShared w;
+  static char line[96];
+  char *p;
+  wifi_get(&w);
+  if (w.session == 1u) {
+    p = t_cpy(line, "Sending credits ");
+    p = t_num(p, w.htc_credit);
+    p = t_cpy(p, " of ");
+    p = t_num(p, w.htc_credits);
+    p = t_cpy(p, ", failed bus commands ");
+    t_num(p, w.bus_errs);
+    t_out("     Chip: ", TC_DIM);
+    t_wrap(line, 11, TC_TEXT);
+  }
+  if (w.session_ends) {
+    p = t_num(line, w.session_ends);
+    p = t_cpy(p, w.session_ends == 1u ? " time, last: " : " times, last: ");
+    p = t_cpy(p, wifi_end_text(w.session_end));
+    if (w.session_end == WIFI_END_LINK) {
+      p = t_cpy(p, ", reason ");
+      t_num(p, w.session_reason & 0xFFu);
+    }
+    t_out("     Lost: ", TC_DIM);
+    t_wrap(line, 11, TC_TEXT);
+  }
+}
+
 static void unit_status(int u) {
   static char note[64];
   const char *sub;
@@ -1426,6 +1483,8 @@ static void unit_status(int u) {
   t_line(")", TC_TEXT);
   t_out("   Status: ", TC_DIM);
   t_wrap(note, 11, TC_TEXT);
+  if (u == U_WIFI && audio_alive())
+    wifi_status_more();
 }
 
 static void cmd_systemctl(int argc, char **argv) {
@@ -1551,11 +1610,17 @@ static int net_join(const char *cmd) {
   static WifiShared w;
   static char why[96], line[96];
   WifiNetResult r;
-  if (wifi_online())
-    return 1;
-  /* The core may still hold a join the OS forgot, after an app. */
+  int was = wifi_online();
+  /* Asked each time: the core may hold a join the OS forgot, after an app, and
+   * the link can have gone while nothing read the chip. */
   if (wifi_net(WIFI_NETOP_STATUS, 0, 0, 0, 1000u, &r, 0) == WIFI_NETS_OK)
     return 1;
+  if (was) {
+    wifi_get(&w);
+    char *n = t_cpy(line, "The network was lost: ");
+    t_cpy(n, wifi_end_text(w.session_end));
+    t_line(line, TC_DIM);
+  }
   net_ssid[0] = 0;
   net_shown = 0xFFFFFFFFu;
   t_unmount(); /* staging the firmware mounts the card */
@@ -1668,7 +1733,7 @@ static const char *icmp_text(u32 icmp) {
 
 static void cmd_ping(int argc, char **argv) {
   static WifiShared w;
-  static char line[128];
+  static char line[T_INPUT + 64]; /* the host as typed, and the words around it */
   WifiNetResult r;
   const char *host = 0;
   u32 count = 0, wait_s = 2, ip = 0;
@@ -1824,6 +1889,208 @@ static void cmd_ping(int argc, char **argv) {
     t_cpy(q, " ms");
     t_line(line, TC_TEXT);
   }
+}
+
+/* curl: one HTTP or HTTPS request through AppNet.c, which the OS links for
+ * it; these are AppNet's hooks. Its calls post to the core themselves, so the
+ * screens are drawn directly meanwhile (wifi_direct_on). */
+u32 appnet_ms(void) { return wifi_now_ms(); }
+
+int appnet_mount(void) { return t_need_sd(0); }
+
+int appnet_launched(void) { return 1; }
+
+static u32 curl_shown;
+
+void appnet_waiting(u32 ms) {
+  static char line[64];
+  if (ms / 1000u == curl_shown)
+    return;
+  curl_shown = ms / 1000u;
+  char *p = t_cpy(line, "Waiting for the server... ");
+  p = t_num(p, curl_shown);
+  t_cpy(p, " s");
+  t_busy(line);
+}
+
+static void curl_progress(u32 done, u32 total) {
+  static char line[64];
+  char *p = t_cpy(line, "Downloaded ");
+  p = t_hsize(p, done);
+  if (total) {
+    p = t_cpy(p, " of ");
+    t_hsize(p, total);
+  }
+  t_busy(line);
+}
+
+/* The last part of the URL's path, or index.html. */
+static void curl_name(const char *url, char *out, u32 size) {
+  const char *s = url, *name = 0;
+  u32 n = 0;
+  for (const char *p = url; *p && *p != '?' && *p != '#'; p++)
+    if (p[0] == '/' && p[1] == '/')
+      s = p + 2;
+  for (; *s && *s != '?' && *s != '#'; s++)
+    if (*s == '/')
+      name = s + 1;
+  if (name)
+    while (name[n] && name[n] != '?' && name[n] != '#' && n + 1u < size) {
+      out[n] = name[n];
+      n++;
+    }
+  out[n] = 0;
+  if (!n)
+    t_cpy(out, "index.html");
+}
+
+/* Text as cat prints it, at most CURL_SHOW bytes; SELECT stops it. */
+#define CURL_SHOW (16u * 1024u)
+
+static void curl_show(const char *b, u32 len) {
+  u32 n = len < CURL_SHOW ? len : CURL_SHOW;
+  for (u32 i = 0; i < n; i++) {
+    if (b[i] != '\r')
+      t_outc(b[i], TC_TEXT);
+    if ((i & 1023u) == 1023u && !t_busy(0)) {
+      t_outc('\n', TC_TEXT);
+      t_err("curl", 0, 0, "interrupted");
+      return;
+    }
+  }
+  if (n && b[n - 1] != '\n')
+    t_outc('\n', TC_TEXT);
+  if (n < len) {
+    static char line[80];
+    char *p = t_cpy(line, "(");
+    p = t_num(p, len - n);
+    t_cpy(p, " more bytes; -o FILE saves all of it)");
+    t_line(line, TC_DIM);
+  }
+}
+
+static void cmd_curl(int argc, char **argv) {
+  static char path[T_PATH], name[96], headers[1024];
+  static FIL f;
+  const char *url = 0, *out = 0, *data = 0, *method = 0;
+  int include = 0, head = 0, silent = 0, remote = 0, ok;
+  u32 hn = 0;
+  AppNetReply r;
+
+  for (int i = 1; i < argc; i++) {
+    const char *a = argv[i];
+    if (a[0] != '-' || !a[1]) {
+      if (url) {
+        t_err("curl", 0, 0, "one URL at a time");
+        return;
+      }
+      url = a;
+    } else if ((t_streq(a, "-o") || t_streq(a, "-X") || t_streq(a, "-d") ||
+                t_streq(a, "-H")) && i + 1 < argc) {
+      const char *v = argv[++i];
+      if (a[1] == 'o') {
+        out = v;
+      } else if (a[1] == 'X') {
+        method = v;
+      } else if (a[1] == 'd') {
+        data = v;
+      } else {
+        u32 n = (u32)strlen(v);
+        if (hn + n + 3u > sizeof(headers)) {
+          t_err("curl", 0, 0, "the headers are too long");
+          return;
+        }
+        memcpy(headers + hn, v, n);
+        hn += n;
+        headers[hn++] = '\r';
+        headers[hn++] = '\n';
+        headers[hn] = 0;
+      }
+    } else if (t_streq(a, "-i")) {
+      include = 1;
+    } else if (t_streq(a, "-I")) {
+      head = 1;
+    } else if (t_streq(a, "-s")) {
+      silent = 1;
+    } else if (t_streq(a, "-O")) {
+      remote = 1;
+    } else if (!t_streq(a, "-L")) {
+      t_err("curl", "option", a, "is unknown");
+      t_line("usage: curl [-iIsLO] [-o FILE] [-X METHOD] [-H LINE] [-d DATA] "
+             "URL", TC_TEXT);
+      return;
+    }
+  }
+  if (!url) {
+    t_err("curl", 0, 0, "no URL specified");
+    return;
+  }
+  if (remote && !out) {
+    curl_name(url, name, sizeof(name));
+    out = name;
+  }
+  if (!method)
+    method = head ? "HEAD" : data ? "POST" : "GET";
+  if (out && !head) {
+    if (!t_need_sd("curl"))
+      return;
+    if (!t_resolve(out, path)) {
+      t_err("curl", 0, out, "File name too long");
+      return;
+    }
+  }
+  if (!net_join("curl"))
+    return;
+  if (out && !head && !t_need_sd("curl"))
+    return;
+
+  curl_shown = 0xFFFFFFFFu;
+  wifi_direct_on();
+  if (out && !head && !data && t_streq(method, "GET")) {
+    ok = appnet_download(url, hn ? headers : 0, path,
+                         silent ? 0 : curl_progress);
+    wifi_direct_off();
+    if (!ok) {
+      t_err("curl", 0, 0, appnet_error());
+      return;
+    }
+    if (!silent) {
+      static char line[T_PATH + 16];
+      char *p = t_cpy(line, "Saved ");
+      t_cpy(p, t_show(path));
+      t_line(line, TC_DIM);
+    }
+    return;
+  }
+  ok = appnet_http(method, url, hn ? headers : 0, data,
+                   data ? (u32)strlen(data) : 0, &r) != 0;
+  wifi_direct_off();
+  if (!ok) {
+    t_err("curl", 0, 0, appnet_error());
+    return;
+  }
+  if (include || head) {
+    for (const char *h = r.head; *h; h++)
+      if (*h != '\r')
+        t_outc(*h, TC_DIM);
+    t_outc('\n', TC_DIM);
+    t_outc('\n', TC_DIM);
+  }
+  if (head)
+    return;
+  if (out) {
+    UINT bw = 0;
+    FRESULT fr = f_open(&f, path, FA_WRITE | FA_CREATE_ALWAYS);
+    if (fr == FR_OK) {
+      fr = f_write(&f, r.body, r.len, &bw);
+      if (f_close(&f) != FR_OK && fr == FR_OK)
+        fr = FR_DISK_ERR;
+    }
+    if (fr != FR_OK || bw != r.len)
+      t_err("curl", 0, out, fr != FR_OK ? t_frerr(fr) : "No space left");
+    return;
+  }
+  curl_show(r.body, r.len);
 }
 
 static void cmd_shutdown(int argc, char **argv) {
@@ -1989,6 +2256,15 @@ const TermCmd t_cmds[] = {
     {"cp", cmd_cp, "cp [-rn] SRC... DEST", "copy files and folders",
      "-r copies folders, -n keeps files already there. Otherwise a file in "
      "the way is replaced. SELECT stops a long copy."},
+    {"curl", cmd_curl, "curl [-iIsLO] [-o FILE] [-X METHOD] [-H LINE] "
+     "[-d DATA] URL", "fetch a URL over HTTP or HTTPS",
+     "Prints the reply's body (the first 16 KB), or saves it: -o FILE, or -O "
+     "under the URL's own name. -i shows the headers too, -I asks for the "
+     "headers only (HEAD), -s leaves out the progress, -X picks the method, "
+     "-H adds a header line, -d sends DATA as a POST body. Redirects are "
+     "always followed (-L is accepted). https:// checks the server's "
+     "certificate against the roots AuroraOS trusts. Joins the saved "
+     "network first, as ping does."},
     {"date", cmd_date, "date", "print the date and time", 0},
     {"echo", cmd_echo, "echo [-n] [TEXT]...", "print text",
      "-n leaves out the newline."},

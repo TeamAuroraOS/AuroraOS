@@ -15,6 +15,7 @@
 #include "timer.h"
 #include "touch.h"
 #include "ui.h"
+#include "uisound.h"
 #include "wifi.h"
 
 #define AC_CLIENT "aurora-3ds"
@@ -194,6 +195,7 @@ static void ac_console_name(const char *owner, char *out) {
 typedef struct {
   u32 net;    /* WIFI_NETS_* */
   u32 stage;  /* WIFI_HTTP_* */
+  int tls;    /* HttpReply.tls */
   int status; /* HTTP status, 0 when no reply was read */
   int ok;     /* the body is a JSON object */
   Json j;
@@ -241,6 +243,7 @@ static int ac_call(const char *method, const char *path, const char *form,
                         sizeof(ac_resp) - 1, &h, ac_tick);
   r->net = h.net;
   r->stage = h.stage;
+  r->tls = h.tls;
   r->ok = h.body && json_parse(&r->j, h.body, h.len, ac_tok,
                                sizeof(ac_tok) / sizeof(ac_tok[0])) &&
           ac_tok[0].type == JSON_OBJ;
@@ -262,6 +265,7 @@ static void ac_why(const AcReply *r, char *out) {
   HttpReply h;
   char code[40];
   h.net = r->net;
+  h.tls = r->tls;
   h.status = r->status;
   http_why(&h, out);
   ac_field(r, "error", code, sizeof(code));
@@ -525,8 +529,10 @@ static int ac_poll(AcCode *c, int create, char *token) {
   ac_code_bottom(c);
   for (;;) {
     u32 k = get_keys_down();
-    if (k & BUTTON_B)
+    if (k & BUTTON_B) {
+      ui_sound_back();
       return POLL_CANCEL;
+    }
     u32 ms = timer_us_since(c->t0) / 1000u;
     if (ms >= c->expires * 1000u)
       return POLL_EXPIRED;
@@ -757,12 +763,15 @@ void account_screen(const char *owner) {
           activate = 1;
         }
     if (sel != prev) {
+      if (!activate)
+        ui_sound_move();
       anim_list_to(&ac_list, sel);
       if (!anim_list_moving(&ac_list))
         ac_paint();
     }
     if ((k & BUTTON_A) || activate) {
       int linked = ac_token[0] != 0, slid = 1;
+      ui_sound_select();
       if (!linked)
         ac_link(owner, sel == 1);
       else if (sel == 0)
@@ -780,8 +789,10 @@ void account_screen(const char *owner) {
       anim_list_jump(&ac_list, sel);
       ac_paint();
     }
-    if (k & BUTTON_B)
+    if (k & BUTTON_B) {
+      ui_sound_back();
       return;
+    }
     int ms = anim_frame(&frame_at);
     if (ms && anim_list_step(&ac_list, ms))
       ac_paint();

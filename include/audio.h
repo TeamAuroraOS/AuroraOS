@@ -14,11 +14,14 @@
 
 /* audio_boot() replaces a running core whose version differs, so bump this on
  * any core change. */
-#define AUDIO_CORE_VERSION 120
+#define AUDIO_CORE_VERSION 123
 
 /* The first core that understands AUDIO_CMD_PARK. An older one can only be
  * replaced by powering the console off. */
 #define AUDIO_PARK_VERSION 83
+
+/* The first core that runs WIFI_NETOP_TCP, which HTTPS needs (wifi.h). */
+#define AUDIO_TCP_VERSION 121
 
 /* The first core that runs AUDIO_CMD_RUN11, and takes AUDIO_CMD_N3DS mode 0
  * (back to 268 MHz). */
@@ -116,10 +119,10 @@ typedef enum {
   AUDIO_N3DS_NO_WAKE     = 5, /* no interrupt reached the core; not tried    */
 } AudioN3dsStatus;
 
-/* Voices: sounds an app plays, each on its own CSND channel (1..AUDIO_VOICES),
- * so music and effects overlap. Channel 0 stays with the OS's tone, PCM and
- * crash beep. The samples are read in place, so they must be in physical RAM
- * (flushed from the ARM9 cache) and stay put while the voice plays.
+/* Voices: sounds an app or the OS plays, each on its own CSND channel
+ * (1..AUDIO_VOICES), so music and effects overlap. Channel 0 stays with the
+ * OS's tone, PCM and crash beep. The samples are read in place, so they must
+ * be in physical RAM (flushed from the ARM9 cache) and stay put while it plays.
  *
  * AUDIO_CMD_VOICE arg0: bits 0-7 the voice, or AUDIO_VOICE_ANY for whichever
  * of voices 1..7 is free (voice 0 is never picked, so a caller can keep it for
@@ -168,13 +171,20 @@ void audio_play_pcm(uint32_t samples, uint32_t rate, uint32_t depth);
 
 /* Stops every app voice and waits for the core to take the request. */
 void audio_voices_stop(void);
+/* The same for the voices whose bits are set in `mask`. */
+void audio_voices_stop_mask(uint32_t mask);
+
+/* Plays `samples` of signed 16-bit mono at `addr` on voice `voice`, with
+ * AUDIO_VOICE_LOOP or 0 in `flags`, and waits for the core to take it. The
+ * caller makes sure no Wi-Fi command is running. */
+void audio_voice_play(uint32_t voice, uint32_t addr, uint32_t samples,
+                      uint32_t rate, uint32_t flags);
 void audio_set_brightness(uint32_t level);
 
 /* 1 once the core takes requests; a fresh core first initialises the codec and
  * touchscreen. Does not block. Needs the timer started before audio_boot(). */
 int audio_ready(void);
 
-/* Waits up to `ms` for audio_ready(). */
 int audio_wait_ready(uint32_t ms);
 
 /* Milliseconds from waking the core to its first answer: 0 for a core already

@@ -18,6 +18,7 @@
 #include "terminal.h"
 #include "touchcal.h"
 #include "timer.h"
+#include "uisound.h"
 #include "audio.h"
 #include "container.h"
 #include "crash.h"
@@ -47,8 +48,11 @@ static int lid_resumed;
 
 /* HID pad bits 0..9 are A/B/Select/Start/D-pad/R/L; 10 and 11 are X and Y. */
 u32 get_keys(void) {
-  if (aurora_lid_wait_open())
+  if (aurora_lid_is_closed()) {
+    ui_sound_lid_closed();
+    aurora_lid_wait_open();
     lid_resumed = 1;
+  }
   return ~REG_HID_PAD & 0xFFF;
 }
 
@@ -239,8 +243,10 @@ static void notice(const char *title, const char *subtitle) {
   for (;;) {
     u32 k = get_keys_down();
     int tx, ty;
-    if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty))
+    if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty)) {
+      ui_sound_close(k);
       break;
+    }
     ui_idle();
   }
   anim_transition(ANIM_FADE, ANIM_BOT);
@@ -474,10 +480,12 @@ static void theme_screen(void) {
     if ((k & BUTTON_DUP) && sel > 0) {
       sel--;
       dirty = 1;
+      ui_sound_move();
     }
     if ((k & BUTTON_DDOWN) && sel + 1 < count) {
       sel++;
       dirty = 1;
+      ui_sound_move();
     }
     if (touch_tap(&tx, &ty) && count > 1) {
       int row = (ty - 12) / 37;
@@ -488,13 +496,16 @@ static void theme_screen(void) {
       }
     }
     if ((k & BUTTON_A) || activate) {
+      ui_sound_select();
       if (theme_select(names[sel]))
         return;
       notice(L(STR_THEME_FAILED), names[sel][0] ? names[sel] : "Aurora");
       dirty = 1;
     }
-    if (k & BUTTON_B)
+    if (k & BUTTON_B) {
+      ui_sound_back();
       return;
+    }
     ui_idle();
   }
 }
@@ -516,6 +527,10 @@ typedef enum {
   SET_THEME,
   SET_CLOCK,
   SET_BRIGHTNESS,
+  SET_STARTUP_SOUND,
+  SET_HOME_MUSIC,
+  SET_SHOP_MUSIC,
+  SET_MENU_SOUNDS,
   SET_TOUCHCAL,
   SET_WIFITEST,
   SET_GPUTEST,
@@ -588,6 +603,28 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
       *asset = ASSET_ICON_DISPLAY_32;
       *icon = icon_brightness_bits; *name = L(STR_BRIGHTNESS);
       *value = br_labels[g_brightness < BR_LEVELS ? g_brightness : 3]; break;
+    case SET_STARTUP_SOUND: {
+      int off = g_cfg.sound_off & USER_SOUND_STARTUP_OFF;
+      *asset = off ? ASSET_ICON_VOLUME_MUTE_32 : ASSET_ICON_VOLUME_HIGH_32;
+      *icon = icon_music_bits; *name = L(STR_STARTUP_SOUND);
+      *value = L(off ? STR_OFF : STR_ON); break;
+    }
+    case SET_HOME_MUSIC:
+      *asset = ASSET_ICON_MUSIC_32;
+      *icon = icon_music_bits; *name = L(STR_HOME_MUSIC);
+      *value = L((g_cfg.sound_off & USER_SOUND_HOME_OFF) ? STR_OFF : STR_ON);
+      break;
+    case SET_SHOP_MUSIC:
+      *asset = ASSET_ICON_MUSIC_32;
+      *icon = icon_music_bits; *name = L(STR_SHOP_MUSIC);
+      *value = L((g_cfg.sound_off & USER_SOUND_SHOP_OFF) ? STR_OFF : STR_ON);
+      break;
+    case SET_MENU_SOUNDS: {
+      int off = g_cfg.sound_off & USER_SOUND_MENU_OFF;
+      *asset = off ? ASSET_ICON_VOLUME_MUTE_32 : ASSET_ICON_VOLUME_LOW_32;
+      *icon = icon_music_bits; *name = L(STR_MENU_SOUNDS);
+      *value = L(off ? STR_OFF : STR_ON); break;
+    }
     case SET_TOUCHCAL:
       *asset = ASSET_ICON_CONSOLE_32;
       *icon = icon_boot_bits; *name = L(STR_TOUCH_CAL);
@@ -712,6 +749,8 @@ static void clock_screen(void) {
       off -= focus ? 1 : 60;
       redraw = 2;
     }
+    if (redraw)
+      ui_sound_move();
     if (touch_tap(&tx, &ty))
       for (int i = 0; i < 2; i++)
         if (touch_in(tx, ty, CK_BOX_X(i), CK_BOX_Y, CK_BOX_W, CK_BOX_H)) {
@@ -720,22 +759,26 @@ static void clock_screen(void) {
           focus = i;
           off += (ty < CK_BOX_Y + CK_BOX_H / 2 ? 1 : -1) * (i ? 1 : 60);
           redraw = 2;
+          ui_sound_select();
         }
     if (k & BUTTON_X) {
       off = 0;
       redraw = 2;
+      ui_sound_move();
     }
     if (off >= 14 * 60)
       off -= 24 * 60;
     if (off < -12 * 60)
       off += 24 * 60;
     if (k & BUTTON_A) {
+      ui_sound_select();
       g_rtc_offset = off;
       g_cfg.clock_offset = (s16)off;
       user_config_save(&g_cfg);
       return;
     }
     if (k & BUTTON_B) {
+      ui_sound_back();
       g_rtc_offset = kept;
       return;
     }
@@ -838,7 +881,7 @@ static void brightness_screen(void) {
   bright_bottom(level);
   for (;;) {
     u32 k = get_keys_down();
-    int next = level, tx, ty;
+    int next = level, tx, ty, tapped = 0;
     if ((k & (BUTTON_DLEFT | BUTTON_DDOWN)) && level > 0)
       next = level - 1;
     if ((k & (BUTTON_DRIGHT | BUTTON_DUP)) && level < BR_LEVELS - 1)
@@ -846,18 +889,26 @@ static void brightness_screen(void) {
     if (touch_tap(&tx, &ty))
       for (int i = 0; i < BR_LEVELS; i++)
         if (touch_in(tx, ty, BR_X(i) - BR_GAP / 2, BR_BASE - BR_BAR_H(4) - 8,
-                     BR_BAR_W + BR_GAP, BR_BAR_H(4) + 16))
+                     BR_BAR_W + BR_GAP, BR_BAR_H(4) + 16)) {
           next = i;
+          tapped = 1;
+        }
+    if (tapped)
+      ui_sound_select();
+    else if (next != level)
+      ui_sound_move();
     if (next != level) {
       level = next;
       bright_set(level);
     }
     if (k & BUTTON_A) {
+      ui_sound_select();
       g_cfg.brightness = (u8)level;
       user_config_save(&g_cfg);
       return;
     }
     if (k & BUTTON_B) {
+      ui_sound_back();
       g_brightness = (u8)kept;
       if (level != kept)
         audio_set_brightness((u32)kept);
@@ -919,6 +970,25 @@ static void settings_paint(void) {
 static void settings_draw(int sel) {
   anim_list_jump(&set_list, sel);
   settings_paint();
+}
+
+static int is_sound_row(int id) {
+  return id == SET_STARTUP_SOUND || id == SET_HOME_MUSIC ||
+         id == SET_SHOP_MUSIC || id == SET_MENU_SOUNDS;
+}
+
+/* The sound rows switch in place, with A, a tap, Left or Right. The click
+ * comes after the switch, so turning menu sounds on is heard and turning them
+ * off is not. */
+static void sound_toggle(int id) {
+  g_cfg.sound_off ^= id == SET_STARTUP_SOUND ? USER_SOUND_STARTUP_OFF
+                     : id == SET_HOME_MUSIC  ? USER_SOUND_HOME_OFF
+                     : id == SET_SHOP_MUSIC  ? USER_SOUND_SHOP_OFF
+                                             : USER_SOUND_MENU_OFF;
+  ui_sound_config(g_cfg.sound_off);
+  ui_sound_select();
+  user_config_save(&g_cfg);
+  settings_draw(id);
 }
 
 #define SW_SIZE 40
@@ -1013,6 +1083,8 @@ static void accent_screen(void) {
     }
 
     if (sel != prev) {
+      if (!apply)
+        ui_sound_move();
       anim_to(&sw_ring_x, sw_x(sel) - 3);
       anim_to(&sw_ring_y, sw_y(sel) - 3);
       if (!anim_moving(&sw_ring_x) && !anim_moving(&sw_ring_y))
@@ -1025,6 +1097,7 @@ static void accent_screen(void) {
       screen_present_top();
     }
     if ((k & BUTTON_A) || apply) {
+      ui_sound_select();
       g_accent = accent_presets[sel];
       g_accent_idx = sel;
       ui_bg_invalidate(); /* the accent tints the wallpaper: recompose it */
@@ -1032,8 +1105,10 @@ static void accent_screen(void) {
       anim_transition(ANIM_FADE, ANIM_BOTH);
       accent_draw(sel);
     }
-    if (k & BUTTON_B)
+    if (k & BUTTON_B) {
+      ui_sound_back();
       return;
+    }
     int ms = anim_frame(&frame_at);
     if (ms) {
       int moved = anim_step(&sw_ring_x, ms), show = 0;
@@ -1600,8 +1675,10 @@ static void wifi_test_screen(void) {
     int tx, ty;
     if (k & (BUTTON_A | BUTTON_R | BUTTON_L))
       wifi_status[0] = '\0';
-    if ((k & BUTTON_A) || touch_tap(&tx, &ty))
+    if ((k & BUTTON_A) || touch_tap(&tx, &ty)) {
+      ui_sound_select();
       wifi_run_one(&w, 0, 0, 0);
+    }
     if (k & BUTTON_R)
       wifi_run_one(&w, 1, WIFI_FW_TYPE4, wifi_opts);
     if (k & BUTTON_L)
@@ -1618,6 +1695,7 @@ static void wifi_test_screen(void) {
     }
     if (k & BUTTON_B) {
       wifi_direct_off(); /* stays direct if the core is still busy */
+      ui_sound_back();
       return;
     }
     ui_idle();
@@ -2338,12 +2416,15 @@ static void wifi_screen(void) {
       }
     }
     if (sel != prev) {
+      if (!activate)
+        ui_sound_move();
       anim_list_to(&wn_list, sel);
       if (!anim_list_moving(&wn_list))
         wifi_paint();
     }
     int redraw = 0;
     if ((k & BUTTON_A) || activate) {
+      ui_sound_select();
       if (!(sel == 0 ? wifi_do_search(&w) : wifi_do_pick(&w, sel - 1))) {
         wifi_direct_off(); /* stays direct while the core is busy */
         return;
@@ -2353,6 +2434,7 @@ static void wifi_screen(void) {
     if ((k & BUTTON_Y) && sel > 0 && wifi_saved_ssid[0] &&
         wifi_streq(wn[sel - 1].ssid, wifi_saved_ssid)) {
       static char was[33];
+      ui_sound_select();
       hm_str_copy(was, wifi_saved_ssid);
       if (wifi_saved_forget()) {
         wn_drop_unseen();
@@ -2369,8 +2451,10 @@ static void wifi_screen(void) {
       anim_list_jump(&wn_list, sel);
       wifi_paint();
     }
-    if (k & BUTTON_B)
+    if (k & BUTTON_B) {
+      ui_sound_back();
       return;
+    }
     int ms = anim_frame(&frame_at);
     if (ms && anim_list_step(&wn_list, ms))
       wifi_paint();
@@ -2734,6 +2818,7 @@ static void gpu_test_screen(void) {
     u32 k = get_keys_down();
 
     if (k & BUTTON_A) {
+      ui_sound_select();
       lastok = gpu_init();
       anim_vsync_setup(1); /* measured again, and the present counts restart */
       gputest_top();
@@ -2757,6 +2842,7 @@ static void gpu_test_screen(void) {
       last = "render test";
       lastok = 1;
     } else if (k & BUTTON_B) {
+      ui_sound_back();
       return;
     } else {
       ui_idle();
@@ -2919,6 +3005,7 @@ static const Person team[] = {
     {ASSET_PERSON_SAIITANAA_40,"Saiitanaa","Low-level Developer"},
     {ASSET_PERSON_KYAERO_40,   "Kyaero",   "Interface Designer"},
     {ASSET_PERSON_SECRET_40,   "Secret",   "Drivers and GPIO"},
+    {ASSET_PERSON_LEWECK_40,   "LeweckBanana", "Song Artist"},
 };
 
 #define TEAM_COUNT ((int)(sizeof(team) / sizeof(team[0])))
@@ -3017,19 +3104,25 @@ static void info_screen(void) {
     u32 k = get_keys_down();
     int tx, ty;
     int redraw = 0;
-    if (k & (BUTTON_A | BUTTON_B))
+    if (k & (BUTTON_A | BUTTON_B)) {
+      ui_sound_close(k);
       return;
+    }
     if ((k & BUTTON_DUP) && scroll > 0) {
       scroll--;
       redraw = 1;
+      ui_sound_move();
     } else if ((k & BUTTON_DDOWN) && scroll < TEAM_MAX_SCROLL) {
       scroll++;
       redraw = 1;
+      ui_sound_move();
     }
     if (touch_tap(&tx, &ty)) {
       if (!touch_in(tx, ty, 8, 2, BOT_SCREEN_WIDTH - 16,
-                    BOT_SCREEN_HEIGHT - 8))
+                    BOT_SCREEN_HEIGHT - 8)) {
+        ui_sound_back();
         return;
+      }
       touch_scroll = 1;
       touch_last_y = ty;
     }
@@ -3107,11 +3200,14 @@ static void about_screen(void) {
         more = 1;
       else if (touch_in(tx, ty, ABOUT_BACK_X, ABOUT_BTN_Y, ABOUT_BTN_W,
                         ABOUT_BTN_H))
-        break;
+        k |= BUTTON_B;
     }
-    if (k & BUTTON_B)
+    if (k & BUTTON_B) {
+      ui_sound_back();
       break;
+    }
     if (more) {
+      ui_sound_select();
       open_screen(info_screen);
       about_top();
       about_bottom(sd);
@@ -3140,8 +3236,10 @@ static void touch_cal_screen(void) {
   for (;;) {
     u32 k = get_keys_down();
     int tx, ty;
-    if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty))
+    if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty)) {
+      ui_sound_close(k);
       return;
+    }
     ui_idle();
   }
 }
@@ -3157,12 +3255,16 @@ static void reset_screen(void) {
   screen_present_bottom();
   while (!confirmed) {
     u32 k = get_keys_down();
-    if (k & BUTTON_B)
+    if (k & BUTTON_B) {
+      ui_sound_back();
       return;
-    if (k & BUTTON_A)
+    }
+    if (k & BUTTON_A) {
+      ui_sound_select();
       confirmed = 1;
-    else
+    } else {
       ui_idle();
+    }
   }
 
   FATFS fs;
@@ -3183,8 +3285,10 @@ static void reset_screen(void) {
   for (;;) {
     int tx, ty;
     u32 k = get_keys_down();
-    if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty))
+    if ((k & (BUTTON_A | BUTTON_B)) || touch_tap(&tx, &ty)) {
+      ui_sound_close(k);
       return;
+    }
     ui_idle();
   }
 }
@@ -3221,18 +3325,25 @@ static void settings_open(void) {
     }
 
     if (sel != prev) {
+      if (!activate)
+        ui_sound_move();
       anim_list_to(&set_list, sel);
       if (!anim_list_moving(&set_list))
         settings_paint();
     }
     if (sel == SET_BRIGHTNESS && (k & (BUTTON_DLEFT | BUTTON_DRIGHT))) {
+      u8 was = g_brightness;
       if ((k & BUTTON_DRIGHT) && g_brightness < 4) g_brightness++;
       if ((k & BUTTON_DLEFT) && g_brightness > 0) g_brightness--;
+      if (g_brightness != was)
+        ui_sound_move();
       g_cfg.brightness = g_brightness;
       audio_set_brightness(g_brightness);
       user_config_save(&g_cfg);
       settings_draw(sel);
     }
+    if (is_sound_row(sel) && (k & (BUTTON_DLEFT | BUTTON_DRIGHT)))
+      sound_toggle(sel);
     if ((k & BUTTON_A) || activate) {
       void (*sub)(void) = 0;
       switch (sel) {
@@ -3242,6 +3353,10 @@ static void settings_open(void) {
         case SET_THEME:    sub = theme_screen; break;
         case SET_CLOCK:    sub = clock_screen; break;
         case SET_BRIGHTNESS: sub = brightness_screen; break;
+        case SET_STARTUP_SOUND:
+        case SET_HOME_MUSIC:
+        case SET_SHOP_MUSIC:
+        case SET_MENU_SOUNDS: sound_toggle(sel); break;
         case SET_TOUCHCAL: sub = touch_cal_screen; break;
         case SET_WIFITEST: sub = wifi_test_screen; break;
         case SET_GPUTEST:  sub = gpu_test_screen; break;
@@ -3251,14 +3366,17 @@ static void settings_open(void) {
         default:           break;
       }
       if (sub) {
+        ui_sound_select();
         open_screen(sub);
         settings_header(ASSET_ICON_SETTINGS_64, icon_settings_bits,
                         L(STR_SETTINGS), COLOR_WHITE);
         settings_draw(sel);
       }
     }
-    if (k & BUTTON_B)
+    if (k & BUTTON_B) {
+      ui_sound_back();
       return;
+    }
     int ms = anim_frame(&frame_at);
     if (ms && anim_list_step(&set_list, ms))
       settings_paint();
@@ -3534,6 +3652,19 @@ static void os_launch_app(const char *path) {
     launch_msg(st == AURORA_ERR_MAGIC ? "Not an Aurora app.  B: back"
                                       : "Header read failed.  B: back",
                COLOR_RED);
+    f_close(&app_file);
+    f_mount(NULL, "", 0);
+    launch_wait_back();
+    return;
+  }
+  /* A damaged header must not overwrite the core or this very code. */
+  if (hdr.arm9_load_addr < AURORA_APP_LOAD_ADDR || !hdr.arm9_size ||
+      hdr.arm9_size > AURORA_APP_MAX_SIZE ||
+      hdr.arm9_load_addr - AURORA_APP_LOAD_ADDR >
+          AURORA_APP_MAX_SIZE - hdr.arm9_size ||
+      hdr.arm9_entry < hdr.arm9_load_addr ||
+      hdr.arm9_entry - hdr.arm9_load_addr >= hdr.arm9_size) {
+    launch_msg("Not an Aurora app.  B: back", COLOR_RED);
     f_close(&app_file);
     f_mount(NULL, "", 0);
     launch_wait_back();
@@ -3843,19 +3974,22 @@ static void assets_warning(void) {
 }
 
 static void home_open(const HomeApp *app) {
-  if (app->action == ACT_LAUNCH)
+  ui_sound_home_leave();
+  if (app->action == ACT_LAUNCH) {
     os_launch_app(app->path); /* returns only if the launch failed */
-  else if (app->action == ACT_MUSIC)
+  } else if (app->action == ACT_MUSIC) {
     open_screen(music_player_screen);
-  else if (app->action == ACT_FILES)
+  } else if (app->action == ACT_FILES) {
     files_screen(os_launch_app);
-  else if (app->action == ACT_CUBE)
+  } else if (app->action == ACT_CUBE) {
     open_screen(model_screen);
-  else if (app->action == ACT_STORE && store_screen(g_cfg.name) > 0) {
+    ui_sound_home_lost();
+  } else if (app->action == ACT_STORE && store_screen(g_cfg.name) > 0) {
     scan_apps();
     build_home();
     home_reload(home_apps, home_count);
   }
+  ui_sound_home_enter();
 }
 
 /* ASCII letters in either case; FAT treats names that way. */
@@ -3950,14 +4084,27 @@ static void home_remove_app(const HomeApp *app) {
   }
 }
 
-static void home_settings(void) { open_screen(settings_open); }
+static void home_settings(void) {
+  ui_sound_home_leave();
+  open_screen(settings_open);
+  ui_sound_home_enter();
+}
 
-static void home_terminal(void) { terminal_screen(g_cfg.name, os_launch_app); }
+static void home_terminal(void) {
+  ui_sound_home_leave();
+  terminal_screen(g_cfg.name, os_launch_app);
+  ui_sound_home_enter();
+}
 
 static void os_gpu_late(void);
 
+static void home_tick(void) {
+  os_gpu_late();
+  ui_sound_home_tick();
+}
+
 static const HomeHooks home_hooks = {home_open, home_settings, home_terminal,
-                                     power_off_now, os_gpu_late,
+                                     power_off_now, home_tick,
                                      home_remove_app};
 
 /* How long the boot waits for a freshly loaded core to take requests. A slower
@@ -4062,6 +4209,7 @@ void os_main(void) {
   g_rtc_offset = g_cfg.clock_offset;
   g_brightness = g_cfg.brightness <= 4 ? g_cfg.brightness : 3;
   audio_set_brightness(g_brightness);
+  ui_sound_config(g_cfg.sound_off);
   if (g_cfg.touch_set && !touch_cal_set(&g_cfg.touch))
     g_cfg.touch_set = 0; /* unusable values: keep the default */
   theme_boot_load();
@@ -4082,6 +4230,9 @@ void os_main(void) {
   anim_transition(ANIM_FADE, ANIM_BOTH); /* from the boot or the setup wizard */
   home_draw();
   boot_mark(BT_MENU);
+
+  /* A core still running means a return from an app, not a start. */
+  ui_sound_boot(core == AUDIO_BOOT_LOADED || core == AUDIO_BOOT_REPLACED);
 
   /* A core from before AUDIO_PARK_VERSION cannot be swapped while it runs, so
    * this build's core needs a power-off to load. */

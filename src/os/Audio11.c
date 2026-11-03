@@ -242,6 +242,8 @@ static void audio11_error_prepare(void) {
 }
 
 void audio11_error_play(void) {
+  /* A looping song would otherwise play on under the crash screen. */
+  audio11_stop_all();
   csnd_play(AUDIO_ERR_ADDR, AUDIO_ERR_BYTES, AUDIO_ERR_RATE, CH_FORMAT_PCM16, 0);
 }
 

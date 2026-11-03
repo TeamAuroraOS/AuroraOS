@@ -1,4 +1,3 @@
-# Build artifacts
 build/
 output/
 mockup/
@@ -24,24 +23,24 @@ Aurora/Store/new3ds.png
 !Games/**/*.bin
 !Games/**/*.BIN
 
-# Python caches
 __pycache__/
 *.pyc
 
-# Editor / OS files
 .vscode/
 .vs/
 .idea/
 .DS_Store
 Thumbs.db
 
-# Local tool/cache files
+# Songs as they were delivered: the build reads the WAVs made from them
+# (docs/assets.md "Sounds").
+assets/audio/*.m4a
+
 *.log
 *.tmp
 *.swp
 *.swo
 
-# Windows generated files
 desktop.ini
 
 # Local briefing, kept off GitHub

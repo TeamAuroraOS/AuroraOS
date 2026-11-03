@@ -1,10 +1,10 @@
-# Auric v0.5: language reference
+# Auric v0.6: language reference
 
 *"Coding too hard? Try Auric!"*
 
 Auric is a tiny, statically-typed language that **transpiles to freestanding C**
 and compiles into a bootable app for [AuroraOS](../../README.md) on the Nintendo
-3DS. This document is the complete v0.5 spec, the language is deliberately
+3DS. This document is the complete v0.6 spec, the language is deliberately
 small.
 
 ## A whole program
@@ -311,9 +311,16 @@ Loading reads the whole file, so a long track takes a moment: draw a message and
 ### The network
 
 An app can reach the internet over the Wi-Fi network saved in Settings > Wi-Fi.
-It speaks plain HTTP: AuroraOS has no TLS yet, so `https://` addresses do not
-work (many sites send `http://` visitors to `https://`; such a reply comes back
-as its 301 or 302, with `net_error()` saying so).
+It speaks HTTP and, since v0.6, HTTPS: an `https://` address goes over TLS 1.2,
+with the server's certificate checked against the roots AuroraOS trusts
+(`docs/tls.md` in the AuroraOS repo), and redirects to either kind are
+followed; your `Authorization` and `Cookie` headers are not sent on once a
+redirect changes the host, the port or drops TLS. HTTPS needs an AuroraOS from
+Beta 7 on (ARM11 core 121 or later); on an older
+one `https://` fails with `net_error()` saying so, and an app built before v0.6
+must be rebuilt to use it. A certificate that does not check out (expired, for
+another name, from an unknown authority) fails the request, with `net_error()`
+saying why. The handshake adds a second or two to a request.
 
 ```auric
 fn main() {

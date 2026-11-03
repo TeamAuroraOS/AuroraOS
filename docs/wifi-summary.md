@@ -60,8 +60,19 @@ driver, and the Linux 3DS port's AR6014 support.
   saved network and make HTTP requests and downloads (2026-10-08; an Auric
   app works on a New 3DS, the C SDK's example is untested on a console).
 
+- Core v121 (2026-10-28) keeps a TCP connection open for as long as the ARM9
+  drives it, through two rings in shared memory; the ARM9 runs TLS 1.2 over
+  it (BearSSL), so the account, aShop, apps and the terminal speak HTTPS
+  (PC-tested against real servers, then reported working on the maintainer's
+  console, 2026-11-01).
+- Core v123 (2026-11-01) ends a session that can no longer work (firmware
+  stopped, chip not answering, send credits lost, frames failing) and says
+  why, so the next request joins again by itself; before, the network stayed
+  dead until Settings or a reboot. Each connection also gets its own source
+  port (PC-tested; not yet on a console).
+
 ## Not done
 
-WPA3, servicing the chip between commands, long-lived TCP connections, and
-TLS. The hardware foundation, the firmware boot, the WMI channel, the
-scan, the join and the data path are in place.
+WPA3, servicing the chip between commands, connections that outlive a
+command, and TLS 1.3. The hardware foundation, the firmware boot, the WMI
+channel, the scan, the join and the data path are in place.
