@@ -176,6 +176,26 @@ darkest level. The launcher's own Settings
 (`set_brightness()` in `src/main.c`) still only stores the value, since the
 firm's ARM9 has no core to ask.
 
+## Full power
+
+From core 124 a New 3DS or New 2DS XL runs at its full clock from boot: 804 MHz on
+a retail console (536 MHz on the LGR1 prototype), with the 2 MB L2 cache on.
+`os_main()` asks as soon as `USER.dat` is read, and again after every HOME return,
+in case an app put the clock back. Settings > Full power turns it off and on at
+once and saves it in `USER.dat` byte 53 (`USER_DAT_POWER`, 1 for off, so older
+files read as on). Off, a New model runs at the 268 MHz of an Old 3DS without its
+L2 cache. An Old 3DS has nothing to switch, and the row shows `---`.
+
+Horizon's Home Menu also runs at 804 MHz, but Aurora's ARM11 polls and never
+sleeps, so expect more heat and less battery than Horizon gives at the same clock.
+The drawing is the ARM9's, which keeps its 134 MHz, so the menus move about as
+they did: the gain is in what the ARM11 does.
+
+Holding SELECT at boot leaves it off for that boot, as it does the caches.
+
+Works on the maintainer's New 3DS (2026-11-02), along with everything else they
+tried: `systemctl status core11` and `cores`, Wi-Fi, and the switch.
+
 ## What the UI shows
 
 The top status bar (`status_bar_draw()` in `src/os/StatusBar.c`, shared by the

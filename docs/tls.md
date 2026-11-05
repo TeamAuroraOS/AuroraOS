@@ -28,9 +28,8 @@ Who uses it:
 | The byte rings | `src/os/WiFiTcp.c` | ARM9 |
 | TCP, IP, the Wi-Fi chip | `WIFI_NETOP_TCP` in `src/os/WiFi11.c`, `src/os/Net11.c` | ARM11 core |
 
-The crypto runs on the ARM9 because the ARM9 runs with its caches on and the
-core does not: code that executes from uncached FCRAM is many times slower.
-The core only moves bytes. `WIFI_NETOP_TCP` holds the connection for as long
+The crypto runs on the ARM9, so the core only moves bytes, and from core 124 a
+video's decoder has the ARM11 cores to itself. `WIFI_NETOP_TCP` holds the connection for as long
 as the ARM9 wants it, and the two sides exchange bytes through two rings in
 shared FCRAM (docs/wifi.md, *A connection the ARM9 drives*). While it runs,
 the core takes no other command, as with every Wi-Fi command, so the OS draws
@@ -259,7 +258,8 @@ and untrusted-root.badssl.com refused for the right reasons.
   line, so the request waited for the timeout. It is skipped now.
 - **Keys on a redirect.** A redirect to another host, another port or from
   `https://` to `http://` no longer carries the caller's `Authorization` and
-  `Cookie` lines (`build()` in `AppNet.c`); other lines still go, as curl does.
+  `Cookie` lines (`out_headers()` in `AppNet.c`, for requests and for streams alike);
+  other lines still go, as curl does.
 - **A download cut short.** `appnet_download()` compared nothing on a `200`, so a
   short body was saved as the whole file. Against its Content-Length, it now
   retries and then fails, and leaves nothing behind.

@@ -275,19 +275,94 @@ blocking, and `audio_wait_ready(ms)` waits for that. `audio_ready_ms()` is how
 long it took from waking the core, shown on Settings > GPU Test. A core that
 was already running counts as ready at once.
 
-The ARM11 runs without its caches, so every instruction comes from FCRAM and a
-nop loop runs about 80 times slower than one sized for a cached core. Up to
-core 100 the settle delays were such loops (`spin(300000)` per millisecond):
-GPU Test reported `Core answered after 8178 ms` on a cold boot, eight seconds
-with no touch, no sound and, until the OS learned to wait, no GPU. From core
-101 `sleep_ms()` (src/os/Core11.c) counts on the core's MPCore private timer
-(`0x17E00600`, one-shot, half the CPU clock). It assumes the New 3DS's
-804 MHz so a wait is never short; at 268 MHz it waits three times as long,
-about a third of a second for the whole start-up. If the timer is found not
-to count, it falls back to the old loop. The GPU's clock-up wait in
-`GPU_OP_INIT` uses it too. On the console tested the core then answered within
-the boot's timer calibration (1.3 to 1.9 s, since removed); without it, a cold
-boot read `Core answered after 265 ms`.
+Up to core 123 the ARM11 ran without its caches, so every instruction came from
+FCRAM and a nop loop ran about 80 times slower than one sized for a cached core.
+Up to core 100 the settle delays were such loops (`spin(300000)` per
+millisecond): GPU Test reported `Core answered after 8178 ms` on a cold boot,
+eight seconds with no touch, no sound and, until the OS learned to wait, no GPU.
+From core 101 `sleep_ms()` (src/os/Core11.c) counts on the core's MPCore private
+timer (`0x17E00600`, half the CPU clock). It takes the New 3DS's 804 MHz so a
+wait is never short; at 268 MHz it waits three times as long, about a third of a
+second for the whole start-up. If the timer is found not to count, it falls back
+to the old loop. The GPU's clock-up wait in `GPU_OP_INIT` uses it too. On the
+console tested the core then answered within the boot's timer calibration (1.3
+to 1.9 s, since removed); without it, a cold boot read
+`Core answered after 265 ms`.
+
+## The core's clock and caches
+
+From core 124 the core no longer depends on how fast it happens to run. Two
+things changed together, because each would have broken the other.
+
+**A clock that holds at any speed.** The private timer runs free from start-up
+with a prescaler of 134, and `core11_now_us()` folds its ticks into microseconds:
+1 tick each at 268 MHz, 3 at 804 MHz, since the timer counts at half the CPU
+clock. Everything the core times uses it. Before this, `wifi_now()` read the
+timer directly, so at 804 MHz every Wi-Fi timeout ran out three times early, and
+the main loop's rhythm (`spin(1200)` a pass) and the Wi-Fi driver's bounds were
+counted in loop passes. They are all in time now: a main loop pass of 50 us, the
+touchscreen and the system menu every 5 ms, the lid every 100 ms (it was really
+about every 10 s at 268 MHz, not the 100-150 ms its comment claimed), and
+`WAIT_CMD_*` for the SDIO controller. `wifi_ms()` waits seven times what it says,
+because the boot and the join were proven with a counted loop that ran 6-8 times
+long (`docs/wifi.md`). The stereo mask's period scales with the clock too, so it
+stays at the 10 ms it was proven with. `sleep_ms()` keeps its old length at both
+clocks, on purpose.
+
+**Caches.** `src/os/Mmu11.c` turns on the MMU, the L1 caches and branch
+prediction, with a flat map in which only the core's image, the 2 MB at
+`0x23000000`, is cached. Everything else stays strongly ordered, which is how
+every access behaves with the MMU off, so what the core shares with the ARM9 and
+the GPU works as before and needs no cache maintenance: `dcache_clean()` and its
+kin only order writes now. `AudioCtrl.core_flags` says what is on
+(`AUDIO_FLAG_CACHES`, `AUDIO_FLAG_L2`), and `systemctl status core11` shows it.
+
+Holding SELECT at boot leaves the core's caches and New 3DS full power off, as it
+does the ARM9's MPU, so a build that misbehaves with them still starts.
+
+Some things run with the map off: `AUDIO_CMD_N3DS` (libn3ds warns against
+switching with a map on), the other cores' start, `AUDIO_CMD_RUN11`, and parking.
+`mmu11_off()` does that through `mmu11_stop` in `audio11_start.s`, which cleans
+L1, then any L2, then turns everything off without touching data memory in
+between, since a dirty line made after the clean would be lost.
+
+**The L2 cache.** On a retail New 3DS at 804 MHz `mmu11_on()` also starts the
+2 MB L2C-310 at `0x17E10000`, after invalidating every way. Horizon's kernel is
+documented as only setting its enable bit, and Aurora does not change the
+controller's auxiliary or latency settings. An `AUDIO_CMD_RUN11` job still runs
+with the L2 off, as the CPU stress test's results say.
+
+## The other ARM11 cores
+
+From core 124 `AUDIO_CMD_SMP` (15; `include/smp.h`, `src/os/Smp11.c`) starts
+cores 1 to 3 and gives them jobs, while core 0 stays what it always was. An Old
+3DS has core 1, a New 3DS all three. They only run when an app asks.
+
+They wait in `smp11_stub`, a small loop copied out of the core's image to
+`0x233E1000`, so a core 0 replaced by another build leaves them alone. It uses
+WFI, because a clock mode change only applies with every core in WFI, and is
+woken by a software interrupt.
+
+| `arg0` | `arg1` | Does |
+|--------|--------|------|
+| `SMP_OP_CORES` | mask of cores | starts them; `SmpBlock.started` and `failed` say what happened |
+| `SMP_OP_RUN` | an `SmpJob` | runs `entry(arg, core)` on each named core, with its stack and FCRAM map; the ack comes as they start |
+| `SMP_OP_END` | | sets `stop`, waits up to 1 s for the jobs to return, and leaves nothing of theirs in the L2 |
+| `SMP_OP_TEST` | | starts every core and measures it; `systemctl status cores` shows the result |
+
+A job gets the MMU, the caches, SMP coherency, branch prediction, the VFP in
+RunFast mode, and unaligned access (SCTLR.U set), with interrupts off. Its map
+marks FCRAM sections `SMP_MAP_CACHED` (write-back, coherent between the cores) or
+`SMP_MAP_SHARED` (normal, not cached: what the ARM9, CSND or the GPU also touch);
+the rest is strongly ordered. An exception in a job hangs that core.
+
+Starting them follows libn3ds (`source/arm11/drivers/pdn.c`). Core 1 waits in the
+boot ROM for an entry at `0x1FFFFFDC` and a software interrupt, the path
+open_agb_firm uses on every model. Cores 2 and 3 are held in reset until the boot
+ROM overlay points them at an entry, at a 268 MHz clock mode. libn3ds keeps that
+path compiled out, so here every step of it is bounded and a core that does not
+answer is only reported. FCRAM keeps `alive` across a reset, so a core only counts
+as started if it answers a software interrupt now.
 
 ## Replacing a running core
 
@@ -335,7 +410,8 @@ Horizon gives an app, and takes it away again before the ack:
   the core's `.bss`) is built the first time. Domain 0 is a manager domain,
   so nothing is permission-checked.
 - **The L1 caches and branch prediction** (SCTLR `M`, `C`, `I`, `Z`, and `XP`
-  for the ARMv6 descriptor format). The New 3DS's L2 cache stays off.
+  for the ARMv6 descriptor format). The New 3DS's L2 cache is off for the job,
+  and the core's own map (Mmu11.c, from core 124) makes way for it.
 - **The VFP**: CPACR gives cp10 and cp11 to every mode and FPEXC.EN is set.
   It stays enabled afterwards; the core's own code never uses it. The code
   run should put the VFP in RunFast mode (flush-to-zero, default NaN), since

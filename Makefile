@@ -194,7 +194,7 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_tlsroots.o $(BUILD_DIR)/os_appnet.o \
            $(BEARSSL_OBJS)
 
-CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/SystemMenu11.o $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o $(BUILD_DIR)/Net11.o $(BUILD_DIR)/Wpa11.o $(BUILD_DIR)/Crypto.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Clock11.o $(BUILD_DIR)/Stereo11.o $(BUILD_DIR)/P3d11.o $(BUILD_DIR)/Run11.o                $(BUILD_DIR)/os_i2c11.o $(BUILD_DIR)/os_power11.o
+CORE11_OBJS := $(BUILD_DIR)/audio11_start.o $(BUILD_DIR)/Core11.o                $(BUILD_DIR)/SystemMenu11.o $(BUILD_DIR)/Audio11.o $(BUILD_DIR)/Codec11.o                $(BUILD_DIR)/Touch11.o $(BUILD_DIR)/WiFi11.o $(BUILD_DIR)/Net11.o $(BUILD_DIR)/Wpa11.o $(BUILD_DIR)/Crypto.o                $(BUILD_DIR)/Gpu11.o $(BUILD_DIR)/Mmu11.o $(BUILD_DIR)/Smp11.o $(BUILD_DIR)/Video11.o $(BUILD_DIR)/Clock11.o $(BUILD_DIR)/Stereo11.o $(BUILD_DIR)/P3d11.o $(BUILD_DIR)/Run11.o                $(BUILD_DIR)/os_i2c11.o $(BUILD_DIR)/os_power11.o
 AUDIO11_BIN  := $(BUILD_DIR)/audio11.bin
 AUDIO11_BLOB := $(BUILD_DIR)/audio11_blob.h
 

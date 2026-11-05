@@ -269,7 +269,7 @@ cp *.png Pictures
 ### curl
 
 ```
-curl [-iIsLO] [-o FILE] [-X METHOD] [-H LINE] [-d DATA] URL
+curl [-iIsLO] [--speed] [-o FILE] [-X METHOD] [-H LINE] [-d DATA] URL
 ```
 
 | Option | Means |
@@ -282,6 +282,7 @@ curl [-iIsLO] [-o FILE] [-X METHOD] [-H LINE] [-d DATA] URL
 | `-X METHOD` | the method (`GET`, or `POST` with `-d`, by default) |
 | `-H LINE` | add a header line, such as `-H "Accept: application/json"`; may be given more than once |
 | `-d DATA` | send DATA as the body (a `POST` unless `-X` says otherwise) |
+| `--speed` | read the URL over a stream without keeping it, printing the speed, to test the network; the Terminal keeps drawing as it runs (SELECT stops it). It takes `-H`, but not `-o`, `-O`, `-I`, `-d` or `-X` |
 | `-L` | accepted; redirects are always followed, without `-H` lines naming `Authorization` or `Cookie` once the host, port or TLS changes |
 
 * URL is `http://` or `https://`, with an optional port and query. An
@@ -618,7 +619,8 @@ Units can be named with or without their suffix (`audio` or `audio.service`):
 
 | Unit | Active when | Shows |
 |------|-------------|-------|
-| `core11.service` | the ARM11 core answers | its version, and this build's if they differ |
+| `core11.service` | the ARM11 core answers | its version (and this build's if they differ), its clock and which caches are on |
+| `cores.service` | the other ARM11 cores have been started | how many; `systemctl status cores` starts them and runs their self-test, printing each core's loop time and memory speed and whether a counter they all add to comes out right |
 | `audio.service` | the core answers and is not parked | playing or idle |
 | `touch.service` | the core answers | default or custom calibration |
 | `gpu.service` | the GPU driver is up | jobs done |

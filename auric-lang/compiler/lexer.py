@@ -37,27 +37,27 @@ class T(Enum):
     COMMA = auto()
     COLON = auto()
     SEMI = auto()
-    ARROW = auto()      # ->
-    ASSIGN = auto()     # =
+    ARROW = auto()
+    ASSIGN = auto()
     PLUS = auto()
     MINUS = auto()
     STAR = auto()
     SLASH = auto()
     PERCENT = auto()
-    EQ = auto()         # ==
-    NE = auto()         # !=
+    EQ = auto()
+    NE = auto()
     LT = auto()
     LE = auto()
     GT = auto()
     GE = auto()
-    AND = auto()        # &&
-    OR = auto()         # ||
-    NOT = auto()        # !
-    BITAND = auto()     # &
-    BITOR = auto()      # |
-    BITXOR = auto()     # ^
-    SHL = auto()        # <<
-    SHR = auto()        # >>
+    AND = auto()
+    OR = auto()
+    NOT = auto()
+    BITAND = auto()
+    BITOR = auto()
+    BITXOR = auto()
+    SHL = auto()
+    SHR = auto()
     EOF = auto()
 
 
@@ -147,7 +147,6 @@ class Lexer:
             while self._peek().isdigit():
                 self._advance()
         text = self.src[start:self.i]
-        # 0x.. hex integers.
         if not is_float and text == "0" and self._peek() in ("x", "X"):
             self._advance()
             hstart = self.i

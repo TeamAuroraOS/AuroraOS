@@ -580,6 +580,7 @@ if it cannot, the session ends and the answer is `WIFI_NETS_NOLINK`.
 | `LEAVE` | `WMI_DISCONNECT`, and the session ends |
 | `HTTP` | one HTTP exchange over TCP with `ip`:`port` (core 114): the request at `WIFI_HTTP_REQ` (`0x233B9000`, 2 KB) goes out, the reply comes back at `WIFI_HTTP_RESP` (`0x23200000`, 1020 KB; 8 KB at `0x233B9800` before core 115) until the server closes or its `Content-Length` is in; `resp_len`, `stage`, `resent`, or `REFUSED` (RST), `TOOBIG`, `TIMEOUT` |
 | `TCP` | a connection with `ip`:`port` that the ARM9 drives through `WifiTcp` until it closes it (core 121; see *A connection the ARM9 drives*); `stage`, `resent`, or `REFUSED`, `NOHOST`, `TIMEOUT` |
+| `TCP_BG` | the same, but the command ends as soon as the SYN is out, and the core keeps the connection going between other commands (core 124; see *A connection in the background*) |
 
 A frame for an address off our subnet goes to the router's MAC; one on the
 subnet first needs that host's MAC, asked for with ARP (one entry is kept).
@@ -646,6 +647,41 @@ never answers), every byte checked. A clean link with a 40 ms round trip
 moves about 180 KB/s, what the 8 KB window allows. Reordered segments are
 dropped and sent again (in-order data only, as before), which slows a link
 that reorders a lot.
+
+### A connection in the background
+
+`WIFI_NETOP_TCP_BG` (core 124) is `WIFI_NETOP_TCP` for something that has to keep
+drawing and playing while bytes arrive, which a video does. `wifi_op_tcp` was cut
+into `tcp_begin`, `tcp_step` and `tcp_end`; the old operation loops over them
+inside its command, while this one acks once the SYN is out and `wifi11_tick()`
+takes one step on every pass of the core's main loop, reading only frames that
+have already arrived. So presents, sounds, the touchscreen, the lid and the system
+menu all work during the connection. `WifiTcp.state` reaching `WIFI_TCP_CLOSED`
+is its end, and `WifiNetIo.status` says how, as before.
+
+Only one network operation runs at a time. Until it ends, `STATUS` acks without
+touching `WifiNetIo`, which still reports on the connection; anything else, such
+as the OS needing the network after an app crashed, ends the connection first, so
+nothing waits out the 15 s `alive` limit. A boot or a probe does the same.
+
+On top of it, `appnet_stream_*` (`src/os/AppNet.c`) runs HTTP/1.1 keep-alive GETs
+over one connection, and `tls_stream_*` (`src/os/Tls.c`) runs TLS over it without
+waiting anywhere, so an app pumps them between its other work. A plain `https://`
+request is still one connection per request (`tls_exchange`), which costs a full
+handshake each time; a stream only pays for one. `curl --speed URL` in the
+Terminal measures a stream and keeps drawing as it goes.
+
+A stream's redirects resolve as `appnet_http`'s do, from the root, beside the path,
+as a query alone or to another host, with the same rule for the caller's keys: the
+`Authorization` and `Cookie` lines go only to the first URL's host, port and scheme.
+A reply with no Content-Length is read until the connection closes, and a connection
+the server closed while idle is replaced rather than failing the next request.
+Chunked replies are refused with a message, since nothing here undoes them, and a
+reply over 4 GB likewise.
+
+The TCP window is still the 8 KB of `NET_TCP_WND`. On a New 3DS at full power (the
+maintainer's console, 2026-11-02) `curl --speed` read a 10 MB file at about 300 KB/s
+with the Terminal drawing throughout, against 160 KB/s before core 124.
 
 ### When a session stops working
 

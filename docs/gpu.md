@@ -608,8 +608,9 @@ The register is CFG11_MPCORE_CLKCNT (0x10141300): bits 0-2 request a mode, bit
 request only applies once every ARM11 core is in WFI, and interrupt 88 then
 wakes core 0. The sequence follows fastboot3DS and libn3ds: route interrupt 88
 to core 0, set the extra-memory and L2C enable bits in CFG11_MPCORE_CNT, request
-the mode, WFI until bit 15, then set the GPU's New 3DS bits. The L2 cache
-controller itself is left off.
+the mode, WFI until bit 15, then set the GPU's New 3DS bits. From core 124 the
+core then starts the L2 cache too ([`audio.md`](audio.md), "The core's clock and
+caches").
 
 Aurora's ARM11 normally polls with interrupts masked and never sleeps, and a WFI
 that never returns would take audio, touch and the present with it. So:
@@ -628,8 +629,9 @@ Only the ARM11 gets faster. The ARM9, which does the drawing, keeps its clock,
 and the present is a GPU blit the ARM11 only starts, so expect this test's
 number to move little; the gain is for work done on the ARM11. Spin-count
 bounds there get shorter in real time at 3x, so `GPU_POLL_MAX` was tripled. The
-codec's `SPI_GUARD` stays far above a transfer either way, and the `sleep_ms`
-delays run only at start-up, before any switch. The mode holds until reboot.
+codec's `SPI_GUARD` stays far above a transfer either way. The mode holds until
+reboot, or until Settings > Full power turns it off ([`power.md`](power.md),
+"Full power"), which from Beta 7 a New 3DS has on from boot.
 
 Works on a New 3DS (2026-10-04).
 
