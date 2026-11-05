@@ -628,7 +628,6 @@ static void draw_top(void) {
   d_rect(&f, GX0, GY0, 1, GH, C_GRID);
   d_rect(&f, GX0 + GW - 1, GY0, 1, GH, C_GRID);
 
-  /* Phases under the graph. */
   for (int p = 0; p < PH_COUNT; p++) {
     int x0 = gx(phase_start_secs(p)), x1 = gx(phase_start_secs(p + 1));
     d_rect(&f, x0, GY0 + GH + 3, x1 - x0 - 1, 5, ph_color[p]);
