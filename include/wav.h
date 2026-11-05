@@ -17,7 +17,7 @@ WavResult wav_play(const char *path, u32 *samples, u32 *rate, u32 *depth);
 typedef struct {
   u32 samples;
   u32 rate;    /* their rate, after any halving */
-  u32 depth;   /* 8 or 16                       */
+  u32 depth;   /* 8 or 16 */
 } WavInfo;
 
 /* Converts `path` into `dst` as signed mono at the file's depth, up to `max`

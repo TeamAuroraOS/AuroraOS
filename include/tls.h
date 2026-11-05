@@ -26,7 +26,7 @@ typedef struct {
 
 /* Errors of our own, beside BearSSL's BR_ERR_* (bearssl_ssl.h). */
 #define TLS_ERR_EOF  1000 /* the server closed before the handshake ended */
-#define TLS_ERR_NAME 1001 /* the host name is empty or too long            */
+#define TLS_ERR_NAME 1001 /* the host name is empty or too long */
 
 /* One HTTP exchange over TLS with `host` (the name the certificate must
  * carry, also sent as SNI) at ip:port: `req` goes out, and the reply, until
@@ -38,6 +38,23 @@ typedef struct {
 u32 tls_exchange(const TlsLink *l, const char *host, u32 ip, u32 port,
                  const void *req, u32 req_len, int head_only, char *resp,
                  u32 max, u32 *got, u32 *stage, u32 timeout_ms, int *err);
+
+/* The same client on a connection that stays open, for a stream: nothing here
+ * waits, and the caller pumps it between its other work. One at a time, and not
+ * while tls_exchange runs, since they share one engine. start posts
+ * WIFI_NETOP_TCP_BG; done says WifiTcp has reached WIFI_TCP_CLOSED. */
+u32 tls_stream_open(const TlsLink *l, const char *host, u32 ip, u32 port,
+                    u32 timeout_ms, int *err);
+/* Moves bytes between the engine and the rings. 1 when any moved. */
+int tls_stream_pump(void);
+/* 1 once the handshake is over: until then only pump does anything. */
+int tls_stream_ready(void);
+/* 1 once the connection is over; *err then says why, 0 for a clean end. */
+int tls_stream_closed(int *err);
+u32 tls_stream_write(const void *p, u32 n);
+u32 tls_stream_read(void *p, u32 n);
+/* Ends it and waits for the core to let go, 5 s at most. */
+void tls_stream_close(int graceful);
 
 const char *tls_error_text(int err);
 /* 1 when *err is about a certificate's dates, which a wrong clock causes. */

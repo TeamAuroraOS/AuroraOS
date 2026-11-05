@@ -3,10 +3,10 @@
 #include "power.h"
 #include "i2c.h"
 
-#define MCU_REG_TEMP    0x0Au /* battery temperature, degrees C              */
+#define MCU_REG_TEMP    0x0Au /* battery temperature, degrees C */
 #define MCU_REG_BATTERY 0x0Bu /* charge percentage, 0-100, then its fraction */
-#define MCU_REG_VOLTAGE 0x0Du /* system voltage, x 5/256 V                   */
-#define MCU_REG_STATUS  0x0Fu /* power / charger flags                       */
+#define MCU_REG_VOLTAGE 0x0Du /* system voltage, x 5/256 V */
+#define MCU_REG_STATUS  0x0Fu /* power / charger flags */
 #define MCU_REG_RTC     0x30u /* 7 BCD bytes: sec,min,hour,wday,day,mon,year */
 
 /* Charger bit in register 0x0F. It is not firmly documented (docs/power.md), so

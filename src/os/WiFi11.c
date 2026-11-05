@@ -40,16 +40,7 @@
 #define WMASK_GW          0x807Fu /* sdmmc.h TMIO_MASK_GW */
 #define WMASK_ALL         0x837F031Du
 
-/* This core's MPCore private timer runs free for the length of a Wi-Fi
- * command, which nothing else needs meanwhile. With a prescaler of 134 it
- * counts microseconds at 268 MHz. */
-#define PTIMER_LOAD  0x17E00600u
-#define PTIMER_COUNT 0x17E00604u
-#define PTIMER_CNT   0x17E00608u
-#define PTIMER_STAT  0x17E0060Cu
-#define PTIMER_RUN_US ((133u << 8) | 2u | 1u) /* prescaler, reload, enable */
-
-static uint32_t wifi_now(void) { return ~MMIO32(PTIMER_COUNT); }
+#define wifi_now core11_now_us
 
 static void wifi_wait_us(uint32_t us) {
   uint32_t t0 = wifi_now();
@@ -57,17 +48,11 @@ static void wifi_wait_us(uint32_t us) {
     ;
 }
 
-static void wifi_timer_start(void) {
-  MMIO32(PTIMER_CNT) = 0;
-  MMIO32(PTIMER_STAT) = 1;
-  MMIO32(PTIMER_LOAD) = 0xFFFFFFFFu;
-  MMIO32(PTIMER_CNT) = PTIMER_RUN_US;
-}
-
-static void wifi_timer_stop(void) {
-  MMIO32(PTIMER_CNT) = 0;
-  MMIO32(PTIMER_STAT) = 1;
-}
+/* Bounds on the controller's waits, in time, so they hold at any clock and with
+ * or without caches. All far longer than a command or a block takes. */
+#define WAIT_CMD_IDLE_US 50000u
+#define WAIT_CMD_DONE_US 250000u
+#define WAIT_DATA_US     800000u
 
 static void wifi_setckl(uint32_t data) {
   WB16(WR_CLKCTL) = (uint16_t)(data & 0xFF);
@@ -137,10 +122,11 @@ static void wifi_note_fail(WifiShared *w, uint16_t cmd, uint32_t arg,
 /* Set when the upload has to stop; the remaining sends become no-ops. */
 static int g_bmi_abort = 0;
 
-static void wifi_ms(uint32_t ms) {
-  for (volatile uint32_t d = 0; d < ms * 10000u; d++)
-    ;
-}
+/* The boot and the join were proven with a counted loop that ran 6-8 times
+ * longer than this says (docs/wifi.md), and with that length they stay. */
+#define WIFI_MS_STRETCH 7u
+
+static void wifi_ms(uint32_t ms) { wifi_wait_us(ms * 1000u * WIFI_MS_STRETCH); }
 
 /* The controller access about to be made, in its own cache line, so an access
  * that never returns leaves its position on screen. */
@@ -155,11 +141,13 @@ static void wifi_timeout(WifiShared *w) {
 }
 
 static void wifi_cmd(WifiShared *w, WifiCmd *e, uint16_t cmd16, uint32_t arg) {
-  uint32_t g = 0;
+  uint32_t t0 = wifi_now();
+  int busy;
   wifi_hb(w, WIFI_HB_CMD_WAIT, cmd16, arg);
-  while ((WB16(WR_STAT1) & WSTAT1_CMDBUSY) && ++g < 100000u)
+  while ((busy = (WB16(WR_STAT1) & WSTAT1_CMDBUSY) != 0) &&
+         wifi_now() - t0 < WAIT_CMD_IDLE_US)
     ;
-  if (g >= 100000u)
+  if (busy)
     wifi_timeout(w);
   WB16(WR_IRM0) = 0;
   WB16(WR_IRM1) = 0;
@@ -171,14 +159,14 @@ static void wifi_cmd(WifiShared *w, WifiCmd *e, uint16_t cmd16, uint32_t arg) {
   wifi_hb(w, WIFI_HB_CMD_SENT, cmd16, arg);
   WB16(WR_CMD) = cmd16;
 
-  g = 0;
+  t0 = wifi_now();
   for (;;) {
     uint16_t s1 = WB16(WR_STAT1);
     if (s1 & WMASK_GW)
       break; /* hard error (timeout/CRC/etc.) */
     if (!(s1 & WSTAT1_CMDBUSY) && (WB16(WR_STAT0) & WSTAT0_CMDRESPEND))
       break;
-    if (++g >= 300000u) {
+    if (wifi_now() - t0 >= WAIT_CMD_DONE_US) {
       wifi_timeout(w);
       break;
     }
@@ -233,11 +221,13 @@ static int wifi_cmd53(WifiShared *w, uint32_t func, uint32_t addr,
   uint32_t bytes = (len + 3u) & ~3u;
   int nhalf = (int)(bytes / 2u);
   uint16_t *h = (uint16_t *)buf;
-  uint32_t g = 0;
+  uint32_t t0 = wifi_now();
+  int busy;
   wifi_hb(w, WIFI_HB_DATA_WAIT, 0x0035u, addr << 9);
-  while ((WB16(WR_STAT1) & WSTAT1_CMDBUSY) && ++g < 100000u)
+  while ((busy = (WB16(WR_STAT1) & WSTAT1_CMDBUSY) != 0) &&
+         wifi_now() - t0 < WAIT_CMD_IDLE_US)
     ;
-  if (g >= 100000u)
+  if (busy)
     wifi_timeout(w);
   WB16(WR_IRM0) = 0;
   WB16(WR_IRM1) = 0;
@@ -276,7 +266,7 @@ static int wifi_cmd53(WifiShared *w, uint32_t func, uint32_t addr,
 
   int idx = 0, done_data = 0, err = 0;
   uint16_t s0 = 0, s1 = 0;
-  g = 0;
+  t0 = wifi_now();
   for (;;) {
     s1 = WB16(WR_STAT1);
     if (!is_write && (s1 & WSTAT1_RXRDY) && idx < nhalf) {
@@ -304,7 +294,7 @@ static int wifi_cmd53(WifiShared *w, uint32_t func, uint32_t addr,
       g_cmd53_stat = (uint32_t)s0 | ((uint32_t)s1 << 16);
       return 0;
     }
-    if (++g >= 800000u) {
+    if (wifi_now() - t0 >= WAIT_DATA_US) {
       err = -2;
       break;
     }
@@ -778,7 +768,6 @@ static void wifi_bringup(WifiShared *w, int cold) {
 
 static void wifi_finish(WifiShared *w) {
   w->phase = WIFI_PH_DONE;
-  wifi_timer_stop();
   w->seq++;
   dcache_clean();
 }
@@ -787,7 +776,6 @@ static void wifi_wmi_reset(WifiShared *w);
 
 static void wifi_probe_run(void) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
-  wifi_timer_start();
   wifi_wmi_reset(w);
   g_bmi_abort = 0;
   w->bmi_polls = 0;
@@ -806,10 +794,10 @@ static void wifi_probe_run(void) {
 #define AR6014_VERSION       0x2300006Fu
 #define AR6014_TYPE          2u          /* TARGET_TYPE_AR6002 */
 #define AR6014_HI            0x00520000u
-#define AR6014_PARTA_DST     0x00524C00u /* main firmware (LZ)  */
-#define AR6014_PARTB_DST     0x0053FE18u /* database            */
-#define AR6014_PARTC_DST     0x00527000u /* stub code           */
-#define AR6014_PARTD_DST     0x00524C00u /* stub data           */
+#define AR6014_PARTA_DST     0x00524C00u /* main firmware (LZ) */
+#define AR6014_PARTB_DST     0x0053FE18u /* database */
+#define AR6014_PARTC_DST     0x00527000u /* stub code */
+#define AR6014_PARTD_DST     0x00524C00u /* stub data */
 #define AR6014_EXEC_MIRROR   0x00400000u
 #define HTC_PROTOCOL_VERSION 0x0002u
 
@@ -1576,7 +1564,7 @@ static volatile int g_wpa_hit;
 
 #define NET_BIT(t) (1u << (t))
 
-/* wifi_now restarts with every command, so on its own it says much the same
+/* wifi_now starts again with every boot, so on its own it can say much the same
  * thing each time, and a server can hold a connection for a minute after it
  * closes: a SYN on that port with a lower sequence number only draws an ACK of
  * the old one. So ports run on in turn, from where the join's length left them. */
@@ -2450,7 +2438,6 @@ static void wifi_boot_firmware(WifiShared *w, uint32_t opts) {
 
 static void wifi_boot_run(uint32_t opts) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
-  wifi_timer_start();
   w->boot_opts = opts;
   g_opts = opts;
   g_fw_asserted = 0;
@@ -2790,15 +2777,30 @@ static void tcp_publish(WifiTcp *t, NetState *n, uint32_t base, uint32_t head,
  * room, with a window update once a segment's worth has freed up. It ends
  * when the ARM9 says so (a FIN after the last byte, or a RST), the server
  * resets, nothing is acknowledged for `ms`, or the ARM9 stops bumping
- * `alive` for WIFI_TCP_ALIVE_MS. */
-static void wifi_op_tcp(WifiShared *w, WifiNetIo *io, uint32_t ms) {
-  static uint8_t f[NET_TX_MAX];
+ * `alive` for WIFI_TCP_ALIVE_MS.
+ *
+ * Its state lives here rather than on the stack because WIFI_NETOP_TCP_BG keeps
+ * it going from the core's main loop, one step a pass. */
+typedef struct {
+  uint32_t ms, rto, base, head, una, una_t, last, t0, alive, alive_t;
+  uint32_t fin_seq, fin_t;
+  int fin, graceful;
+  uint8_t mac[6];
+} TcpRun;
+
+static TcpRun g_tr;
+static uint8_t g_tcp_f[NET_TX_MAX];
+
+/* 1 with the SYN out; else it is already over, and says so in WifiTcp. */
+static int tcp_begin(WifiShared *w, WifiNetIo *io, uint32_t ms) {
   WifiTcp *t = (WifiTcp *)WIFI_TCP_ADDR;
   NetState *n = &g_net;
-  uint32_t rto = 1000000u, base, head = 0, una, una_t, last, t0, alive;
-  uint32_t alive_t, fin_seq = 0, fin_t = 0;
-  int fin = 0, graceful = 0;
-  uint8_t mac[6];
+  TcpRun *r = &g_tr;
+  r->ms = ms;
+  r->rto = 1000000u;
+  r->head = 0;
+  r->fin_seq = r->fin_t = 0;
+  r->fin = r->graceful = 0;
   io->stage = 0;
   io->resent = 0;
   t->tx_tail = t->rx_head = t->eof = 0;
@@ -2808,140 +2810,165 @@ static void wifi_op_tcp(WifiShared *w, WifiNetIo *io, uint32_t ms) {
     io->status = WIFI_NETS_TOOBIG;
     t->state = WIFI_TCP_CLOSED;
     dcache_clean();
-    return;
+    return 0;
   }
-  if (!wifi_mac_for(w, io->ip, mac, ms)) {
+  if (!wifi_mac_for(w, io->ip, r->mac, ms)) {
     io->status = WIFI_NETS_NOHOST;
     t->state = WIFI_TCP_CLOSED;
     dcache_clean();
-    return;
+    return 0;
   }
   wifi_tcp_open(w, io, (uint8_t *)t->rx, WIFI_TCP_RX);
-  base = n->tcp_iss + 1u;
-  una = n->snd_una;
+  r->base = n->tcp_iss + 1u;
+  r->una = n->snd_una;
   g_net_want = NET_BIT(NET_RX_TCP);
   io->stage = WIFI_HTTP_CONNECT;
   io->status = WIFI_NETS_TIMEOUT;
-  wifi_data_send(w, f, net_tcp_seg(n, f, mac, NET_TCP_SYN, n->tcp_iss, 0, 0));
-  t0 = last = una_t = alive_t = wifi_now();
-  alive = t->alive;
+  wifi_data_send(w, g_tcp_f,
+                 net_tcp_seg(n, g_tcp_f, r->mac, NET_TCP_SYN, n->tcp_iss, 0, 0));
+  r->t0 = r->last = r->una_t = r->alive_t = wifi_now();
+  r->alive = t->alive;
+  return 1;
+}
 
-  while (g_link > 0 && !g_fw_asserted) {
-    dcache_clean_inval(); /* the ARM9's line and tx */
-    uint32_t now = wifi_now(), tail = t->rx_tail, how = t->close;
-    if (t->alive != alive) {
-      alive = t->alive;
-      alive_t = now;
-    }
-    /* Only forward, and never past what came in or what tx can hold. */
-    if (tail - n->tcp_rx_done <= n->tcp_rx_len - n->tcp_rx_done)
-      n->tcp_rx_done = tail;
-    if (!fin &&
-        t->tx_head - head <= WIFI_TCP_TX - (head - tcp_acked(n, base, head)))
-      head = t->tx_head;
+/* One pass over the connection's state; 0 once it should end. The frames that
+ * move it on come from the caller's wifi_wmi_events. */
+static int tcp_step(WifiShared *w, WifiNetIo *io) {
+  WifiTcp *t = (WifiTcp *)WIFI_TCP_ADDR;
+  NetState *n = &g_net;
+  TcpRun *r = &g_tr;
+  uint8_t *f = g_tcp_f;
+  if (g_link <= 0 || g_fw_asserted)
+    return 0;
+  dcache_clean_inval(); /* the ARM9's line and tx */
+  uint32_t now = wifi_now(), tail = t->rx_tail, how = t->close;
+  if (t->alive != r->alive) {
+    r->alive = t->alive;
+    r->alive_t = now;
+  }
+  /* Only forward, and never past what came in or what tx can hold. */
+  if (tail - n->tcp_rx_done <= n->tcp_rx_len - n->tcp_rx_done)
+    n->tcp_rx_done = tail;
+  if (!r->fin &&
+      t->tx_head - r->head <=
+          WIFI_TCP_TX - (r->head - tcp_acked(n, r->base, r->head)))
+    r->head = t->tx_head;
 
-    if (n->tcp_state == NET_TCP_RESET) {
-      io->status = WIFI_NETS_REFUSED;
-      break;
-    }
-    if (how == WIFI_TCP_ABORT) {
-      io->status = WIFI_NETS_OK;
-      break;
-    }
-    if (now - alive_t >= WIFI_TCP_ALIVE_MS * 1000u)
-      break;
-    if (n->snd_una != una || n->snd_una == n->snd_nxt) {
-      una = n->snd_una;
-      una_t = now;
-      rto = 1000000u;
-      last = now;
-    }
-    if (n->snd_una != n->snd_nxt) {
-      if (now - una_t >= ms * 1000u)
-        break; /* nothing acknowledged for that long */
-      if (now - last >= rto) {
-        io->resent++;
-        rto = rto < 4000000u ? rto * 2u : rto;
-        last = now;
-        if (n->tcp_state == NET_TCP_SYN_SENT) {
-          wifi_data_send(w, f,
-                         net_tcp_seg(n, f, mac, NET_TCP_SYN, n->tcp_iss, 0, 0));
-        } else {
-          n->snd_nxt = n->snd_una;
-          if (fin && n->snd_una - base <= head)
-            fin = 0; /* the FIN goes again after the data */
-        }
+  if (n->tcp_state == NET_TCP_RESET) {
+    io->status = WIFI_NETS_REFUSED;
+    return 0;
+  }
+  if (how == WIFI_TCP_ABORT) {
+    io->status = WIFI_NETS_OK;
+    return 0;
+  }
+  if (now - r->alive_t >= WIFI_TCP_ALIVE_MS * 1000u)
+    return 0;
+  if (n->snd_una != r->una || n->snd_una == n->snd_nxt) {
+    r->una = n->snd_una;
+    r->una_t = now;
+    r->rto = 1000000u;
+    r->last = now;
+  }
+  if (n->snd_una != n->snd_nxt) {
+    if (now - r->una_t >= r->ms * 1000u)
+      return 0; /* nothing acknowledged for that long */
+    if (now - r->last >= r->rto) {
+      io->resent++;
+      r->rto = r->rto < 4000000u ? r->rto * 2u : r->rto;
+      r->last = now;
+      if (n->tcp_state == NET_TCP_SYN_SENT) {
+        wifi_data_send(w, f,
+                       net_tcp_seg(n, f, r->mac, NET_TCP_SYN, n->tcp_iss, 0, 0));
+      } else {
+        n->snd_nxt = n->snd_una;
+        if (r->fin && n->snd_una - r->base <= r->head)
+          r->fin = 0; /* the FIN goes again after the data */
       }
     }
-
-    while (n->tcp_state == NET_TCP_OPEN && n->snd_nxt - base < head) {
-      uint32_t off = n->snd_nxt - base, flight = n->snd_nxt - n->snd_una;
-      uint32_t pos = off & (WIFI_TCP_TX - 1u), seg = head - off;
-      if (flight >= n->tcp_wnd)
-        break;
-      if (seg > n->tcp_mss)
-        seg = n->tcp_mss;
-      if (seg > NET_TCP_SEG)
-        seg = NET_TCP_SEG;
-      if (seg > n->tcp_wnd - flight)
-        seg = n->tcp_wnd - flight;
-      if (seg > WIFI_TCP_TX - pos)
-        seg = WIFI_TCP_TX - pos;
-      uint32_t fl = NET_TCP_ACK | (off + seg == head ? NET_TCP_PSH : 0u);
-      if (wifi_data_send(w, f, net_tcp_seg(n, f, mac, fl, n->snd_nxt,
-                                           (const uint8_t *)t->tx + pos,
-                                           seg)) != 0)
-        break;
-      n->snd_nxt += seg;
-      last = now;
-    }
-    if (how == WIFI_TCP_FIN && !fin_t)
-      fin_t = now;
-    if (n->tcp_state == NET_TCP_OPEN && how == WIFI_TCP_FIN && !fin &&
-        n->snd_nxt - base == head) {
-      if (wifi_data_send(w, f, net_tcp_seg(n, f, mac,
-                                           NET_TCP_FIN | NET_TCP_ACK,
-                                           n->snd_nxt, 0, 0)) == 0) {
-        fin = 1;
-        fin_seq = n->snd_nxt;
-        n->snd_nxt++;
-        last = now;
-      }
-    }
-    if (fin && n->snd_una == fin_seq + 1u &&
-        (n->tcp_fin || now - fin_t >= 500000u)) {
-      io->status = WIFI_NETS_OK;
-      graceful = 1;
-      break;
-    }
-    if (fin_t && now - fin_t >= 3000000u) {
-      io->status = WIFI_NETS_OK; /* the ARM9 is done, whatever became of the FIN */
-      break;
-    }
-    if (n->tcp_state == NET_TCP_SYN_SENT && now - t0 >= ms * 1000u)
-      break;
-    if (n->tcp_state == NET_TCP_OPEN && !n->tcp_fin &&
-        net_tcp_window(n) >= n->tcp_wnd_sent + NET_TCP_MSS)
-      wifi_data_send(w, f, net_tcp_seg(n, f, mac, NET_TCP_ACK, n->snd_nxt,
-                                       0, 0));
-
-    if (n->tcp_state == NET_TCP_OPEN)
-      io->stage = n->snd_una - base >= head ? WIFI_HTTP_WAIT : WIFI_HTTP_SEND;
-    tcp_publish(t, n, base, head,
-                n->tcp_state == NET_TCP_OPEN ? WIFI_TCP_OPEN
-                                             : WIFI_TCP_CONNECTING);
-    g_net_hit = 0;
-    wifi_pump(w, 2, &g_net_hit);
   }
 
-  if (n->tcp_state == NET_TCP_OPEN && !graceful)
-    wifi_data_send(w, f, net_tcp_seg(n, f, mac, NET_TCP_RST | NET_TCP_ACK,
-                                     n->snd_nxt, 0, 0));
+  while (n->tcp_state == NET_TCP_OPEN && n->snd_nxt - r->base < r->head) {
+    uint32_t off = n->snd_nxt - r->base, flight = n->snd_nxt - n->snd_una;
+    uint32_t pos = off & (WIFI_TCP_TX - 1u), seg = r->head - off;
+    if (flight >= n->tcp_wnd)
+      break;
+    if (seg > n->tcp_mss)
+      seg = n->tcp_mss;
+    if (seg > NET_TCP_SEG)
+      seg = NET_TCP_SEG;
+    if (seg > n->tcp_wnd - flight)
+      seg = n->tcp_wnd - flight;
+    if (seg > WIFI_TCP_TX - pos)
+      seg = WIFI_TCP_TX - pos;
+    uint32_t fl = NET_TCP_ACK | (off + seg == r->head ? NET_TCP_PSH : 0u);
+    if (wifi_data_send(w, f, net_tcp_seg(n, f, r->mac, fl, n->snd_nxt,
+                                         (const uint8_t *)t->tx + pos,
+                                         seg)) != 0)
+      break;
+    n->snd_nxt += seg;
+    r->last = now;
+  }
+  if (how == WIFI_TCP_FIN && !r->fin_t)
+    r->fin_t = now;
+  if (n->tcp_state == NET_TCP_OPEN && how == WIFI_TCP_FIN && !r->fin &&
+      n->snd_nxt - r->base == r->head) {
+    if (wifi_data_send(w, f, net_tcp_seg(n, f, r->mac,
+                                         NET_TCP_FIN | NET_TCP_ACK,
+                                         n->snd_nxt, 0, 0)) == 0) {
+      r->fin = 1;
+      r->fin_seq = n->snd_nxt;
+      n->snd_nxt++;
+      r->last = now;
+    }
+  }
+  if (r->fin && n->snd_una == r->fin_seq + 1u &&
+      (n->tcp_fin || now - r->fin_t >= 500000u)) {
+    io->status = WIFI_NETS_OK;
+    r->graceful = 1;
+    return 0;
+  }
+  if (r->fin_t && now - r->fin_t >= 3000000u) {
+    io->status = WIFI_NETS_OK; /* the ARM9 is done, whatever became of the FIN */
+    return 0;
+  }
+  if (n->tcp_state == NET_TCP_SYN_SENT && now - r->t0 >= r->ms * 1000u)
+    return 0;
+  if (n->tcp_state == NET_TCP_OPEN && !n->tcp_fin &&
+      net_tcp_window(n) >= n->tcp_wnd_sent + NET_TCP_MSS)
+    wifi_data_send(w, f, net_tcp_seg(n, f, r->mac, NET_TCP_ACK, n->snd_nxt,
+                                     0, 0));
+
+  if (n->tcp_state == NET_TCP_OPEN)
+    io->stage = n->snd_una - r->base >= r->head ? WIFI_HTTP_WAIT : WIFI_HTTP_SEND;
+  tcp_publish(t, n, r->base, r->head,
+              n->tcp_state == NET_TCP_OPEN ? WIFI_TCP_OPEN : WIFI_TCP_CONNECTING);
+  return 1;
+}
+
+static void tcp_end(WifiShared *w, WifiNetIo *io) {
+  WifiTcp *t = (WifiTcp *)WIFI_TCP_ADDR;
+  NetState *n = &g_net;
+  TcpRun *r = &g_tr;
+  if (n->tcp_state == NET_TCP_OPEN && !r->graceful)
+    wifi_data_send(w, g_tcp_f,
+                   net_tcp_seg(n, g_tcp_f, r->mac, NET_TCP_RST | NET_TCP_ACK,
+                               n->snd_nxt, 0, 0));
   g_net_want = 0;
   n->tcp_state = NET_TCP_CLOSED;
   if (g_link <= 0 && io->status == WIFI_NETS_TIMEOUT)
     io->status = WIFI_NETS_NOLINK;
-  tcp_publish(t, n, base, head, WIFI_TCP_CLOSED);
+  tcp_publish(t, n, r->base, r->head, WIFI_TCP_CLOSED);
+}
+
+static void wifi_op_tcp(WifiShared *w, WifiNetIo *io, uint32_t ms) {
+  if (!tcp_begin(w, io, ms))
+    return;
+  while (tcp_step(w, io)) {
+    g_net_hit = 0;
+    wifi_pump(w, 2, &g_net_hit);
+  }
+  tcp_end(w, io);
 }
 
 /* The faster bus for a network operation (see bus_divs): the highest clock
@@ -3031,15 +3058,89 @@ static void wifi_session_end(WifiShared *w, uint32_t why) {
   w->session_reason = w->conn_reason;
 }
 
+/* What every network operation ends with, however it ended. */
+static void wifi_net_after(WifiShared *w) {
+  if (g_session) {
+    if (g_wpa_on && g_link > 0)
+      wifi_wpa_keys(w);
+    uint32_t why = wifi_session_lost();
+    if (why)
+      wifi_session_end(w, why);
+  }
+  if (!g_session && g_wpa_on) {
+    wpa_end(&g_wpa);
+    g_wpa_on = 0;
+  }
+  g_net_bus = 0;
+  w->session = (uint32_t)g_session;
+  w->bus_div = bus_div();
+  w->bus_rx53 = !g_rx53_bad;
+  w->bus_errs = g_bus_errs;
+  dcache_clean();
+  wifi_finish(w);
+}
+
+/* A background connection, set going by wifi_net_op. */
+static int g_tcp_bg;
+static uint32_t g_tcp_bg_keys;
+
+#define TCP_BG_KEYS_US 100000u /* how often a group rekey is looked for */
+
+void wifi11_tick(void) {
+  WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
+  WifiNetIo *io = (WifiNetIo *)WIFI_NET_ADDR;
+  if (!g_tcp_bg)
+    return;
+  if (tcp_step(w, io)) {
+    uint32_t now = wifi_now();
+    /* Only what has already arrived: this runs between other work. */
+    g_tick_us = 1u;
+    g_net_hit = 0;
+    wifi_wmi_events(w, 0, 1, 4);
+    if (g_wpa_on && g_link > 0 && now - g_tcp_bg_keys >= TCP_BG_KEYS_US) {
+      g_tcp_bg_keys = now;
+      wifi_wpa_keys(w);
+    }
+    return;
+  }
+  tcp_end(w, io);
+  g_tcp_bg = 0;
+  wifi_net_after(w);
+}
+
+/* Whatever needs the chip for itself comes before a connection left running. */
+static void wifi_bg_stop(void) {
+  WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
+  WifiNetIo *io = (WifiNetIo *)WIFI_NET_ADDR;
+  if (!g_tcp_bg)
+    return;
+  io->status = WIFI_NETS_OK;
+  tcp_end(w, io);
+  g_tcp_bg = 0;
+  wifi_net_after(w);
+}
+
 /* One AUDIO_CMD_WIFI_NET operation on the session a WIFI_OPT_STAY join left.
  * Nothing reads the chip between commands, so what queued up meanwhile is
  * taken first: a DISCONNECT there ends the session. */
 static void wifi_net_op(uint32_t op) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
   WifiNetIo *io = (WifiNetIo *)WIFI_NET_ADDR;
-  wifi_timer_start();
+  if (g_tcp_bg) {
+    /* WifiNetIo still reports on the connection, so it is left alone. */
+    if (op == WIFI_NETOP_STATUS) {
+      wifi_finish(w);
+      return;
+    }
+    /* A caller that did not know of it, such as the OS after an app crashed:
+     * it should get the network, not wait out the connection's 15 s. */
+    wifi_bg_stop();
+  }
   uint32_t ms = io->timeout_ms;
-  uint32_t cap = op == WIFI_NETOP_HTTP || op == WIFI_NETOP_TCP ? 20000u : 10000u;
+  uint32_t cap = op == WIFI_NETOP_HTTP || op == WIFI_NETOP_TCP ||
+                         op == WIFI_NETOP_TCP_BG
+                     ? 20000u
+                     : 10000u;
   ms = ms < 100u ? 2000u : ms > cap ? cap : ms;
   io->status = WIFI_NETS_NOLINK;
   io->rtt_us = 0;
@@ -3071,6 +3172,12 @@ static void wifi_net_op(uint32_t op) {
       wifi_op_http(w, io, ms);
     } else if (op == WIFI_NETOP_TCP) {
       wifi_op_tcp(w, io, ms);
+    } else if (op == WIFI_NETOP_TCP_BG) {
+      if (tcp_begin(w, io, ms)) {
+        g_tcp_bg = 1;
+        g_tcp_bg_keys = wifi_now();
+        return; /* wifi11_tick finishes it */
+      }
     } else if (op == WIFI_NETOP_LEAVE) {
       uint8_t c[2] = {0, 0};
       g_disc = 0;
@@ -3079,27 +3186,18 @@ static void wifi_net_op(uint32_t op) {
       wifi_session_end(w, WIFI_END_LEFT);
       io->status = WIFI_NETS_OK;
     }
-    if (g_session) {
-      if (g_wpa_on && g_link > 0)
-        wifi_wpa_keys(w);
-      why = wifi_session_lost();
-      if (why)
-        wifi_session_end(w, why);
-    }
-    if (!g_session && g_wpa_on) {
-      wpa_end(&g_wpa);
-      g_wpa_on = 0;
-    }
-    g_net_bus = 0;
   }
-  w->session = (uint32_t)g_session;
-  w->bus_div = bus_div();
-  w->bus_rx53 = !g_rx53_bad;
-  w->bus_errs = g_bus_errs;
-  dcache_clean();
-  wifi_finish(w);
+  wifi_net_after(w);
 }
 
-void wifi11_probe(void) { wifi_probe_run(); }
-void wifi11_boot(uint32_t opts) { wifi_boot_run(opts); }
+void wifi11_probe(void) {
+  wifi_bg_stop();
+  wifi_probe_run();
+}
+
+void wifi11_boot(uint32_t opts) {
+  wifi_bg_stop();
+  wifi_boot_run(opts);
+}
+
 void wifi11_net(uint32_t op) { wifi_net_op(op); }

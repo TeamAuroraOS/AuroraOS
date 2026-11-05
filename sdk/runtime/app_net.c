@@ -33,6 +33,17 @@ void appnet_waiting(u32 ms) {
 
 bool app_net_busy(void) { return g_in_call && appnet_busy(); }
 
+bool http_stream_get(const char *url, const char *headers) {
+  return appnet_stream_get(url, headers) != 0;
+}
+int http_stream_poll(void) { return appnet_stream_poll(); }
+size_t http_stream_read(void *buf, size_t max) {
+  return appnet_stream_read(buf, (u32)max);
+}
+int http_stream_status(void) { return appnet_stream_status(); }
+size_t http_stream_length(void) { return appnet_stream_length(); }
+void http_stream_close(void) { appnet_stream_close(); }
+
 void app_net_leave(void) {
   if (g_in_call)
     appnet_finish();

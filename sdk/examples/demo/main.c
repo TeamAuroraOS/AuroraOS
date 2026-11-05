@@ -126,7 +126,6 @@ static void draw_top(float bx, float by, uint32_t ball, GfxImage *sprite,
   if (battery >= 0)
     gfx_print(SCREEN_TOP, 350, 30, FONT_SMALL, COLOR_GRAY, "%d%%", battery);
 
-  // Shapes, along the bottom.
   gfx_triangle(SCREEN_TOP, 20, 220, 50, 170, 80, 220, 0xFF9F0A);
   gfx_round_rect(SCREEN_TOP, 96, 172, 64, 48, 12, 0x3B82F6);
   gfx_circle_outline(SCREEN_TOP, 200, 196, 24, COLOR_AURORA);

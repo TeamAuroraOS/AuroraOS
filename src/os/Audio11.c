@@ -55,7 +55,7 @@ static void codec_init(void) {
   cdc_mask(CDC_101_119, 1, 1);
   cdc_mask(CDC_GPI_PIN, 0x66, 0x66);
   cdc_write(CDC_101_122, 1);        /* VREF */
-  cdc_mask(CDC_100_34, 0x18, 0x18); /* PLL  */
+  cdc_mask(CDC_100_34, 0x18, 0x18); /* PLL */
 
   /* Force the speaker path; headphone detection is skipped. */
   cdc_mask(CDC_HEADSET, 0x20, 0x30); /* HP_EN set, HP-select clear */
@@ -109,20 +109,20 @@ static void codec_init(void) {
 #define CSND_MAIN_VAL (0x8000u | (1u << 30) | (1u << 31))
 
 #define CSND_CH(n)      (0x10103400u + (uint32_t)(n) * 0x20u)
-#define CSND_CH_CNT(n)  (CSND_CH(n) + 0x00) /* u16: flags, bit15 = start      */
-#define CSND_CH_TIMER(n) (CSND_CH(n) + 0x02) /* u16 write-only: period reload  */
-#define CSND_CH_VOL(n)  (CSND_CH(n) + 0x04) /* u32: volR | volL<<16              */
-#define CSND_CH_SAD(n)  (CSND_CH(n) + 0x0C) /* u32: sample source phys addr      */
-#define CSND_CH_SIZE(n) (CSND_CH(n) + 0x10) /* u32: total size in BYTES          */
-#define CSND_CH_LOOP(n) (CSND_CH(n) + 0x14) /* u32: loop restart phys addr       */
+#define CSND_CH_CNT(n)  (CSND_CH(n) + 0x00) /* u16: flags, bit15 = start */
+#define CSND_CH_TIMER(n) (CSND_CH(n) + 0x02) /* u16 write-only: period reload */
+#define CSND_CH_VOL(n)  (CSND_CH(n) + 0x04) /* u32: volR | volL<<16 */
+#define CSND_CH_SAD(n)  (CSND_CH(n) + 0x0C) /* u32: sample source phys addr */
+#define CSND_CH_SIZE(n) (CSND_CH(n) + 0x10) /* u32: total size in BYTES */
+#define CSND_CH_LOOP(n) (CSND_CH(n) + 0x14) /* u32: loop restart phys addr */
 
 /* The control register is 16-bit; the reload beside it is write-only and holds
  * the two's complement of the period. libctru's `timer << 16` is its service's
  * argument format, not a register image (docs/audio.md). */
-#define CH_LINEAR_INTERP  (1u << 6)  /* resample smoothly instead of nearest  */
-#define CH_REPEAT_LOOP    (1u << 10) /* loop mode 1 = loop infinite           */
-#define CH_REPEAT_ONESHOT (2u << 10) /* loop mode 2 = one-shot                */
-#define CH_FORMAT_PCM16   (1u << 12) /* encoding 1 = PCM16                    */
+#define CH_LINEAR_INTERP  (1u << 6)  /* resample smoothly instead of nearest */
+#define CH_REPEAT_LOOP    (1u << 10) /* loop mode 1 = loop infinite */
+#define CH_REPEAT_ONESHOT (2u << 10) /* loop mode 2 = one-shot */
+#define CH_FORMAT_PCM16   (1u << 12) /* encoding 1 = PCM16 */
 #define CH_ENABLE         (1u << 14)
 #define CH_START          (1u << 15)
 
@@ -156,6 +156,9 @@ void audio11_stop_all(void) {
     csnd_stop_ch(ch);
 }
 
+/* Voice v is CSND channel v + 1; channel 0 belongs to the OS. */
+#define VOICE_CH(v) ((v) + 1u)
+
 /* Play `bytes` of PCM at `phys` on channel `ch`. fmt = CH_FORMAT_PCM16 (16-bit)
  * or 0 (8-bit); loop != 0 loops forever, else one-shot; vol 0x8000 is full. */
 static void csnd_play_ch(uint32_t ch, uint32_t phys, uint32_t bytes,
@@ -179,13 +182,47 @@ static void csnd_play_ch(uint32_t ch, uint32_t phys, uint32_t bytes,
   dsb();
 }
 
+/* The last two voices, a side each, for a video's sound (Video11.c): rings the
+ * engine writes ahead of the playing position, looping for as long as it runs.
+ * Which half of the volume register is which side comes from CSND_CH_VOL above
+ * (GBATEK), not from libctru's CSND_VOL, which packs for the CSND service. A zero
+ * length stops them. */
+#define STREAM_L VOICE_CH(AUDIO_VOICES - 2u)
+#define STREAM_R VOICE_CH(AUDIO_VOICES - 1u)
+
+void audio11_stream(uint32_t left, uint32_t right, uint32_t bytes, uint32_t rate,
+                    uint32_t vol) {
+  uint32_t reload;
+  uint16_t cnt = (uint16_t)(CH_START | CH_ENABLE | CH_LINEAR_INTERP |
+                            CH_FORMAT_PCM16 | CH_REPEAT_LOOP);
+  csnd_stop_ch(STREAM_L);
+  csnd_stop_ch(STREAM_R);
+  if (!bytes)
+    return;
+  if (!vol || vol > 0x8000u)
+    vol = 0x8000u;
+  reload = (0x10000u - csnd_timer(rate)) & 0xFFFFu;
+  MMIO32(CSND_CH_VOL(STREAM_L)) = vol << 16;
+  MMIO32(CSND_CH_VOL(STREAM_R)) = vol;
+  MMIO32(CSND_CH_SAD(STREAM_L)) = left;
+  MMIO32(CSND_CH_SAD(STREAM_R)) = right;
+  MMIO32(CSND_CH_SIZE(STREAM_L)) = bytes;
+  MMIO32(CSND_CH_SIZE(STREAM_R)) = bytes;
+  MMIO32(CSND_CH_LOOP(STREAM_L)) = left;
+  MMIO32(CSND_CH_LOOP(STREAM_R)) = right;
+  MMIO16(CSND_CH_TIMER(STREAM_L)) = (uint16_t)reload;
+  MMIO16(CSND_CH_TIMER(STREAM_R)) = (uint16_t)reload;
+  dsb();
+  /* Back to back, so the two sides cannot audibly drift apart. */
+  MMIO16(CSND_CH_CNT(STREAM_L)) = cnt;
+  MMIO16(CSND_CH_CNT(STREAM_R)) = cnt;
+  dsb();
+}
+
 static void csnd_play(uint32_t phys, uint32_t bytes, uint32_t rate, uint32_t fmt,
                       int loop) {
   csnd_play_ch(0, phys, bytes, rate, fmt, loop, 0x8000u);
 }
-
-/* Voice v is CSND channel v + 1; channel 0 belongs to the OS. */
-#define VOICE_CH(v) ((v) + 1u)
 
 /* AUDIO_VOICE_ANY: the next of voices 1..7 whose channel reads idle, else
  * simply the next. Whether the start bit clears when a one-shot ends is

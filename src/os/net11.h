@@ -64,13 +64,13 @@ enum {
 
 enum {
   NET_RX_NONE = 0,
-  NET_RX_OFFER,      /* value: offered address          */
-  NET_RX_ACK,        /* value: our address              */
-  NET_RX_NAK,        /* value: server                   */
-  NET_RX_ARP_REPLY,  /* value: who answered             */
-  NET_RX_ARP_ASKED,  /* value: who asked; reply built   */
-  NET_RX_PING_REPLY, /* value: sequence number          */
-  NET_RX_PINGED,     /* value: who pinged; reply built  */
+  NET_RX_OFFER,      /* value: offered address */
+  NET_RX_ACK,        /* value: our address */
+  NET_RX_NAK,        /* value: server */
+  NET_RX_ARP_REPLY,  /* value: who answered */
+  NET_RX_ARP_ASKED,  /* value: who asked; reply built */
+  NET_RX_PING_REPLY, /* value: sequence number */
+  NET_RX_PINGED,     /* value: who pinged; reply built */
   NET_RX_OTHER,      /* value: ethertype | IP protocol << 16 */
   NET_RX_DNS,        /* value: the first A record, 0 if none; dns_rcode set */
   NET_RX_PING_ERR,   /* value: ICMP type << 8 | code | sequence << 16, for

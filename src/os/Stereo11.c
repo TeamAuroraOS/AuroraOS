@@ -23,8 +23,8 @@
 #define LCD_PARALLAX_PWM 0x10202004u
 #define LCD_TOP_FILL     0x10202204u
 #define FILL_BLACK       0x01000000u /* bit 24 shows the colour, black */
-#define PARALLAX_ON      0x00010001u /* both barrier outputs, PWM driven  */
-#define PARALLAX_TIMING  0x0A390A39u /* 2.5 ms on, 2.5 ms off            */
+#define PARALLAX_ON      0x00010001u /* both barrier outputs, PWM driven */
+#define PARALLAX_TIMING  0x0A390A39u /* 2.5 ms on, 2.5 ms off */
 
 /* The 3D preset: the controller fetches 800 lines a frame, left and right
  * eye alternating, at twice the clock of the line-doubled 2D preset, so a
@@ -73,7 +73,8 @@ static int in3d;
 /* The mask is liquid crystal: held at one polarity it would carry a DC
  * voltage, so the pattern and its inverse alternate, as QTM does, about a
  * hundred times a second. Timed by this core's private watchdog, run as a
- * free counter (PERIPHCLK, half the CPU clock): 10 ms at 268 MHz. */
+ * free counter (PERIPHCLK, half the CPU clock): 10 ms is this many ticks at
+ * 268 MHz. */
 #define WDT_LOAD    0x17E00620u
 #define WDT_COUNT   0x17E00624u
 #define WDT_CTRL    0x17E00628u
@@ -159,7 +160,7 @@ void stereo11_tick(void) {
   if (!exp_on)
     return;
   now = MMIO32(WDT_COUNT);
-  if (exp_last - now < EXP_PERIOD) /* it counts down */
+  if (exp_last - now < EXP_PERIOD * core11_clock_div()) /* it counts down */
     return;
   exp_last = now;
   exp_phase ^= 1;

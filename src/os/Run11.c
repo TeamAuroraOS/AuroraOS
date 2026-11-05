@@ -1,8 +1,8 @@
 /* AUDIO_CMD_RUN11: runs ARM11 code an app put in FCRAM, as a function of one
  * argument, the way Horizon runs an app's code: with the MMU on, the L1
- * caches and branch prediction on, and the VFP enabled. This core itself runs
- * with all of that off (docs/audio.md, "A core's start-up"), so everything is
- * put back before the ack. The L2 cache of the New 3DS stays off.
+ * caches and branch prediction on, and the VFP enabled. This core's own map
+ * (Mmu11.c) makes way meanwhile, the L2 cache of the New 3DS goes off with it,
+ * and everything is put back before the ack.
  *
  * The map is flat: every 1 MB section at its own address, strongly ordered,
  * except FCRAM's first 128 MB (every model has them), which is normal
@@ -42,20 +42,6 @@ static inline void isb(void) {
   __asm__ volatile("mcr p15, 0, %0, c7, c5, 4" ::"r"(0) : "memory");
 }
 
-/* Nothing cached may outlive a change of the map or of the caches. */
-static void caches_flush(void) {
-  dsb();
-  __asm__ volatile("mcr p15, 0, %0, c7, c14, 0\n\t" /* clean + invalidate D */
-                   "mcr p15, 0, %0, c7, c10, 4\n\t" /* DSB */
-                   "mcr p15, 0, %0, c7, c5, 0\n\t"  /* invalidate I */
-                   "mcr p15, 0, %0, c7, c5, 6\n\t"  /* branch predictor */
-                   "mcr p15, 0, %0, c8, c7, 0\n\t"  /* TLB */
-                   "mcr p15, 0, %0, c7, c10, 4" /* DSB */
-                   ::"r"(0)
-                   : "memory");
-  isb();
-}
-
 static void vfp_enable(void) {
   uint32_t cpacr;
   __asm__ volatile("mrc p15, 0, %0, c1, c0, 2" : "=r"(cpacr));
@@ -72,6 +58,7 @@ void run11(AudioCtrl *ct, uint32_t entry, uint32_t arg) {
   if (entry < (FCRAM_FIRST_MB << 20) || entry >= (FCRAM_END_MB << 20) ||
       (entry & 3u))
     return;
+  mmu11_off();
   if (!tt_ready) {
     tt_build();
     tt_ready = 1;
@@ -85,10 +72,11 @@ void run11(AudioCtrl *ct, uint32_t entry, uint32_t arg) {
   /* Someone else's map: leave it, and run as things are. */
   if (sctlr & SCTLR_M) {
     ((void (*)(uint32_t))entry)(arg);
+    mmu11_on();
     return;
   }
 
-  caches_flush();
+  mmu11_flush_all();
   __asm__ volatile("mcr p15, 0, %0, c3, c0, 0" ::"r"(0xFFFFFFFFu));
   __asm__ volatile("mcr p15, 0, %0, c2, c0, 2" ::"r"(0));
   __asm__ volatile("mcr p15, 0, %0, c2, c0, 0" ::"r"((uint32_t)tt));
@@ -108,5 +96,6 @@ void run11(AudioCtrl *ct, uint32_t entry, uint32_t arg) {
   __asm__ volatile("mcr p15, 0, %0, c2, c0, 0" ::"r"(ttbr0));
   __asm__ volatile("mcr p15, 0, %0, c2, c0, 2" ::"r"(ttbcr));
   __asm__ volatile("mcr p15, 0, %0, c3, c0, 0" ::"r"(dacr));
-  caches_flush();
+  mmu11_flush_all();
+  mmu11_on();
 }

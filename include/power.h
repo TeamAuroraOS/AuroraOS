@@ -7,7 +7,7 @@
 
 typedef struct {
   int year;  /* full year */
-  int month; /* 1-12  */
+  int month; /* 1-12 */
   int day;
   int hour;
   int min;

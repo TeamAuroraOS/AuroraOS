@@ -35,7 +35,7 @@ const char *aurora_model_tag(void) {
 extern void os_cache_sync(void);
 extern void delay(volatile u32 cycles);
 
-AuroraN3dsHw aurora_n3ds_hardware(void) {
+static AuroraN3dsHw n3ds_mode(u32 mode) {
   AudioCtrl *ct = (AudioCtrl *)AUDIO_CTRL_ADDR;
   u32 info = aurora_socinfo();
   u32 t0, spins = 0;
@@ -52,7 +52,7 @@ AuroraN3dsHw aurora_n3ds_hardware(void) {
     return AURORA_N3DS_HW_NO_CORE;
   ct->n3ds_status = AUDIO_N3DS_PENDING;
   ct->cmd = AUDIO_CMD_N3DS;
-  ct->arg0 = (info & SOCINFO_LGR2) ? CLKCNT_MODE_804 : CLKCNT_MODE_536;
+  ct->arg0 = mode;
   ct->cmd_seq = ct->cmd_seq + 1;
   os_cache_sync();
 
@@ -75,6 +75,13 @@ AuroraN3dsHw aurora_n3ds_hardware(void) {
     default:                 return AURORA_N3DS_HW_REFUSED;
   }
 }
+
+AuroraN3dsHw aurora_n3ds_hardware(void) {
+  return n3ds_mode((aurora_socinfo() & SOCINFO_LGR2) ? CLKCNT_MODE_804
+                                                     : CLKCNT_MODE_536);
+}
+
+AuroraN3dsHw aurora_n3ds_standard(void) { return n3ds_mode(0u); }
 
 void aurora_n3ds_clock(u32 *before, u32 *after) {
   const AudioCtrl *ct = (const AudioCtrl *)AUDIO_CTRL_ADDR;

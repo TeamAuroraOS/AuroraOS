@@ -5,16 +5,16 @@
 
 /* Shared FCRAM, clear of the OS image (0x22000000..0x23000000) and the
  * app-launch staging area (0x24000000+). */
-#define AUDIO_CORE_ADDR     0x23000000u /* ARM11 core code (load + entry)      */
+#define AUDIO_CORE_ADDR     0x23000000u /* ARM11 core code (load + entry) */
 #define AUDIO_CTRL_ADDR     0x23300000u
 #define AUDIO_PCM_ADDR      0x23400000u
-#define AUDIO_ARM11_MAILBOX 0x27000000u /* firm ARM11 wake mailbox (loader.h)  */
+#define AUDIO_ARM11_MAILBOX 0x27000000u /* firm ARM11 wake mailbox (loader.h) */
 
 #define AUDIO_MAGIC 0x4F494441u /* 'ADIO': set by the core once it is alive */
 
 /* audio_boot() replaces a running core whose version differs, so bump this on
  * any core change. */
-#define AUDIO_CORE_VERSION 123
+#define AUDIO_CORE_VERSION 125
 
 /* The first core that understands AUDIO_CMD_PARK. An older one can only be
  * replaced by powering the console off. */
@@ -46,24 +46,25 @@
 /* The core acks a command by copying cmd_seq into ack_seq. */
 enum {
   AUDIO_CMD_NONE = 0,
-  AUDIO_CMD_TONE = 1,      /* arg0 = frequency in Hz, looped                  */
+  AUDIO_CMD_TONE = 1,      /* arg0 = frequency in Hz, looped */
   AUDIO_CMD_STOP = 2,
-  AUDIO_CMD_PCM  = 3,      /* arg1 = samples, arg2 = rate, arg3 = bit depth   */
-  AUDIO_CMD_WIFI = 4,      /* SDIO probe, results in WifiShared               */
+  AUDIO_CMD_PCM  = 3,      /* arg1 = samples, arg2 = rate, arg3 = bit depth */
+  AUDIO_CMD_WIFI = 4,      /* SDIO probe, results in WifiShared */
   AUDIO_CMD_WIFI_BOOT = 5, /* upload the SD-staged firmware and boot the chip */
-  AUDIO_CMD_GPU = 6,       /* params and results in GpuShared                 */
-  AUDIO_CMD_ERROR = 7,     /* the three-beep crash tone                       */
+  AUDIO_CMD_GPU = 6,       /* params and results in GpuShared */
+  AUDIO_CMD_ERROR = 7,     /* the three-beep crash tone */
   AUDIO_CMD_N3DS  = 8,     /* arg0 = CLKCNT mode to request; see n3ds_*       */
-  AUDIO_CMD_VOICE = 9,     /* arg0 = voice | flags, arg1 = address,           */
+  AUDIO_CMD_VOICE = 9,     /* arg0 = voice | flags, arg1 = address, */
                            /* arg2 = bytes, arg3 = rate; see AUDIO_VOICE_*    */
-  AUDIO_CMD_VOICE_STOP = 10, /* arg0 = bit mask of the voices to stop       */
-  AUDIO_CMD_PARK = 11,       /* silence, then wait on the mailbox for a core  */
-  AUDIO_CMD_WIFI_NET = 12,   /* arg0 = WIFI_NETOP_*, on the joined network;   */
-                             /* in and out through WifiNetIo (wifi.h)         */
+  AUDIO_CMD_VOICE_STOP = 10, /* arg0 = bit mask of the voices to stop */
+  AUDIO_CMD_PARK = 11,       /* silence, then wait on the mailbox for a core */
+  AUDIO_CMD_WIFI_NET = 12,   /* arg0 = WIFI_NETOP_*, on the joined network; */
+                             /* in and out through WifiNetIo (wifi.h) */
   AUDIO_CMD_RUN11 = 13,      /* arg0 = ARM11 code in FCRAM, called with arg1, */
-                             /* caches and VFP on meanwhile (Run11.c)         */
-  AUDIO_CMD_BRIGHTNESS = 14, /* arg0 = brightness level 0..4; the LCD        */
-                             /* readbacks come back in diag4..7               */
+                             /* caches and VFP on meanwhile (Run11.c) */
+  AUDIO_CMD_BRIGHTNESS = 14, /* arg0 = brightness level 0..4; the LCD */
+                             /* readbacks come back in diag4..7 */
+  AUDIO_CMD_SMP = 15,        /* arg0 = SMP_OP_*, arg1 its operand (smp.h) */
 };
 
 enum {
@@ -108,15 +109,22 @@ typedef struct {
   volatile uint32_t n3ds_before;
   volatile uint32_t n3ds_after;
   volatile uint32_t n3ds_status;
+  /* AUDIO_FLAG_*: what the core's own caches are doing (Mmu11.c). */
+  volatile uint32_t core_flags;
+  /* The CPU clock over 268 MHz: 1, 2 (536 MHz) or 3 (804 MHz). */
+  volatile uint32_t clock_div;
 } AudioCtrl;
+
+#define AUDIO_FLAG_CACHES (1u << 0) /* MMU and L1 caches on for its image */
+#define AUDIO_FLAG_L2     (1u << 1) /* the New 3DS's L2 cache on */
 
 typedef enum {
   AUDIO_N3DS_PENDING     = 0,
-  AUDIO_N3DS_APPLIED     = 1, /* the requested mode is now current           */
-  AUDIO_N3DS_ALREADY     = 2, /* it already was; nothing was done            */
-  AUDIO_N3DS_REFUSED     = 3, /* woke on the safety timer, mode unchanged    */
-  AUDIO_N3DS_UNSUPPORTED = 4, /* SOCINFO does not allow the requested mode   */
-  AUDIO_N3DS_NO_WAKE     = 5, /* no interrupt reached the core; not tried    */
+  AUDIO_N3DS_APPLIED     = 1, /* the requested mode is now current */
+  AUDIO_N3DS_ALREADY     = 2, /* it already was; nothing was done */
+  AUDIO_N3DS_REFUSED     = 3, /* woke on the safety timer, mode unchanged */
+  AUDIO_N3DS_UNSUPPORTED = 4, /* SOCINFO does not allow the requested mode */
+  AUDIO_N3DS_NO_WAKE     = 5, /* no interrupt reached the core; not tried */
 } AudioN3dsStatus;
 
 /* Voices: sounds an app or the OS plays, each on its own CSND channel
@@ -140,11 +148,11 @@ typedef enum {
 #define AUDIO_CPAD_VERSION 102
 
 typedef enum {
-  AUDIO_BOOT_LOADED = 0, /* this build's core was loaded and answered       */
+  AUDIO_BOOT_LOADED = 0, /* this build's core was loaded and answered */
   AUDIO_BOOT_RUNNING,    /* it was already running, e.g. after a HOME return */
   AUDIO_BOOT_REPLACED,   /* a core from another build was parked and swapped */
-  AUDIO_BOOT_STALE,      /* a core older than AUDIO_PARK_VERSION is running  */
-  AUDIO_BOOT_FAILED,     /* the core was loaded but never answered           */
+  AUDIO_BOOT_STALE,      /* a core older than AUDIO_PARK_VERSION is running */
+  AUDIO_BOOT_FAILED,     /* the core was loaded but never answered */
 } AudioBoot;
 
 /* Makes sure this build's core is the one running: loads it, or parks and
@@ -155,6 +163,8 @@ AudioBoot audio_boot(void);
 int audio_alive(void);
 uint32_t audio_status(void);
 uint32_t audio_version(void);
+uint32_t audio_core_flags(void);
+uint32_t audio_clock_div(void);
 uint32_t audio_diag(int idx); /* idx 0..7 */
 
 void audio_play_tone(uint32_t freq_hz);
@@ -180,6 +190,10 @@ void audio_voices_stop_mask(uint32_t mask);
 void audio_voice_play(uint32_t voice, uint32_t addr, uint32_t samples,
                       uint32_t rate, uint32_t flags);
 void audio_set_brightness(uint32_t level);
+/* AUDIO_CMD_SMP (smp.h); 1 once the core has taken it, 0 on a core without it. */
+uint32_t audio_smp(uint32_t op, uint32_t arg);
+/* Ends any job on the other cores, for a fresh start of the OS. */
+void audio_smp_end(void);
 
 /* 1 once the core takes requests; a fresh core first initialises the codec and
  * touchscreen. Does not block. Needs the timer started before audio_boot(). */

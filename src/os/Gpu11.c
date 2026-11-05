@@ -6,6 +6,7 @@
  * LICENSE: GPL-2.0, not GPL-3.0 like the rest of AuroraOS. Derived from the
  * Linux Nintendo 3DS PICA200 driver (ctr_pica.c). See docs/gpu.md. */
 #include "gpu.h"
+#include "video.h"
 
 void sleep_ms(uint32_t ms);
 void stereo11_tick(void);
@@ -39,8 +40,8 @@ typedef volatile uint32_t vu32;
 
 #define CLOCK_ALL   0x00070100u /* enables the PSC/PPF/P3D sub-block clocks */
 #define BUSY_P3D    (1u << 31)
-#define PSC_CNT_GO  (1u << 0)   /* write to start; reads back as "busy"     */
-#define PSC_CNT_DONE (1u << 1)  /* set by hardware on completion            */
+#define PSC_CNT_GO  (1u << 0)   /* write to start; reads back as "busy" */
+#define PSC_CNT_DONE (1u << 1)  /* set by hardware on completion */
 #define PPF_CNT_GO   (1u << 0)
 #define PPF_CNT_DONE (1u << 8)
 #define PPF_FLAG_RAW_COPY (1u << 3) /* linear blit: no de-tiling, no conversion */
@@ -53,14 +54,9 @@ typedef volatile uint32_t vu32;
 static inline void dsb(void) {
   __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
 }
-static inline void dcache_clean(void) {
-  __asm__ volatile("mcr p15, 0, %0, c7, c10, 0" ::"r"(0) : "memory");
-  dsb();
-}
-static inline void dcache_clean_inval(void) {
-  __asm__ volatile("mcr p15, 0, %0, c7, c14, 0" ::"r"(0) : "memory");
-  dsb();
-}
+/* What this core shares is never in its cache (Mmu11.c). */
+static inline void dcache_clean(void) { dsb(); }
+static inline void dcache_clean_inval(void) { dsb(); }
 
 static uint32_t gpu_bpp(uint32_t fmt) {
   switch (fmt) {
@@ -556,6 +552,40 @@ static void gpu_op_stereo(GpuShared *g) {
   if (on)
     stereo11_barrier(g, flags, g->xf_src_w);
   g->stereo = (g->stereo & 0x100u) | (on ? flags : 0);
+}
+
+/* A video's frames (Video11.c). The same triple buffering as present_one, cut in
+ * two so the core's loop keeps turning, and with it the Wi-Fi, while it waits for
+ * the blank: the copy, then on a later pass the switch. */
+static int vid_waiting, vid_fb;
+static uint32_t vid_seq;
+
+void gpu11_video_tick(VideoMail *m) {
+  GpuShared *g = (GpuShared *)GPU_SHARED_ADDR;
+  if (!g->ready)
+    return;
+  if (vid_waiting) {
+    if (mode[0] != GPU_VSYNC_OFF && !blank_seen(0, mode[0]))
+      return;
+    if (mode[0] != GPU_VSYNC_OFF) {
+      show(0, vid_fb);
+      presents[0]++;
+      set_front(g, 0);
+    }
+    m->present_done = vid_seq;
+    vid_waiting = 0;
+    return;
+  }
+  if (m->present_seq == vid_seq)
+    return;
+  vid_seq = m->present_seq;
+  vid_fb = mode[0] == GPU_VSYNC_OFF ? 0 : next_fb(0);
+  stereo_fb[vid_fb] = 0;
+  ppf_copy(g, m->present_src, panels[0].fb[vid_fb], panels[0].len);
+  g->err = GPU_ERR_NONE;
+  if (mode[0] != GPU_VSYNC_OFF)
+    blank_arm(0, mode[0]);
+  vid_waiting = 1;
 }
 
 void gpu11_show_a(void) {

@@ -434,6 +434,15 @@ out the heap, and the locks do nothing (one thread).
 | `runtime/app_syscalls.c` | newlib's system calls, `assert`, `abort` |
 | `aurcc.py` | the build tool |
 
+## Video
+
+`py sdk/aurcc.py build MyApp --video` adds the video engine, about 2 MB: H.264 and
+AAC decoded on the ARM11's other cores, from fragmented MP4 with video and sound
+in separate files. See `video_*` in `aurora_app.h`, [`docs/video.md`](../docs/video.md)
+and `examples/videotest`. The first such build also compiles FFmpeg
+([`lib/ffmpeg`](../lib/ffmpeg/README.md), LGPL), about two minutes. `json_*` and
+`http_stream_*` are for every app.
+
 ## Limits
 
 * One screen layer each, 24-bit colour, no 3D or stereoscopic drawing yet

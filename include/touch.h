@@ -8,13 +8,13 @@
 typedef struct {
   volatile uint32_t seq;     /* bumped on each ARM11 update (heartbeat) */
   volatile uint32_t pressed;
-  volatile uint32_t raw_x;   /* raw ADC X (12-bit)                      */
-  volatile uint32_t raw_y;   /* raw ADC Y (12-bit)                      */
+  volatile uint32_t raw_x;   /* raw ADC X (12-bit) */
+  volatile uint32_t raw_y;   /* raw ADC Y (12-bit) */
   /* Raw codec sample bytes, updated even when not pressed. */
   volatile uint32_t d_b0;  /* buf[0]  (pen-down flag byte + X high) */
-  volatile uint32_t d_b1;  /* buf[1]  (X low)  */
+  volatile uint32_t d_b1;  /* buf[1]  (X low) */
   volatile uint32_t d_b10; /* buf[10] (Y high) */
-  volatile uint32_t d_b11; /* buf[11] (Y low)  */
+  volatile uint32_t d_b11; /* buf[11] (Y low) */
   /* Circle pad ADC (12-bit, about 2048 at rest), sampled whether or not the
    * screen is touched. From core AUDIO_CPAD_VERSION. */
   volatile uint32_t cpad_x;

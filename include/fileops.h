@@ -12,14 +12,14 @@
 typedef enum {
   FO_OK = 0,
   FO_CANCELLED,
-  FO_EXISTS,    /* the destination name is taken                  */
+  FO_EXISTS,    /* the destination name is taken */
   FO_INTO_SELF, /* a folder into itself or one of its own folders */
-  FO_TOO_DEEP,  /* nested past FO_DEPTH, or a path past FO_PATH   */
-  FO_FULL,      /* the card ran out of space                      */
-  FO_GONE,      /* the source no longer exists                    */
-  FO_BAD_NAME,  /* FatFs refused the name                         */
-  FO_DENIED,    /* read-only, or a folder that is not empty       */
-  FO_FAILED,    /* any other error                                */
+  FO_TOO_DEEP,  /* nested past FO_DEPTH, or a path past FO_PATH */
+  FO_FULL,      /* the card ran out of space */
+  FO_GONE,      /* the source no longer exists */
+  FO_BAD_NAME,  /* FatFs refused the name */
+  FO_DENIED,    /* read-only, or a folder that is not empty */
+  FO_FAILED,    /* any other error */
 } FoResult;
 
 /* Called as the work goes: for a copy with the file being copied and its

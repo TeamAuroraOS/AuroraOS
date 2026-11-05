@@ -35,7 +35,7 @@
 extern "C" {
 #endif
 
-#define AURORA_SDK_VERSION "1.4"
+#define AURORA_SDK_VERSION "1.5"
 
 #define AURORA_PRINTF(fmt, args) __attribute__((format(printf, fmt, args)))
 
@@ -55,7 +55,7 @@ typedef int64_t s64;
  * circle pad. HOME goes back to the Home Menu; L + Down + Select opens the
  * system menu. Returns false once app_quit() has been called.
  *
- *   while (app_loop()) { read input, update, draw }                       */
+ *   while (app_loop()) { read input, update, draw } */
 bool app_loop(void);
 
 /* Makes the next app_loop() return false. */
@@ -387,7 +387,7 @@ void sys_reboot(void) __attribute__((noreturn));
  *     http_free(r);
  *   } else {
  *     printf("%s\n", net_error());
- *   }                                                                    */
+ *   } */
 
 /* Whether this app can use the network at all; net_error() says why not. */
 bool net_available(void);
@@ -458,6 +458,116 @@ bool http_download(const char *url, const char *path,
 /* `text` percent-encoded for a query or a form ("a b&c" -> "a%20b%26c");
  * returns the length written, cut to fit `max` with its 0 byte. */
 size_t http_url_encode(char *out, size_t max, const char *text);
+
+/* Fetching a large reply a piece at a time while the app goes on drawing and
+ * playing: GETs over one connection the ARM11 core keeps open in the background.
+ * http_stream_poll() returns one of these; nothing else here waits. */
+enum {
+  HTTP_STREAM_FAILED = -1, /* net_error() says why */
+  HTTP_STREAM_IDLE = 0,
+  HTTP_STREAM_WAITING,
+  HTTP_STREAM_BODY,
+  HTTP_STREAM_DONE,
+};
+/* `headers` (may be NULL): extra lines, each ended with CR LF, at most 511 bytes.
+ * Redirects are followed, with http_request()'s rule for Authorization and Cookie.
+ * A reply with no length ends when the server closes, and a chunked one fails. Keep
+ * reading: 15 s with nothing read counts as the server having stopped. */
+bool http_stream_get(const char *url, const char *headers);
+int http_stream_poll(void);
+size_t http_stream_read(void *buf, size_t max);
+int http_stream_status(void);
+/* 0 until known, or when the reply has no length. */
+size_t http_stream_length(void);
+void http_stream_close(void);
+
+/* JSON, the same tokenizer the OS uses: a flat list of tokens in document order.
+ * An object's members are its key tokens, each followed by its value's tokens.
+ * Token indices are ints; -1 means "not there". */
+#ifndef AURORA_JSON_H
+#define AURORA_JSON_H
+enum {
+  JSON_OBJ = 1,
+  JSON_ARR,
+  JSON_STR,
+  JSON_NUM,
+  JSON_TRUE,
+  JSON_FALSE,
+  JSON_NULL,
+};
+typedef struct {
+  uint8_t type;
+  uint32_t start, end; /* the text, quotes excluded for a string */
+  uint32_t next;       /* the token after this one's whole subtree */
+  uint32_t count;      /* members of an object, elements of an array */
+} JsonTok;
+typedef struct {
+  const char *src;
+  JsonTok *tok;
+  uint32_t n, cap;
+} Json;
+/* 1 on success. `tok` holds up to `cap` tokens; the document must fit. */
+int json_parse(Json *j, const char *src, uint32_t len, JsonTok *tok, uint32_t cap);
+int json_get(const Json *j, int obj, const char *key);
+int json_at(const Json *j, int arr, uint32_t i);
+uint32_t json_count(const Json *j, int t);
+int json_int(const Json *j, int t, int def);
+double json_num(const Json *j, int t, double def);
+int json_bool(const Json *j, int t, int def);
+int json_is(const Json *j, int t, const char *s);
+/* The string, escapes resolved and anything outside ASCII as '?'. */
+void json_str(const Json *j, int t, char *out, uint32_t max);
+/* The same for text to show: line breaks kept, and letters up to U+00FF as UTF-8. */
+void json_text(const Json *j, int t, char *out, uint32_t max);
+#endif
+
+/* Video, for apps built with `aurcc build --video`, which adds about 2 MB. The
+ * ARM11's other cores decode it: H.264 (8-bit 4:2:0, Main or High profile) and AAC,
+ * from fragmented MP4 with video and sound in separate files, the form DASH uses.
+ * A URL's server must answer Range requests with 206.
+ * While it plays the top screen is the video's: do not draw there. The bottom
+ * screen is free, but present it only a few times a second. */
+typedef struct {
+  const char *url;
+  const char *headers;  /* extra request lines, each ended with CR LF; may be NULL */
+  uint64_t size;        /* the whole stream's bytes */
+  uint32_t index_end;   /* where the moov and sidx end, inclusive */
+} VideoTrackUrl;
+
+typedef struct {
+  int state;            /* 0 no engine; see video_engine_start */
+  bool playing, buffering, ended;
+  uint32_t width, height;
+  int32_t clock_ms;     /* the position on the speakers */
+  int32_t buffered_ms;  /* fetched ahead of that */
+  uint32_t decoded, shown, dropped, underruns;
+  uint32_t fps_x10;     /* frames shown a second since it started, times ten */
+  uint32_t decode_us, convert_us; /* time the first core spent on each, in total */
+  uint32_t heartbeat;   /* moves while the engine runs */
+  int cores;            /* cores decoding */
+} VideoStats;
+
+/* The tallest video worth asking this console for: 240 on an Old 3DS, or on a New
+ * one with Settings > Full power off; else 480. */
+int video_height_limit(void);
+/* Starts the engine: about a second. false with video_error() saying why. */
+bool video_engine_start(void);
+void video_engine_stop(void);
+bool video_engine_running(void);
+const char *video_error(void);
+int video_cores(void);
+/* Opens a stream, the engine already running; it starts by itself once enough is
+ * buffered. URLs need the console on a network, and block for their headers. */
+bool video_open_files(const char *video_path, const char *audio_path);
+bool video_open_urls(const VideoTrackUrl *video, const VideoTrackUrl *audio);
+void video_close(void);
+/* Fetches and feeds: call it every pass of the app's loop. false at the end of the
+ * video or on a failure (video_error() is empty at the end). */
+bool video_pump(void);
+void video_pause(bool on);
+/* To the nearest segment start at or before `ms`. */
+bool video_seek(int32_t ms);
+void video_stats(VideoStats *out);
 
 #ifdef __cplusplus
 }

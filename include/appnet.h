@@ -16,10 +16,9 @@
 #define APPNET_CORE_VERSION 115u
 /* A request's bound; the core allows at most 20 s. */
 #define APPNET_TIMEOUT_MS 15000u
-#define APPNET_URL_MAX 1024u
+#define APPNET_URL_MAX 2048u
 
 /* The runtime that links AppNet.c defines these four. */
-/* A millisecond clock. */
 u32 appnet_ms(void);
 /* The SD card mounted as FatFs's default drive, and left mounted; 1 when it
  * is. */
@@ -86,5 +85,39 @@ u32 appnet_url_encode(char *out, u32 max, const char *s);
  * unknown. */
 int appnet_download(const char *url, const char *headers, const char *path,
                     void (*progress)(u32 done, u32 total));
+
+/* A stream: GETs over one connection that stays open between them, with the
+ * core keeping it going in the background (a core from AUDIO_TCP_BG_VERSION on),
+ * so the app can present frames and start sounds meanwhile. One at a time; while
+ * it is open no other network call works, so names are resolved as it opens and
+ * a change of host closes it first. Nothing here waits for the network. */
+enum {
+  APPNET_STREAM_FAILED = -1, /* appnet_error() says why */
+  APPNET_STREAM_IDLE = 0,    /* no request */
+  APPNET_STREAM_WAITING,     /* connecting, or the reply has not begun */
+  APPNET_STREAM_BODY,        /* status and length known; read the body */
+  APPNET_STREAM_DONE,        /* every byte of this reply has been read */
+};
+
+/* Asks for `url`, http:// or https://; `headers` (may be 0) are extra lines, each
+ * ended with CR LF, at most 511 bytes.
+ * Redirects are followed by the next poll, without the Authorization and Cookie
+ * lines once the host, port or TLS changes. Only blocks to look up a new host's
+ * name or to end a connection to another one. 0 with appnet_error() on failure. */
+int appnet_stream_get(const char *url, const char *headers);
+/* Pumps the connection; call it often, a request or not. APPNET_STREAM_*. */
+int appnet_stream_poll(void);
+/* Body bytes of the current reply, at most `max`; 0 when none has arrived. With no
+ * Content-Length the reply ends when the server closes; a chunked one fails. 15 s
+ * with nothing read counts as the server having stopped. */
+u32 appnet_stream_read(void *buf, u32 max);
+int appnet_stream_status(void);
+/* The address the last request ended up at, after any redirects. */
+const char *appnet_stream_url(void);
+/* The Content-Length of the current reply, 0 until known or when it has none. */
+u32 appnet_stream_length(void);
+/* Whether the last request's redirects left its host, port or TLS. */
+int appnet_stream_moved(void);
+void appnet_stream_close(void);
 
 #endif

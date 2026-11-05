@@ -1151,6 +1151,7 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     {"Secure connection failed: check the clock.",
      "Conexi\u00F3n segura fallida: revisa la hora.",
      "Connexion s\u00E9curis\u00E9e \u00E9chou\u00E9e : v\u00E9rifiez l'heure."},
+    /* STR_FULL_POWER   */ {"Full power", "M\u00E1xima potencia", "Pleine puissance"},
 };
 
 const char *L(StringId id) {
@@ -2290,6 +2291,7 @@ void user_config_defaults(UserConfig *cfg) {
   cfg->clock_offset = 0;
   cfg->brightness = 3;
   cfg->sound_off = 0;
+  cfg->power_off = 0;
 }
 
 static s16 get16(const u8 *p) { return (s16)(p[0] | (p[1] << 8)); }
@@ -2349,6 +2351,8 @@ int user_config_load(UserConfig *cfg) {
     cfg->brightness = s_buf[USER_DAT_BRIGHTNESS];
   if (br > USER_DAT_SOUND)
     cfg->sound_off = s_buf[USER_DAT_SOUND] & USER_SOUND_MASK;
+  if (br > USER_DAT_POWER)
+    cfg->power_off = s_buf[USER_DAT_POWER] & 1u;
 
   if (cfg->language >= LANG_COUNT)
     cfg->language = LANG_ENGLISH;
@@ -2383,6 +2387,7 @@ int user_config_save(const UserConfig *cfg) {
   put16(s_buf + USER_DAT_CLOCK, cfg->clock_offset);
   s_buf[USER_DAT_BRIGHTNESS] = cfg->brightness <= 4 ? cfg->brightness : 3;
   s_buf[USER_DAT_SOUND] = cfg->sound_off & USER_SOUND_MASK;
+  s_buf[USER_DAT_POWER] = cfg->power_off & 1u;
   if (cfg->touch_set) {
     u8 *t = s_buf + USER_DAT_TOUCH;
     t[0] = 1;

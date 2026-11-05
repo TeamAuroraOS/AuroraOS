@@ -8,8 +8,8 @@
 #define USER_DAT_DIR      "Aurora"
 #define USER_DAT_MAGIC    "ADAT"    /* 4 bytes, not NUL-terminated on disk */
 #define USER_DAT_VERSION  3
-#define USER_DAT_SIZE     64        /* fixed on-disk record size            */
-#define USER_NAME_MAX     24        /* incl. NUL terminator                 */
+#define USER_DAT_SIZE     64        /* fixed on-disk record size */
+#define USER_NAME_MAX     24        /* incl. NUL terminator */
 
 /* Offset of the touch calibration: a flag byte, then x_min, x_max, y_min and
  * y_max as little-endian int16. Version 1 files have zeros here, which read as
@@ -29,9 +29,13 @@
 #define USER_DAT_SOUND 52
 #define USER_SOUND_STARTUP_OFF 0x01u
 #define USER_SOUND_SHOP_OFF    0x02u /* aShop's music and its chime */
-#define USER_SOUND_MENU_OFF    0x04u /* select, back and move       */
+#define USER_SOUND_MENU_OFF    0x04u /* select, back and move */
 #define USER_SOUND_HOME_OFF    0x08u
 #define USER_SOUND_MASK        0x0Fu
+
+/* Offset of the New 3DS's full power switch, 1 for off. Older files have a zero
+ * here, which is on. */
+#define USER_DAT_POWER 53
 
 enum {
   LANG_ENGLISH = 0,
@@ -56,6 +60,7 @@ typedef struct {
   s16  clock_offset;  /* minutes added to the RTC; see g_rtc_offset */
   u8   brightness;    /* 0..4, applied by the ARM11 LCD driver */
   u8   sound_off;     /* USER_SOUND_* */
+  u8   power_off;     /* the New 3DS stays at 268 MHz, without its L2 cache */
 } UserConfig;
 
 void user_config_defaults(UserConfig *cfg);

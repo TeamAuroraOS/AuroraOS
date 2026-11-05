@@ -26,10 +26,10 @@ static const struct {
     uint8_t busId;
     uint8_t devAddr;
 } i2cDevTable[] = {
-    {0, 0x4A}, /* I2C_DEV_POWER   */
-    {0, 0x7A}, /* I2C_DEV_CAMERA  */
+    {0, 0x4A}, /* I2C_DEV_POWER */
+    {0, 0x7A}, /* I2C_DEV_CAMERA */
     {0, 0x78}, /* I2C_DEV_CAMERA2 */
-    {1, 0x4A}, /* I2C_DEV_MCU     */
+    {1, 0x4A}, /* I2C_DEV_MCU */
 };
 
 static I2cRegs *i2cGetBusRegsBase(uint8_t busId) {

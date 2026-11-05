@@ -278,14 +278,14 @@ void crash_init(void) {
   for (int i = 0; i < 8; i++)
     vec[i] = 0xE59FF018u;
 
-  vec[8]  = (u32)crash_hang;       /* reset    */
-  vec[9]  = (u32)crash_vec_undef;  /* undef    */
-  vec[10] = (u32)crash_hang;       /* swi      */
+  vec[8]  = (u32)crash_hang;       /* reset */
+  vec[9]  = (u32)crash_vec_undef;  /* undef */
+  vec[10] = (u32)crash_hang;       /* swi */
   vec[11] = (u32)crash_vec_pabt;   /* prefetch */
-  vec[12] = (u32)crash_vec_dabt;   /* data     */
+  vec[12] = (u32)crash_vec_dabt;   /* data */
   vec[13] = (u32)crash_hang;       /* reserved */
-  vec[14] = (u32)crash_hang;       /* irq      */
-  vec[15] = (u32)crash_hang;       /* fiq      */
+  vec[14] = (u32)crash_hang;       /* irq */
+  vec[15] = (u32)crash_hang;       /* fiq */
 
   /* Clear the cross-core crash block so a stale/garbage magic (FCRAM is not
    * cleared at boot) can't be mistaken for an ARM11 crash. */

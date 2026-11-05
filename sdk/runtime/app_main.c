@@ -119,10 +119,16 @@ void app_poll_home(void) {
     exit(0);
 }
 
+/* An app built without --video does not have this. */
+__attribute__((weak)) void video_engine_stop(void);
+static void (*const app_leave_video)(void) = video_engine_stop;
+
 /* exit() has run the atexit functions and closed the stdio files. */
 void app_leave(int code) {
   (void)code;
   g_app_leaving = true;
+  if (app_leave_video)
+    app_leave_video();
   app_net_leave();
   app_fs_close_all();
   app_snd_leave();

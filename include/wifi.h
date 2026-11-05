@@ -67,12 +67,12 @@ typedef struct {
 /* A network's security, from its capability field and RSN or WPA element. */
 enum {
   WIFI_SEC_OPEN = 0,
-  WIFI_SEC_WEP,      /* privacy, but neither element                  */
-  WIFI_SEC_WPA1,     /* only the old WPA element                      */
-  WIFI_SEC_WPA2,     /* RSN with PSK and CCMP: what the driver joins  */
-  WIFI_SEC_WPA3,     /* RSN with SAE and no PSK                       */
-  WIFI_SEC_EAP,      /* RSN with 802.1X (enterprise) and no PSK       */
-  WIFI_SEC_TKIP,     /* RSN with PSK, but no CCMP pairwise cipher     */
+  WIFI_SEC_WEP,      /* privacy, but neither element */
+  WIFI_SEC_WPA1,     /* only the old WPA element */
+  WIFI_SEC_WPA2,     /* RSN with PSK and CCMP: what the driver joins */
+  WIFI_SEC_WPA3,     /* RSN with SAE and no PSK */
+  WIFI_SEC_EAP,      /* RSN with 802.1X (enterprise) and no PSK */
+  WIFI_SEC_TKIP,     /* RSN with PSK, but no CCMP pairwise cipher */
 };
 typedef struct {
   volatile uint16_t cmd;   /* command word low 16 bits (0 = empty slot) */
@@ -119,7 +119,7 @@ typedef struct {
   volatile uint32_t htc_look;   /* RX lookahead 0x408 (HTC frame header of a pending msg) */
   volatile uint32_t htc_msgid;  /* HTC message ID (1 = HTC_MSG_READY) */
   volatile uint32_t htc_credits;/* HTC_READY CreditCount */
-  volatile uint32_t htc_credsz; /* HTC_READY CreditSize  */
+  volatile uint32_t htc_credsz; /* HTC_READY CreditSize */
   volatile uint32_t htc_regs;   /* 0x400 | 0x401<<8 | 0x402<<16 | 0x405<<24 */
   volatile uint32_t bmi_sends;
   volatile uint32_t bmi_nocred; /* sends that ran out the credit wait with no credit */
@@ -225,34 +225,34 @@ typedef struct {
  * which resets the chip, can bring the network back. */
 enum {
   WIFI_END_NONE = 0,
-  WIFI_END_LEFT,    /* WIFI_NETOP_LEAVE                           */
-  WIFI_END_LINK,    /* the link dropped; session_reason says how  */
-  WIFI_END_ASSERT,  /* the firmware stopped                       */
-  WIFI_END_CHIP,    /* its registers no longer answer             */
-  WIFI_END_CREDITS, /* no send credit came back                   */
-  WIFI_END_SEND,    /* frames kept failing to go out              */
-  WIFI_END_RECV,    /* frames kept reading wrong                  */
+  WIFI_END_LEFT,    /* WIFI_NETOP_LEAVE */
+  WIFI_END_LINK,    /* the link dropped; session_reason says how */
+  WIFI_END_ASSERT,  /* the firmware stopped */
+  WIFI_END_CHIP,    /* its registers no longer answer */
+  WIFI_END_CREDITS, /* no send credit came back */
+  WIFI_END_SEND,    /* frames kept failing to go out */
+  WIFI_END_RECV,    /* frames kept reading wrong */
 };
 
 /* How far joining got (WifiShared.conn_stage). */
 enum {
   WIFI_CONN_NONE = 0,
-  WIFI_CONN_NOREQ,    /* asked to connect, but no request block           */
-  WIFI_CONN_NOTFOUND, /* the scan did not see the network                 */
+  WIFI_CONN_NOREQ,    /* asked to connect, but no request block */
+  WIFI_CONN_NOTFOUND, /* the scan did not see the network */
   WIFI_CONN_SECURED,  /* secured in a way not supported (see sec), or no
-                         password given                                   */
-  WIFI_CONN_ASSOC,    /* WMI_CONNECT sent, waiting for the firmware       */
-  WIFI_CONN_FAILED,   /* DISCONNECT, or no answer, on every attempt       */
-  WIFI_CONN_KEYS,     /* WPA2: associated, the 4-way handshake running    */
-  WIFI_CONN_BADPASS,  /* WPA2: the handshake failed: a wrong password     */
-  WIFI_CONN_LINKED,   /* associated (and keyed): the link is up           */
-  WIFI_CONN_DHCP,     /* asking for an address                            */
-  WIFI_CONN_NODHCP,   /* no address came                                  */
-  WIFI_CONN_IP,       /* the address is ours                              */
-  WIFI_CONN_ARP,      /* looking up the gateway's MAC                     */
-  WIFI_CONN_PING,     /* pinging the gateway                              */
-  WIFI_CONN_NOPING,   /* the gateway did not answer                       */
-  WIFI_CONN_DONE,     /* the gateway answered a ping                      */
+                         password given */
+  WIFI_CONN_ASSOC,    /* WMI_CONNECT sent, waiting for the firmware */
+  WIFI_CONN_FAILED,   /* DISCONNECT, or no answer, on every attempt */
+  WIFI_CONN_KEYS,     /* WPA2: associated, the 4-way handshake running */
+  WIFI_CONN_BADPASS,  /* WPA2: the handshake failed: a wrong password */
+  WIFI_CONN_LINKED,   /* associated (and keyed): the link is up */
+  WIFI_CONN_DHCP,     /* asking for an address */
+  WIFI_CONN_NODHCP,   /* no address came */
+  WIFI_CONN_IP,       /* the address is ours */
+  WIFI_CONN_ARP,      /* looking up the gateway's MAC */
+  WIFI_CONN_PING,     /* pinging the gateway */
+  WIFI_CONN_NOPING,   /* the gateway did not answer */
+  WIFI_CONN_DONE,     /* the gateway answered a ping */
 };
 
 /* What the ARM9 asks the core to join, written before a boot with
@@ -275,40 +275,50 @@ typedef struct {
 #define WIFI_NET_ADDR 0x233B8100u
 
 enum {
-  WIFI_NETOP_STATUS = 1, /* is the link still up                          */
-  WIFI_NETOP_DNS,        /* name -> ip, from the DHCP-given DNS server    */
-  WIFI_NETOP_PING,       /* one echo to ip with seq; rtt_us, ttl, bytes   */
-  WIFI_NETOP_LEAVE,      /* disconnect                                    */
+  WIFI_NETOP_STATUS = 1, /* is the link still up */
+  WIFI_NETOP_DNS,        /* name -> ip, from the DHCP-given DNS server */
+  WIFI_NETOP_PING,       /* one echo to ip with seq; rtt_us, ttl, bytes */
+  WIFI_NETOP_LEAVE,      /* disconnect */
   WIFI_NETOP_HTTP,       /* one HTTP exchange over TCP with ip:port: the
                             request at WIFI_HTTP_REQ goes out, the reply
                             comes back at WIFI_HTTP_RESP until the server
-                            closes or its Content-Length is in            */
+                            closes or its Content-Length is in */
   WIFI_NETOP_TCP,        /* a TCP connection with ip:port that the ARM9
-                            drives through WifiTcp until it closes it     */
+                            drives through WifiTcp until it closes it */
+  WIFI_NETOP_TCP_BG,     /* the same, but the command ends as soon as the
+                            connection is under way, and the core keeps it
+                            going between other commands: presents and
+                            sounds work meanwhile. WifiTcp.state saying
+                            WIFI_TCP_CLOSED is the end, with WifiNetIo.status
+                            as with WIFI_NETOP_TCP. No other network op runs
+                            until then. */
 };
+
+/* The first core that runs WIFI_NETOP_TCP_BG. */
+#define AUDIO_TCP_BG_VERSION 124
 
 enum {
   WIFI_NETS_OK = 0,
-  WIFI_NETS_NOLINK,   /* no session, or the link dropped               */
-  WIFI_NETS_TIMEOUT,  /* no answer in time                             */
-  WIFI_NETS_NONAME,   /* DNS: the name does not exist (NXDOMAIN)       */
-  WIFI_NETS_DNSFAIL,  /* DNS: an answer with no address, or an error   */
-  WIFI_NETS_BADNAME,  /* not a valid host name                         */
-  WIFI_NETS_NOHOST,   /* a host on our subnet did not answer ARP       */
-  WIFI_NETS_ICMPERR,  /* ping: unreachable or time exceeded; see icmp  */
-  WIFI_NETS_NOSEND,   /* the frame could not be sent (no credit)       */
-  WIFI_NETS_BUSY,     /* ARM9: the core did not take or finish it      */
-  WIFI_NETS_REFUSED,  /* HTTP, TCP: the server reset it (RST)          */
-  WIFI_NETS_TOOBIG,   /* HTTP: the request or the reply does not fit   */
-  WIFI_NETS_TLS,      /* ARM9: the TLS layer failed (Tls.c says why)   */
+  WIFI_NETS_NOLINK,   /* no session, or the link dropped */
+  WIFI_NETS_TIMEOUT,  /* no answer in time */
+  WIFI_NETS_NONAME,   /* DNS: the name does not exist (NXDOMAIN) */
+  WIFI_NETS_DNSFAIL,  /* DNS: an answer with no address, or an error */
+  WIFI_NETS_BADNAME,  /* not a valid host name */
+  WIFI_NETS_NOHOST,   /* a host on our subnet did not answer ARP */
+  WIFI_NETS_ICMPERR,  /* ping: unreachable or time exceeded; see icmp */
+  WIFI_NETS_NOSEND,   /* the frame could not be sent (no credit) */
+  WIFI_NETS_BUSY,     /* ARM9: the core did not take or finish it */
+  WIFI_NETS_REFUSED,  /* HTTP, TCP: the server reset it (RST) */
+  WIFI_NETS_TOOBIG,   /* HTTP: the request or the reply does not fit */
+  WIFI_NETS_TLS,      /* ARM9: the TLS layer failed (Tls.c says why) */
 };
 
 /* How far WIFI_NETOP_HTTP or _TCP got (WifiNetIo.stage). */
 enum {
-  WIFI_HTTP_CONNECT = 1, /* SYN sent                                      */
-  WIFI_HTTP_SEND,        /* connected, the request going out              */
+  WIFI_HTTP_CONNECT = 1, /* SYN sent */
+  WIFI_HTTP_SEND,        /* connected, the request going out */
   WIFI_HTTP_WAIT,        /* the request acknowledged, waiting for a reply */
-  WIFI_HTTP_DONE,        /* the reply is in                               */
+  WIFI_HTTP_DONE,        /* the reply is in */
 };
 
 /* The request of WIFI_NETOP_HTTP, between WifiNetIo and GpuShared, and its
@@ -349,30 +359,30 @@ typedef struct {
 #define WIFI_TCP_ALIVE_MS 15000u
 
 enum {
-  WIFI_TCP_IDLE = 0,   /* not started yet                              */
-  WIFI_TCP_CONNECTING, /* SYN sent                                     */
+  WIFI_TCP_IDLE = 0,   /* not started yet */
+  WIFI_TCP_CONNECTING, /* SYN sent */
   WIFI_TCP_OPEN,
-  WIFI_TCP_CLOSED,     /* over; WifiNetIo.status says how              */
+  WIFI_TCP_CLOSED,     /* over; WifiNetIo.status says how */
 };
 
 enum {
   WIFI_TCP_KEEP = 0,
   WIFI_TCP_FIN,   /* close once everything in tx is acknowledged */
-  WIFI_TCP_ABORT, /* reset it now                                */
+  WIFI_TCP_ABORT, /* reset it now */
 };
 
 typedef struct {
   /* The ARM9's line. */
-  volatile uint32_t tx_head; /* bytes put in tx                          */
-  volatile uint32_t rx_tail; /* bytes taken out of rx                    */
-  volatile uint32_t close;   /* WIFI_TCP_KEEP, _FIN or _ABORT            */
-  volatile uint32_t alive;   /* bumped while the ARM9 still works on it  */
+  volatile uint32_t tx_head; /* bytes put in tx */
+  volatile uint32_t rx_tail; /* bytes taken out of rx */
+  volatile uint32_t close;   /* WIFI_TCP_KEEP, _FIN or _ABORT */
+  volatile uint32_t alive;   /* bumped while the ARM9 still works on it */
   volatile uint32_t arm9_pad[4];
   /* The core's line, written by the ARM9 only before the post. */
   volatile uint32_t state;   /* WIFI_TCP_*                               */
-  volatile uint32_t tx_tail; /* bytes of tx the server acknowledged      */
-  volatile uint32_t rx_head; /* bytes put in rx                          */
-  volatile uint32_t eof;     /* 1 once the server closed after rx_head   */
+  volatile uint32_t tx_tail; /* bytes of tx the server acknowledged */
+  volatile uint32_t rx_head; /* bytes put in rx */
+  volatile uint32_t eof;     /* 1 once the server closed after rx_head */
   volatile uint32_t core_pad[4];
   volatile uint8_t tx[WIFI_TCP_TX];
   volatile uint8_t rx[WIFI_TCP_RX];
@@ -382,20 +392,20 @@ typedef struct {
 enum {
   WIFI_WMI_NONE = 0,
   WIFI_WMI_SETUP,    /* power mode, probed SSID, scan and channel params, filter */
-  WIFI_WMI_SCAN,     /* START_SCAN sent                                     */
-  WIFI_WMI_DONE,     /* SCAN_COMPLETE came back                             */
-  WIFI_WMI_TIMEOUT,  /* the wait for SCAN_COMPLETE ran out                  */
+  WIFI_WMI_SCAN,     /* START_SCAN sent */
+  WIFI_WMI_DONE,     /* SCAN_COMPLETE came back */
+  WIFI_WMI_TIMEOUT,  /* the wait for SCAN_COMPLETE ran out */
 };
 
 /* The controller access in progress (WifiShared.hb), published before each. */
 enum {
   WIFI_HB_CMD_WAIT = 1, /* waiting for the command line before a command */
-  WIFI_HB_CMD_SENT,     /* a command out, waiting for its response       */
+  WIFI_HB_CMD_SENT,     /* a command out, waiting for its response */
   WIFI_HB_CMD_DONE,
-  WIFI_HB_DATA_WAIT,    /* the same three for a data command (CMD53)     */
+  WIFI_HB_DATA_WAIT,    /* the same three for a data command (CMD53) */
   WIFI_HB_DATA_SENT,
-  WIFI_HB_DATA_FIFO,    /* moving the data through the FIFO              */
-  WIFI_HB_DATA_END,     /* data moved, waiting for the transfer to end   */
+  WIFI_HB_DATA_FIFO,    /* moving the data through the FIFO */
+  WIFI_HB_DATA_END,     /* data moved, waiting for the transfer to end */
   WIFI_HB_DATA_DONE,
 };
 
@@ -415,11 +425,11 @@ enum {
 
 enum {
   WIFI_HTC_NONE = 0,
-  WIFI_HTC_READY,    /* the firmware posted HTC_READY                     */
-  WIFI_HTC_CONNECT,  /* connect-service sent                              */
-  WIFI_HTC_CONNECTED,/* the target answered with an endpoint              */
-  WIFI_HTC_SETUP,    /* setup-complete sent                               */
-  WIFI_HTC_WMI,      /* a WMI event came back                             */
+  WIFI_HTC_READY,    /* the firmware posted HTC_READY */
+  WIFI_HTC_CONNECT,  /* connect-service sent */
+  WIFI_HTC_CONNECTED,/* the target answered with an endpoint */
+  WIFI_HTC_SETUP,    /* setup-complete sent */
+  WIFI_HTC_WMI,      /* a WMI event came back */
 };
 
 enum {

@@ -650,6 +650,169 @@ u32 tls_exchange(const TlsLink *l, const char *host, u32 ip, u32 port,
   return status;
 }
 
+static struct {
+  const TlsLink *l;
+  char host[HOST_MAX];
+  int open, hs, ended, err;
+  u32 t0;
+} ts;
+
+u32 tls_stream_open(const TlsLink *l, const char *host, u32 ip, u32 port,
+                    u32 timeout_ms, int *err) {
+  br_ssl_engine_context *eng = &cc.eng;
+  u32 hl = (u32)strlen(host);
+  int resume;
+  u8 rnd[32];
+  *err = 0;
+  if (!hl || hl >= HOST_MAX) {
+    *err = TLS_ERR_NAME;
+    return WIFI_NETS_TLS;
+  }
+  setup();
+  client_init();
+  set_time();
+  fresh(rnd);
+  br_ssl_engine_inject_entropy(eng, rnd, sizeof(rnd));
+  memset(rnd, 0, sizeof(rnd));
+  resume = session_find(host);
+  if (resume >= 0)
+    br_ssl_engine_set_session_parameters(eng, &sessions[resume].p);
+  if (!br_ssl_client_reset(&cc, host, resume >= 0)) {
+    *err = br_ssl_engine_last_error(eng);
+    return WIFI_NETS_TLS;
+  }
+  wifi_tcp_setup(ip, port, timeout_ms);
+  if (!l->start())
+    return WIFI_NETS_BUSY;
+  ts.l = l;
+  memcpy(ts.host, host, hl + 1u);
+  ts.open = 1;
+  ts.hs = ts.ended = ts.err = 0;
+  ts.t0 = l->ms();
+  return WIFI_NETS_OK;
+}
+
+int tls_stream_pump(void) {
+  br_ssl_engine_context *eng = &cc.eng;
+  unsigned st;
+  int moved = 0;
+  size_t len;
+  u8 *b;
+  if (!ts.open || ts.ended)
+    return 0;
+  st = br_ssl_engine_current_state(eng);
+  if (st & BR_SSL_CLOSED) {
+    ts.err = br_ssl_engine_last_error(eng);
+    if (!ts.err && !ts.hs)
+      ts.err = TLS_ERR_EOF;
+    ts.ended = 1;
+    return 0;
+  }
+  if (st & BR_SSL_SENDAPP)
+    ts.hs = 1;
+  if (st & BR_SSL_SENDREC) {
+    b = br_ssl_engine_sendrec_buf(eng, &len);
+    len = wifi_tcp_write(b, (u32)len);
+    if (len) {
+      br_ssl_engine_sendrec_ack(eng, len);
+      moved = 1;
+    }
+  }
+  if (st & BR_SSL_RECVREC) {
+    b = br_ssl_engine_recvrec_buf(eng, &len);
+    len = wifi_tcp_read(b, (u32)len);
+    if (len) {
+      br_ssl_engine_recvrec_ack(eng, len);
+      moved = 1;
+    } else if (wifi_tcp_eof()) {
+      if (!ts.hs)
+        ts.err = TLS_ERR_EOF;
+      ts.ended = 1;
+    }
+  }
+  wifi_tcp_alive();
+  if (!moved && !ts.ended && ts.l->done()) {
+    /* Once more, for bytes the core put in just after that read. */
+    b = (st & BR_SSL_RECVREC) ? br_ssl_engine_recvrec_buf(eng, &len) : 0;
+    if (!b || !(len = wifi_tcp_read(b, (u32)len))) {
+      ts.ended = 1;
+      return 0;
+    }
+    br_ssl_engine_recvrec_ack(eng, len);
+    moved = 1;
+  }
+  return moved;
+}
+
+int tls_stream_ready(void) {
+  return ts.open && (ts.hs || (br_ssl_engine_current_state(&cc.eng) &
+                               BR_SSL_SENDAPP) != 0);
+}
+
+int tls_stream_closed(int *err) {
+  if (err)
+    *err = ts.err;
+  return !ts.open || ts.ended;
+}
+
+u32 tls_stream_write(const void *p, u32 n) {
+  br_ssl_engine_context *eng = &cc.eng;
+  size_t len;
+  u8 *b;
+  if (!ts.open || ts.ended || !(br_ssl_engine_current_state(eng) & BR_SSL_SENDAPP))
+    return 0;
+  b = br_ssl_engine_sendapp_buf(eng, &len);
+  if (len > n)
+    len = n;
+  memcpy(b, p, len);
+  br_ssl_engine_sendapp_ack(eng, len);
+  br_ssl_engine_flush(eng, 0);
+  return (u32)len;
+}
+
+u32 tls_stream_read(void *p, u32 n) {
+  br_ssl_engine_context *eng = &cc.eng;
+  size_t len;
+  u8 *b;
+  if (!ts.open || !(br_ssl_engine_current_state(eng) & BR_SSL_RECVAPP))
+    return 0;
+  b = br_ssl_engine_recvapp_buf(eng, &len);
+  if (len > n)
+    len = n;
+  memcpy(p, b, len);
+  br_ssl_engine_recvapp_ack(eng, len);
+  return (u32)len;
+}
+
+void tls_stream_close(int graceful) {
+  br_ssl_engine_context *eng = &cc.eng;
+  u32 t0;
+  if (!ts.open)
+    return;
+  if (graceful && !ts.ended) {
+    br_ssl_engine_close(eng);
+    t0 = ts.l->ms();
+    while ((br_ssl_engine_current_state(eng) & BR_SSL_SENDREC) &&
+           ts.l->ms() - t0 < 500u) {
+      size_t len;
+      u8 *b = br_ssl_engine_sendrec_buf(eng, &len);
+      len = wifi_tcp_write(b, (u32)len);
+      if (len)
+        br_ssl_engine_sendrec_ack(eng, len);
+    }
+  }
+  wifi_tcp_close(graceful ? WIFI_TCP_FIN : WIFI_TCP_ABORT);
+  for (t0 = ts.l->ms(); !ts.l->done() && ts.l->ms() - t0 < END_WAIT_MS;) {
+    wifi_tcp_alive();
+    idle(ts.l);
+  }
+  if (ts.err)
+    session_drop(ts.host);
+  else if (ts.hs)
+    session_keep(ts.host);
+  ts.open = 0;
+}
+
 int tls_error_is_clock(int err) {
   return err == BR_ERR_X509_EXPIRED || err == BR_ERR_X509_TIME_UNKNOWN;
 }

@@ -396,6 +396,7 @@ typedef enum {
   STR_MENU_SOUNDS,
   STR_AC_E_TLS,
   STR_AC_E_CLOCK,
+  STR_FULL_POWER,
 
   STR_COUNT
 } StringId;

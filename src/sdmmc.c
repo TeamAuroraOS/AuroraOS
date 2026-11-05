@@ -217,7 +217,7 @@ static int SD_Init(void) {
     delay(20000);
 
     sdmmc_send_command(&handleSD, 0, 0);              /* CMD0  GO_IDLE_STATE */
-    sdmmc_send_command(&handleSD, 0x10408, 0x1AA);    /* CMD8  SEND_IF_COND  */
+    sdmmc_send_command(&handleSD, 0x10408, 0x1AA);    /* CMD8  SEND_IF_COND */
     u32 temp = (handleSD.error & 0x1) << 0x1E;
 
     u32 temp2 = 0;
@@ -363,7 +363,7 @@ static void nand_read_cid(void) {
 
     set_target(&handleNAND);
     sdmmc_send_command(&handleNAND, 0, 0);              /* CMD0 GO_IDLE_STATE */
-    sdmmc_send_command(&handleNAND, 0x10701, 0x100000); /* CMD1 SEND_OP_COND  */
+    sdmmc_send_command(&handleNAND, 0x10701, 0x100000); /* CMD1 SEND_OP_COND */
     if (handleNAND.error & 0x4)
         goto done;
 
@@ -417,7 +417,7 @@ int sdmmc_nand_init(void) {
 
     set_target(&handleNAND);
     sdmmc_send_command(&handleNAND, 0, 0);                /* CMD0 GO_IDLE_STATE */
-    for (t = 0; t < NAND_CID_TRIES; t++) {                /* until powered up   */
+    for (t = 0; t < NAND_CID_TRIES; t++) {                /* until powered up */
         sdmmc_send_command(&handleNAND, 0x10701, 0x100000); /* CMD1 SEND_OP_COND */
         if ((handleNAND.error & 1) && (handleNAND.ret[0] & 0x80000000))
             break;

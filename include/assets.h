@@ -14,8 +14,8 @@
 #define ASSETS_ARENA_MAX  0x000C0000u
 
 typedef enum {
-  ASSET_TYPE_ALPHA8 = 0, /* w*h coverage bytes                     */
-  ASSET_TYPE_RGBA   = 1, /* w*h*4, colour with straight alpha      */
+  ASSET_TYPE_ALPHA8 = 0, /* w*h coverage bytes */
+  ASSET_TYPE_RGBA   = 1, /* w*h*4, colour with straight alpha */
   ASSET_TYPE_FONT   = 2, /* AssetFontHead, glyph table, then atlas */
 } AssetType;
 

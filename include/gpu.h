@@ -50,7 +50,7 @@ enum {
   GPU_FMT_RGBA4  = 4,
 };
 
-#define GPU_XF_FLIP_VERT 0x0001u /* hardware flags bit0  */
+#define GPU_XF_FLIP_VERT 0x0001u /* hardware flags bit0 */
 #define GPU_XF_BLOCK32   0x0002u /* hardware flags bit16 */
 
 /* PSC fill width: how many bits the fill value covers per store. */
@@ -65,34 +65,34 @@ enum {
 enum {
   GPU_OP_NONE     = 0,
   GPU_OP_INIT     = 1, /* enable clocks, quiesce the engines, read the hardware ID */
-  GPU_OP_FILL     = 2, /* PSC memory fill  */
+  GPU_OP_FILL     = 2, /* PSC memory fill */
   GPU_OP_TRANSFER = 3, /* PPF display transfer (de-tiles + converts format) */
-  GPU_OP_TEXCOPY  = 4, /* PPF texture copy (raw linear -> linear blit)      */
-  GPU_OP_PRESENT  = 5, /* texture copy to a panel, synced as chosen below  */
-  GPU_OP_SHOW_A   = 6, /* newest frame into framebuffer A, and show A       */
-  GPU_OP_PRESENT2 = 7, /* both panels at once: xf_src top, xf_src2 bottom   */
-  GPU_OP_VSYNC_TEST = 8, /* wait xf_len blanks of panel xf_flags by method  */
+  GPU_OP_TEXCOPY  = 4, /* PPF texture copy (raw linear -> linear blit) */
+  GPU_OP_PRESENT  = 5, /* texture copy to a panel, synced as chosen below */
+  GPU_OP_SHOW_A   = 6, /* newest frame into framebuffer A, and show A */
+  GPU_OP_PRESENT2 = 7, /* both panels at once: xf_src top, xf_src2 bottom */
+  GPU_OP_VSYNC_TEST = 8, /* wait xf_len blanks of panel xf_flags by method */
   GPU_OP_VSYNC_SET  = 9, /* sync panel xf_flags by method xf_src_w from now */
-  GPU_OP_STEREO     = 10, /* top panel 2D or 3D: xf_flags GPU_STEREO_*,    */
-                          /* xf_src_w the New 3DS barrier pattern          */
-  GPU_OP_PRESENT_ST = 11, /* top left xf_src, top right xf_src2, and the   */
-                          /* bottom xf_src3 unless it is 0                 */
+  GPU_OP_STEREO     = 10, /* top panel 2D or 3D: xf_flags GPU_STEREO_*, */
+                          /* xf_src_w the New 3DS barrier pattern */
+  GPU_OP_PRESENT_ST = 11, /* top left xf_src, top right xf_src2, and the */
+                          /* bottom xf_src3 unless it is 0 */
   GPU_OP_P3D        = 12, /* clear the render target to fill_value, run the */
                           /* command list xf_src (xf_len bytes), then copy */
-                          /* the result to xf_dst as a top-screen frame    */
+                          /* the result to xf_dst as a top-screen frame */
 };
 
 /* GPU_OP_STEREO flags. The barrier is the Old 3DS one (LCD registers) on every
  * model with a 3D screen; the New 3DS adds its I2C-driven mask. */
 #define GPU_STEREO_ON       0x01u
-#define GPU_STEREO_BARRIER  0x02u /* the LCD parallax registers            */
-#define GPU_STEREO_EXPANDER 0x04u /* New 3DS: the mask expander as well    */
+#define GPU_STEREO_BARRIER  0x02u /* the LCD parallax registers */
+#define GPU_STEREO_EXPANDER 0x04u /* New 3DS: the mask expander as well */
 
 /* How a panel's presents are synchronised with its vertical blank; see
  * Gpu11.c. */
 enum {
-  GPU_VSYNC_OFF = 0, /* copied straight into framebuffer A                */
-  GPU_VSYNC_IRQ = 1, /* the controller's vblank interrupt flag             */
+  GPU_VSYNC_OFF = 0, /* copied straight into framebuffer A */
+  GPU_VSYNC_IRQ = 1, /* the controller's vblank interrupt flag */
   GPU_VSYNC_GIC = 2, /* that interrupt, pending in the ARM11's distributor */
 };
 
@@ -100,8 +100,8 @@ enum {
 enum {
   GPU_STEP_NONE = 0,
   GPU_STEP_CLOCK,
-  GPU_STEP_QUIESCE,  /* cleared inherited PSC/PPF state     */
-  GPU_STEP_IDLE,     /* P3D reported idle                   */
+  GPU_STEP_QUIESCE,  /* cleared inherited PSC/PPF state */
+  GPU_STEP_IDLE,     /* P3D reported idle */
   GPU_STEP_ID,
   GPU_STEP_ARMED,
   GPU_STEP_STARTED,
@@ -118,59 +118,59 @@ enum {
 
 typedef struct {
   volatile uint32_t magic;
-  volatile uint32_t seq;   /* bumped after every completed operation    */
-  volatile uint32_t step;  /* GPU_STEP_* reached by the last operation  */
-  volatile uint32_t err;   /* GPU_ERR_* of the last operation           */
-  volatile uint32_t ready; /* 1 once GPU_OP_INIT has succeeded          */
+  volatile uint32_t seq;   /* bumped after every completed operation */
+  volatile uint32_t step;  /* GPU_STEP_* reached by the last operation */
+  volatile uint32_t err;   /* GPU_ERR_* of the last operation */
+  volatile uint32_t ready; /* 1 once GPU_OP_INIT has succeeded */
 
   volatile uint32_t hw_id;      /* PICA hardware ID (reg 0x0000) */
   volatile uint32_t busy_before;/* BUSY (0x0034) sampled before the op */
-  volatile uint32_t busy_after; /* BUSY (0x0034) sampled after the op  */
+  volatile uint32_t busy_after; /* BUSY (0x0034) sampled after the op */
   volatile uint32_t ctl_after;  /* engine control register after the op */
   volatile uint32_t waits;      /* poll iterations the last op consumed */
-  volatile uint32_t ops;        /* successful operations since boot     */
+  volatile uint32_t ops;        /* successful operations since boot */
 
   /* Parameters, set by the ARM9 before posting AUDIO_CMD_GPU. `op` shares a
    * cache line with ARM11-written counters, so an ARM9 clean can write back
    * stale ctl_after/waits/ops; seq and err are in a line the ARM9 never writes. */
   volatile uint32_t op;         /* GPU_OP_*                                  */
-  volatile uint32_t fill_addr;  /* fill start (byte address, 8-byte aligned)  */
-  volatile uint32_t fill_end;   /* fill end, exclusive                        */
+  volatile uint32_t fill_addr;  /* fill start (byte address, 8-byte aligned) */
+  volatile uint32_t fill_end;   /* fill end, exclusive */
   volatile uint32_t fill_value;
   volatile uint32_t fill_width; /* GPU_FILL_*                                 */
-  volatile uint32_t xf_src;     /* transfer source (8-byte aligned)           */
-  volatile uint32_t xf_dst;     /* transfer destination (8-byte aligned)      */
-  volatile uint32_t xf_src_w;   /* source width in pixels                     */
-  volatile uint32_t xf_src_h;   /* source height in pixels                    */
-  volatile uint32_t xf_dst_w;   /* destination width (<= source width)        */
-  volatile uint32_t xf_dst_h;   /* destination height (<= source height)      */
+  volatile uint32_t xf_src;     /* transfer source (8-byte aligned) */
+  volatile uint32_t xf_dst;     /* transfer destination (8-byte aligned) */
+  volatile uint32_t xf_src_w;   /* source width in pixels */
+  volatile uint32_t xf_src_h;   /* source height in pixels */
+  volatile uint32_t xf_dst_w;   /* destination width (<= source width) */
+  volatile uint32_t xf_dst_h;   /* destination height (<= source height) */
   volatile uint32_t xf_src_fmt; /* GPU_FMT_*                                  */
   volatile uint32_t xf_dst_fmt; /* GPU_FMT_*                                  */
   volatile uint32_t xf_flags;   /* GPU_XF_*                                   */
-  volatile uint32_t xf_len;     /* texture-copy length in bytes (16-aligned)  */
+  volatile uint32_t xf_len;     /* texture-copy length in bytes (16-aligned) */
 
-  volatile uint32_t xf_src2;    /* GPU_OP_PRESENT2: the bottom panel's frame  */
+  volatile uint32_t xf_src2;    /* GPU_OP_PRESENT2: the bottom panel's frame */
   volatile uint32_t xf_src3;    /* GPU_OP_PRESENT_ST: the bottom panel's frame */
   volatile uint32_t pad[4];
 
   /* Written only by the ARM11, in a cache line of their own: an ARM9 clean of
    * the parameters above must not write stale copies back over them. */
   volatile uint32_t front[2];   /* top, bottom: framebuffer with the newest frame */
-  volatile uint32_t vsync;      /* GPU_VSYNC_* per panel, 2 bits, top first       */
+  volatile uint32_t vsync;      /* GPU_VSYNC_* per panel, 2 bits, top first */
   volatile uint32_t vs_swap[2]; /* swap and control registers as the */
   volatile uint32_t vs_cnt[2];  /* last test found them */
   volatile uint32_t vs_presents[2]; /* presents since the method was set, and */
-  volatile uint32_t vs_missed[2];   /* how many found no blank to wait for    */
+  volatile uint32_t vs_missed[2];   /* how many found no blank to wait for */
   volatile uint32_t stereo;     /* GPU_STEREO_* in force, bit 8: expander answered */
   volatile uint32_t exp_writes; /* New 3DS barrier pattern writes (it alternates) */
   volatile uint32_t p3d_state;  /* GPU_P3D_* */
-  volatile uint32_t p3d_runs;   /* command lists that finished                 */
-  volatile uint32_t p3d_waits;  /* polls the last one took                     */
-  volatile uint32_t p3d_stat;   /* 0x10400034 when the last one ended          */
+  volatile uint32_t p3d_runs;   /* command lists that finished */
+  volatile uint32_t p3d_waits;  /* polls the last one took */
+  volatile uint32_t p3d_stat;   /* 0x10400034 when the last one ended */
 } GpuShared;
 
 enum {
-  GPU_P3D_NONE = 0, /* never run                                   */
+  GPU_P3D_NONE = 0, /* never run */
   GPU_P3D_OK,
   GPU_P3D_CLEAR_TIMEOUT,
   GPU_P3D_LIST_TIMEOUT, /* the list never raised its finalize interrupt */

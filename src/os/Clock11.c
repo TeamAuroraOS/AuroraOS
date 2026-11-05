@@ -12,17 +12,17 @@
  * timer register touched is restored. */
 #include "core11.h"
 
-#define CFG11_GPU_N3DS_CNT  (IO_BASE + 0x40400u) /* u8                     */
-#define CFG11_MPCORE_CLKCNT (IO_BASE + 0x41300u) /* written as u16         */
-#define CFG11_MPCORE_CNT    (IO_BASE + 0x41304u) /* u16                    */
+#define CFG11_GPU_N3DS_CNT  (IO_BASE + 0x40400u) /* u8 */
+#define CFG11_MPCORE_CLKCNT (IO_BASE + 0x41300u) /* written as u16 */
+#define CFG11_MPCORE_CNT    (IO_BASE + 0x41304u) /* u16 */
 
-#define CLKCNT_WANT(v) ((v) & 7u)          /* bits 0-2: requested mode      */
+#define CLKCNT_WANT(v) ((v) & 7u)          /* bits 0-2: requested mode */
 #define CLKCNT_FLAG    (1u << 15)          /* set when a change has applied */
-#define CLKCNT_CUR(v)  (((v) >> 16) & 7u)  /* bits 16-18: mode in effect    */
+#define CLKCNT_CUR(v)  (((v) >> 16) & 7u)  /* bits 16-18: mode in effect */
 
-#define MPCORE_CNT_QTM (1u << 0) /* extra memory at 0x1F000000               */
-#define MPCORE_CNT_L2C (1u << 8) /* powers the L2C block; LGR2 only          */
-#define GPU_N3DS_BITS  0x3u      /* memory extensions, texture fix          */
+#define MPCORE_CNT_QTM (1u << 0) /* extra memory at 0x1F000000 */
+#define MPCORE_CNT_L2C (1u << 8) /* powers the L2C block; LGR2 only */
+#define GPU_N3DS_BITS  0x3u      /* memory extensions, texture fix */
 
 #define SOCINFO_LGR1 (1u << 1)
 #define SOCINFO_LGR2 (1u << 2)
@@ -41,7 +41,7 @@
 #define GICD_ENA_SET  (MPCORE + 0x1100u) /* one bit per id, 32 to a word */
 #define GICD_ENA_CLR  (MPCORE + 0x1180u)
 #define GICD_PEN_CLR  (MPCORE + 0x1280u)
-#define GICD_PRI      (MPCORE + 0x1400u) /* one byte per id              */
+#define GICD_PRI      (MPCORE + 0x1400u) /* one byte per id */
 #define GICD_TARGET   (MPCORE + 0x1800u)
 
 #define BIT_REG(base, id) ((base) + 4u * ((id) / 32u))
@@ -49,8 +49,8 @@
 #define BYTE_REG(base, id) ((base) + 4u * ((id) / 4u))
 
 #define IRQ_TIMER 29u   /* core 0's private timer */
-#define IRQ_CLOCK 88u   /* clock mode change      */
-#define IRQ_NONE  1023u /* nothing pending         */
+#define IRQ_CLOCK 88u   /* clock mode change */
+#define IRQ_NONE  1023u /* nothing pending */
 
 #define TIMER_EN     (1u << 0)
 #define TIMER_RELOAD (1u << 1)
@@ -58,10 +58,10 @@
 /* With no prescaler the private timer counts at half the 268 MHz clock. */
 #define TIMER_HZ     (268111856u / 2u)
 
-#define SLICE_TICKS (TIMER_HZ / 20u) /* a timer wake every 50 ms         */
-#define SLICE_LIMIT 20u              /* so about a second in all          */
-#define WAKE_LIMIT  1000u            /* any wake at all, timer or not     */
-#define PEND_GUARD  2000000u         /* polls for the timer check         */
+#define SLICE_TICKS (TIMER_HZ / 20u) /* a timer wake every 50 ms */
+#define SLICE_LIMIT 20u              /* so about a second in all */
+#define WAKE_LIMIT  1000u            /* any wake at all, timer or not */
+#define PEND_GUARD  2000000u         /* polls for the timer check */
 
 typedef struct {
   uint32_t gicc_ctrl, gicc_primask, gicd_ctrl;
@@ -164,12 +164,27 @@ static int wake_source_works(void) {
   return seen;
 }
 
+uint32_t clock11_div(const AudioCtrl *ct) {
+  if (!(ct->socinfo & (SOCINFO_LGR1 | SOCINFO_LGR2)))
+    return 1u;
+  switch (CLKCNT_CUR(MMIO32(CFG11_MPCORE_CLKCNT))) {
+    case 3u: return 2u;
+    case 5u: return 3u;
+    default: return 1u;
+  }
+}
+
 void clock11_set(AudioCtrl *ct, uint32_t mode) {
   uint32_t info = ct->socinfo;
-  uint32_t clk = MMIO32(CFG11_MPCORE_CLKCNT);
-  uint32_t cnt, flag, slices = 0, wakes = 0, status;
+  uint32_t clk, cnt, flag, slices = 0, wakes = 0, status;
   GicSave save;
 
+  /* Only the New 3DS family has this register. */
+  if (!(info & (SOCINFO_LGR1 | SOCINFO_LGR2))) {
+    ct->n3ds_status = AUDIO_N3DS_UNSUPPORTED;
+    return;
+  }
+  clk = MMIO32(CFG11_MPCORE_CLKCNT);
   ct->n3ds_before = clk;
   ct->n3ds_after = clk;
 

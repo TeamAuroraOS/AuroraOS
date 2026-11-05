@@ -11,6 +11,7 @@
 #include "loader.h"
 #include "model.h"
 #include "power.h"
+#include "smp.h"
 #include "timer.h"
 #include "touch.h"
 #include "ui.h"
@@ -1252,15 +1253,29 @@ int t_exec(int argc, char **argv) {
   return 1;
 }
 
-enum { U_CORE, U_AUDIO, U_TOUCH, U_GPU, U_WIFI, U_SD, U_POWER, U_COUNT };
+enum { U_CORE, U_CORES, U_AUDIO, U_TOUCH, U_GPU, U_WIFI, U_SD, U_POWER, U_COUNT };
 
 static const char *const unit_name[U_COUNT] = {
-    "core11.service", "audio.service", "touch.service", "gpu.service",
-    "wifi.service",   "sdcard.mount",  "power.service"};
+    "core11.service", "cores.service", "audio.service", "touch.service",
+    "gpu.service",    "wifi.service",  "sdcard.mount",  "power.service"};
 static const char *const unit_desc[U_COUNT] = {
-    "ARM11 core",  "Sound (CSND)",   "Touchscreen",
-    "PICA200 GPU", "Wi-Fi (AR6014)", "SD card",
-    "Battery and clock (MCU)"};
+    "ARM11 core",  "The other ARM11 cores", "Sound (CSND)",
+    "Touchscreen", "PICA200 GPU",           "Wi-Fi (AR6014)",
+    "SD card",     "Battery and clock (MCU)"};
+
+extern void os_cache_sync(void);
+
+/* Only for reading: Smp11.c writes it, uncached on its side. */
+static const SmpBlock *smp_block(void) {
+  os_cache_sync();
+  return (const SmpBlock *)SMP_BLOCK_ADDR;
+}
+
+static char *t_clock(char *p) {
+  static const char *const mhz[] = {"268 MHz", "536 MHz", "804 MHz"};
+  u32 div = audio_clock_div();
+  return t_cpy(p, mhz[div >= 1u && div <= 3u ? div - 1u : 0u]);
+}
 
 static const char *wifi_end_text(u32 why) {
   switch (why) {
@@ -1303,7 +1318,33 @@ static int unit_state(int u, const char **sub, char *note) {
         p = t_cpy(p, ", this build has v");
         t_num(p, AUDIO_CORE_VERSION);
       }
+      p = t_cpy(p, ", ");
+      p = t_clock(p);
+      {
+        u32 fl = audio_core_flags();
+        t_cpy(p, (fl & AUDIO_FLAG_L2)       ? ", L1+L2 caches"
+                 : (fl & AUDIO_FLAG_CACHES) ? ", L1 caches"
+                                            : ", no caches");
+      }
       return 1;
+    case U_CORES: {
+      u32 up = 0, mask;
+      if (!core) {
+        t_cpy(p, "the ARM11 core is down");
+        return -1;
+      }
+      mask = smp_block()->started;
+      for (u32 c = 1u; c < SMP_CORES; c++)
+        up += (mask >> c) & 1u;
+      if (!up) {
+        t_cpy(p, "waiting; 'status cores' starts and tests them");
+        return 0;
+      }
+      *sub = "running";
+      p = t_num(p, up);
+      t_cpy(p, up == 1u ? " started" : " started, not counting core 0");
+      return 1;
+    }
     case U_AUDIO:
     case U_TOUCH:
       if (!core) {
@@ -1465,10 +1506,70 @@ static void wifi_status_more(void) {
   }
 }
 
+/* Starts every core and runs Smp11.c's self-test on them. Its timer ticks are
+ * half a CPU clock, 134,056 to the millisecond at 268 MHz. */
+static void cores_test(void) {
+  static char line[96];
+  const SmpBlock *b;
+  u32 div = audio_clock_div(), runs, tick_ms = 134056u * div;
+  char *p;
+
+  b = smp_block();
+  runs = b->test_runs;
+  t_line("Testing the other cores...", TC_DIM);
+  if (!audio_smp(SMP_OP_TEST, 0)) {
+    t_line("This core cannot start them.", TC_ERR);
+    return;
+  }
+  for (u32 w = timer_ticks(); timer_us_since(w) < 6000000u;) {
+    b = smp_block();
+    if (b->test_runs != runs)
+      break;
+  }
+  b = smp_block();
+  if (b->test_runs == runs) {
+    t_line("The test did not finish.", TC_ERR);
+    return;
+  }
+  for (u32 c = 1u; c < SMP_CORES; c++) {
+    if (!((b->started | b->failed) & (1u << c)))
+      continue;
+    p = t_cpy(line, "Core ");
+    p = t_num(p, c);
+    if (b->failed & (1u << c)) {
+      t_cpy(p, ": did not answer");
+    } else if (!b->test_done[c]) {
+      t_cpy(p, ": started, the test did not end");
+    } else {
+      u32 cpu = b->test_cpu[c] / (tick_ms / 1000u + 1u);
+      u32 ms = b->test_mem[c] / tick_ms;
+      /* Reads and writes of SMP_TEST_BYTES, SMP_TEST_PASSES times. */
+      u32 mb = 2u * SMP_TEST_PASSES * (SMP_TEST_BYTES / 1000u) / (ms + 1u);
+      p = t_cpy(p, ": loop ");
+      p = t_num(p, cpu);
+      p = t_cpy(p, " us, memory ");
+      p = t_num(p, mb);
+      t_cpy(p, " MB/s");
+    }
+    t_out("    ", TC_DIM);
+    t_line(line, (b->failed & (1u << c)) ? TC_ERR : TC_TEXT);
+  }
+  p = t_cpy(line, "Shared counter ");
+  p = t_num(p, b->test_sum);
+  p = t_cpy(p, " of ");
+  p = t_num(p, b->test_want);
+  t_cpy(p, b->test_sum == b->test_want ? ": the caches agree" : ": WRONG");
+  t_out("    ", TC_DIM);
+  t_line(line, b->test_sum == b->test_want ? TC_EXEC : TC_ERR);
+}
+
 static void unit_status(int u) {
   static char note[64];
   const char *sub;
-  int st = unit_state(u, &sub, note);
+  int st;
+  if (u == U_CORES && audio_alive())
+    cores_test();
+  st = unit_state(u, &sub, note);
   t_outc('*', state_color(st));
   t_outc(' ', TC_TEXT);
   t_out(unit_name[u], TC_TEXT);
@@ -1901,10 +2002,13 @@ int appnet_mount(void) { return t_need_sd(0); }
 int appnet_launched(void) { return 1; }
 
 static u32 curl_shown;
+/* During a stream's polls: a redirect can look up a name there, with no
+ * wifi_direct_on, and a present would overwrite that command in its slot. */
+static int curl_quiet;
 
 void appnet_waiting(u32 ms) {
   static char line[64];
-  if (ms / 1000u == curl_shown)
+  if (curl_quiet || ms / 1000u == curl_shown)
     return;
   curl_shown = ms / 1000u;
   char *p = t_cpy(line, "Waiting for the server... ");
@@ -1944,6 +2048,77 @@ static void curl_name(const char *url, char *out, u32 size) {
     t_cpy(out, "index.html");
 }
 
+/* curl --speed: reads a URL over a stream without keeping it, drawing through
+ * the GPU as it goes. That the line keeps moving shows the core is free while
+ * the connection runs; SELECT stops it. */
+static void curl_speed(const char *url, const char *headers) {
+  static char line[96], buf[8192];
+  u32 total = 0, shown = 0, t0, last;
+  int st, hits = 0;
+
+  /* Looking up the name is an ordinary command: no presents while it runs. */
+  wifi_direct_on();
+  st = appnet_stream_get(url, headers);
+  wifi_direct_off();
+  if (!st) {
+    t_err("curl", 0, 0, appnet_error());
+    return;
+  }
+  curl_quiet = 1;
+  t0 = last = wifi_now_ms();
+  for (;;) {
+    u32 n, now;
+    st = appnet_stream_poll();
+    if (st == APPNET_STREAM_FAILED) {
+      t_err("curl", 0, 0, appnet_error());
+      break;
+    }
+    if (st == APPNET_STREAM_DONE)
+      break;
+    while ((n = appnet_stream_read(buf, sizeof(buf))) != 0) {
+      total += n;
+      appnet_stream_poll();
+    }
+    now = wifi_now_ms();
+    if (now - last >= 500u) {
+      u32 kbs = (total - shown) * 1000u / 1024u / (now - last);
+      char *p = t_cpy(line, "HTTP ");
+      p = t_num(p, (u32)appnet_stream_status());
+      p = t_cpy(p, ": ");
+      p = t_hsize(p, total);
+      if (appnet_stream_length()) {
+        p = t_cpy(p, " of ");
+        p = t_hsize(p, appnet_stream_length());
+      }
+      p = t_cpy(p, ", ");
+      p = t_num(p, kbs);
+      t_cpy(p, " KB/s");
+      shown = total;
+      last = now;
+      hits++;
+      if (!t_busy(line)) {
+        t_err("curl", 0, 0, "interrupted");
+        appnet_stream_close();
+        return;
+      }
+    }
+  }
+  appnet_stream_close();
+  if (st == APPNET_STREAM_DONE) {
+    u32 ms = wifi_now_ms() - t0;
+    char *p = t_cpy(line, "Read ");
+    p = t_hsize(p, total);
+    p = t_cpy(p, " in ");
+    p = t_num(p, ms);
+    p = t_cpy(p, " ms, ");
+    p = t_num(p, ms ? total / ms * 1000u / 1024u : 0u);
+    p = t_cpy(p, " KB/s; ");
+    p = t_num(p, (u32)hits);
+    t_cpy(p, " screen updates during it");
+    t_line(line, TC_TEXT);
+  }
+}
+
 /* Text as cat prints it, at most CURL_SHOW bytes; SELECT stops it. */
 #define CURL_SHOW (16u * 1024u)
 
@@ -1973,7 +2148,7 @@ static void cmd_curl(int argc, char **argv) {
   static char path[T_PATH], name[96], headers[1024];
   static FIL f;
   const char *url = 0, *out = 0, *data = 0, *method = 0;
-  int include = 0, head = 0, silent = 0, remote = 0, ok;
+  int include = 0, head = 0, silent = 0, remote = 0, speed = 0, ok;
   u32 hn = 0;
   AppNetReply r;
 
@@ -2014,10 +2189,12 @@ static void cmd_curl(int argc, char **argv) {
       silent = 1;
     } else if (t_streq(a, "-O")) {
       remote = 1;
+    } else if (t_streq(a, "--speed")) {
+      speed = 1;
     } else if (!t_streq(a, "-L")) {
       t_err("curl", "option", a, "is unknown");
-      t_line("usage: curl [-iIsLO] [-o FILE] [-X METHOD] [-H LINE] [-d DATA] "
-             "URL", TC_TEXT);
+      t_line("usage: curl [-iIsLO] [--speed] [-o FILE] [-X METHOD] [-H LINE] "
+             "[-d DATA] URL", TC_TEXT);
       return;
     }
   }
@@ -2031,6 +2208,10 @@ static void cmd_curl(int argc, char **argv) {
   }
   if (!method)
     method = head ? "HEAD" : data ? "POST" : "GET";
+  if (speed && (out || !t_streq(method, "GET"))) {
+    t_err("curl", 0, 0, "--speed only reads: no -o, -O, -I, -d or -X");
+    return;
+  }
   if (out && !head) {
     if (!t_need_sd("curl"))
       return;
@@ -2041,6 +2222,11 @@ static void cmd_curl(int argc, char **argv) {
   }
   if (!net_join("curl"))
     return;
+  if (speed) {
+    curl_speed(url, hn ? headers : 0);
+    curl_quiet = 0;
+    return;
+  }
   if (out && !head && !t_need_sd("curl"))
     return;
 

@@ -198,8 +198,8 @@ enum { ACT_LAUNCH, ACT_MUSIC, ACT_FILES, ACT_CUBE, ACT_STORE };
 #define MAX_APPS     160
 #define APP_NAME_MAX 64
 #define APP_PATH_MAX (sizeof(C_APPS_DIR) + FF_LFN_BUF + 1)
-static char app_name[MAX_APPS][APP_NAME_MAX]; /* file name minus ".bin"  */
-static char app_path[MAX_APPS][APP_PATH_MAX]; /* "Aurora/Apps/Name.bin"  */
+static char app_name[MAX_APPS][APP_NAME_MAX]; /* file name minus ".bin" */
+static char app_path[MAX_APPS][APP_PATH_MAX]; /* "Aurora/Apps/Name.bin" */
 static unsigned char app_icon[MAX_APPS][ICON_SIZE * ICON_ROW_BYTES];
 static int  app_has_icon[MAX_APPS];
 static char app_kind[MAX_APPS]; /* aurora_magic_kind(): 'C' for a C app */
@@ -527,6 +527,7 @@ typedef enum {
   SET_THEME,
   SET_CLOCK,
   SET_BRIGHTNESS,
+  SET_FULL_POWER,
   SET_STARTUP_SOUND,
   SET_HOME_MUSIC,
   SET_SHOP_MUSIC,
@@ -603,6 +604,11 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
       *asset = ASSET_ICON_DISPLAY_32;
       *icon = icon_brightness_bits; *name = L(STR_BRIGHTNESS);
       *value = br_labels[g_brightness < BR_LEVELS ? g_brightness : 3]; break;
+    case SET_FULL_POWER:
+      *asset = ASSET_ICON_CPU_32;
+      *icon = icon_boot_bits; *name = L(STR_FULL_POWER);
+      *value = !aurora_is_new3ds() ? "---" : L(g_cfg.power_off ? STR_OFF : STR_ON);
+      break;
     case SET_STARTUP_SOUND: {
       int off = g_cfg.sound_off & USER_SOUND_STARTUP_OFF;
       *asset = off ? ASSET_ICON_VOLUME_MUTE_32 : ASSET_ICON_VOLUME_HIGH_32;
@@ -989,6 +995,20 @@ static void sound_toggle(int id) {
   ui_sound_select();
   user_config_save(&g_cfg);
   settings_draw(id);
+}
+
+/* New models only: 804 MHz with the L2 cache, or the 268 MHz of an Old 3DS. */
+static void full_power_toggle(void) {
+  if (!aurora_is_new3ds())
+    return;
+  g_cfg.power_off ^= 1u;
+  if (g_cfg.power_off)
+    aurora_n3ds_standard();
+  else
+    aurora_n3ds_hardware();
+  ui_sound_select();
+  user_config_save(&g_cfg);
+  settings_draw(SET_FULL_POWER);
 }
 
 #define SW_SIZE 40
@@ -2499,11 +2519,11 @@ static void gpu_paint_scratch(void) {
 
 static u32 bench_op_us = 0;   /* one GPU round trip, however small the work */
 static u32 bench_cpu_us = 0;  /* CPU filling the bottom screen with a shade */
-static u32 bench_psc_us = 0;  /* GPU doing a whole-screen solid fill        */
-static u32 bench_blit_us = 0; /* GPU moving a finished screen to the panel  */
-static u32 bench_bg_us = 0;   /* painting the background from its cache     */
-static u32 bench_patch_us = 0;/* one list-row background patch              */
-static u32 bench_card_us = 0; /* one list-row card, the gradient round rect  */
+static u32 bench_psc_us = 0;  /* GPU doing a whole-screen solid fill */
+static u32 bench_blit_us = 0; /* GPU moving a finished screen to the panel */
+static u32 bench_bg_us = 0;   /* painting the background from its cache */
+static u32 bench_patch_us = 0;/* one list-row background patch */
+static u32 bench_card_us = 0; /* one list-row card, the gradient round rect */
 
 extern void os_mpu_enable(void);
 
@@ -3344,6 +3364,8 @@ static void settings_open(void) {
     }
     if (is_sound_row(sel) && (k & (BUTTON_DLEFT | BUTTON_DRIGHT)))
       sound_toggle(sel);
+    if (sel == SET_FULL_POWER && (k & (BUTTON_DLEFT | BUTTON_DRIGHT)))
+      full_power_toggle();
     if ((k & BUTTON_A) || activate) {
       void (*sub)(void) = 0;
       switch (sel) {
@@ -3353,6 +3375,7 @@ static void settings_open(void) {
         case SET_THEME:    sub = theme_screen; break;
         case SET_CLOCK:    sub = clock_screen; break;
         case SET_BRIGHTNESS: sub = brightness_screen; break;
+        case SET_FULL_POWER: full_power_toggle(); break;
         case SET_STARTUP_SOUND:
         case SET_HOME_MUSIC:
         case SET_SHOP_MUSIC:
@@ -3696,7 +3719,7 @@ static void os_launch_app(const char *path) {
 #define MUS_NAME_MAX 64
 #define MUS_PATH_MAX (sizeof(MUSIC_DIR) + FF_LFN_BUF + 1)
 static char mus_name[MAX_TRACKS][MUS_NAME_MAX]; /* file name, cut for display */
-static char mus_path[MAX_TRACKS][MUS_PATH_MAX]; /* "Aurora/Music/Name.aaf"    */
+static char mus_path[MAX_TRACKS][MUS_PATH_MAX]; /* "Aurora/Music/Name.aaf" */
 static int  mus_count;
 
 static int scan_music(void) {
@@ -4210,6 +4233,12 @@ void os_main(void) {
   g_brightness = g_cfg.brightness <= 4 ? g_cfg.brightness : 3;
   audio_set_brightness(g_brightness);
   ui_sound_config(g_cfg.sound_off);
+  /* An app that crashed or left without stopping its video may have left cores
+   * running in memory that is the OS's again. */
+  audio_smp_end();
+  /* Not with SELECT held: the same fallback as the caches above. */
+  if (mpu_on && !g_cfg.power_off && aurora_is_new3ds())
+    aurora_n3ds_hardware();
   if (g_cfg.touch_set && !touch_cal_set(&g_cfg.touch))
     g_cfg.touch_set = 0; /* unusable values: keep the default */
   theme_boot_load();

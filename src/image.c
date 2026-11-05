@@ -455,7 +455,7 @@ static ImageResult decode_png(const u8 *d, u32 len, u8 *dst, u32 dst_max,
 
   int chans = (ctype == 2) ? 3 : (ctype == 4) ? 2 : (ctype == 6) ? 4 : 1;
   u32 bpl = ((u32)w * (u32)chans * (u32)depth + 7u) / 8u; /* bytes per line */
-  int fbpp = (chans * depth + 7) / 8;                     /* filter step     */
+  int fbpp = (chans * depth + 7) / 8;                     /* filter step */
 
   u8 *scan = raw_buf + ((idat_len + 15u) & ~15u);
   u32 scan_max = IMAGE_RAW_MAX - (u32)(scan - raw_buf);

@@ -21,8 +21,8 @@ typedef struct {
   u32 exc;   /* CRASH_*                       */
   u32 dfsr;  /* Data Abort only */
   u32 dfar;
-  u32 cpu;   /* CRASH_CPU_* (crash_shared.h)  */
-  u32 core;  /* ARM11 core id, else 0         */
+  u32 cpu;   /* CRASH_CPU_* (crash_shared.h) */
+  u32 core;  /* ARM11 core id, else 0 */
 } CrashDump;
 
 /* Call once at OS startup. */

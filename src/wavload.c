@@ -100,10 +100,10 @@ WavResult wav_load(const char *path, u8 *dst, u32 max, int halve,
     return WAV_ERR_UNSUPPORTED;
   }
 
-  u32 frame = (depth / 8u) * chans;              /* bytes per sample frame  */
-  u32 out_bpp = depth / 8u;                      /* bytes per mono sample   */
+  u32 frame = (depth / 8u) * chans;              /* bytes per sample frame */
+  u32 out_bpp = depth / 8u;                      /* bytes per mono sample */
   u32 step = (halve && rate > 32000u) ? 2u : 1u; /* frames per output sample */
-  u32 fit = (CHUNK / frame / step) * step;       /* frames per read         */
+  u32 fit = (CHUNK / frame / step) * step;       /* frames per read */
   u32 samples = (data_len / frame) / step;
   if (samples * out_bpp > max)
     samples = max / out_bpp;

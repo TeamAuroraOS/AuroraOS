@@ -30,6 +30,8 @@ extern void os_cache_sync(void);
 static AudioCtrl *const ctrl = (AudioCtrl *)AUDIO_CTRL_ADDR;
 static WifiNetIo *const io = (WifiNetIo *)WIFI_NET_ADDR;
 
+static int st_is_open(void);
+
 static char g_err[112];
 static int g_busy;
 /* The last failure was the network's (no answer, a dropped link), not the
@@ -298,6 +300,8 @@ int appnet_join(void) {
   g_err[0] = 0;
   if (!appnet_ready())
     return 0;
+  if (st_is_open())
+    return 1;
   if (net_op(WIFI_NETOP_STATUS, 0, 0, 0, 1000u) == WIFI_NETS_OK)
     return 1;
   if (!appnet_mount()) {
@@ -591,13 +595,14 @@ static int url_parse(const char *url, Url *u) {
   return 1;
 }
 
-/* A Location that is a path: from the root, or beside the current one. */
+/* A Location that is a path: from the root, or beside the current one. One that is
+ * only a query keeps the whole path. */
 static int url_relative(Url *u, const char *loc) {
   static char base[APPNET_URL_MAX];
   u32 cut = 0;
   Out o;
   for (u32 i = 0; u->path[i] && u->path[i] != '?'; i++)
-    if (u->path[i] == '/')
+    if (u->path[i] == '/' || loc[0] == '?')
       cut = i + 1u;
   for (u32 i = 0; i < cut; i++)
     base[i] = u->path[i];
@@ -613,6 +618,32 @@ static int url_relative(Url *u, const char *loc) {
   }
   *o.p = 0;
   return 1;
+}
+
+/* Where a Location sends a request that went to `u`; 0 with appnet_error() when it
+ * cannot be followed. */
+static int url_follow(Url *u, const char *loc) {
+  if (loc[0] == '/' && loc[1] == '/') {
+    static char abs[APPNET_URL_MAX + 8];
+    Out o = {abs, abs + sizeof(abs) - 1u, 0};
+    out_str(&o, u->tls ? "https:" : "http:");
+    out_str(&o, loc);
+    *o.p = 0;
+    return url_parse(abs, u);
+  }
+  if (prefix_ci(loc, "http://") || prefix_ci(loc, "https://"))
+    return url_parse(loc, u);
+  /* Any other scheme: a relative path has no colon in its first part. */
+  for (const char *s = loc; *s && *s != '/' && *s != '?' && *s != '#'; s++)
+    if (*s == ':') {
+      err("the server redirected to an address that is not http:// or https://", 0, 0);
+      return 0;
+    }
+  return url_relative(u, loc);
+}
+
+static int redirect(int st) {
+  return st == 301 || st == 302 || st == 303 || st == 307 || st == 308;
 }
 
 /* Header `name` (lower case, with its colon) at a line start in `h`: where
@@ -635,6 +666,28 @@ static const char *find_header(const char *h, const char *name) {
 
 static int has_header(const char *headers, const char *name) {
   return headers && find_header(headers, name);
+}
+
+/* The caller's lines, each ended with CR LF whatever it ended with. `secret`: leave
+ * out its Authorization and Cookie lines. */
+static void out_headers(Out *o, const char *headers, int secret) {
+  for (const char *h = headers; h && *h;) {
+    const char *e = h;
+    while (*e && *e != '\r' && *e != '\n')
+      e++;
+    if (!secret ||
+        (!prefix_ci(h, "authorization:") && !prefix_ci(h, "cookie:"))) {
+      for (const char *c = h; c < e; c++) {
+        char t[2] = {*c, 0};
+        out_str(o, t);
+      }
+      if (e > h)
+        out_str(o, "\r\n");
+    }
+    while (*e == '\r' || *e == '\n')
+      e++;
+    h = e;
+  }
 }
 
 static char g_req[WIFI_HTTP_REQ_MAX];
@@ -661,24 +714,7 @@ static u32 build(const char *method, const Url *u, const char *headers,
   if (!has_header(headers, "accept-encoding:"))
     out_str(&o, "Accept-Encoding: identity\r\n");
   out_str(&o, "Connection: close\r\n");
-  /* The caller's lines, each ended with CR LF whatever it ended with. */
-  for (const char *h = headers; h && *h;) {
-    const char *e = h;
-    while (*e && *e != '\r' && *e != '\n')
-      e++;
-    if (!secret ||
-        (!prefix_ci(h, "authorization:") && !prefix_ci(h, "cookie:"))) {
-      for (const char *c = h; c < e; c++) {
-        char t[2] = {*c, 0};
-        out_str(&o, t);
-      }
-      if (e > h)
-        out_str(&o, "\r\n");
-    }
-    while (*e == '\r' || *e == '\n')
-      e++;
-    h = e;
-  }
+  out_headers(&o, headers, secret);
   if (blen || same_ci(method, "POST") || same_ci(method, "PUT") ||
       same_ci(method, "PATCH")) {
     out_str(&o, "Content-Length: ");
@@ -694,6 +730,406 @@ static u32 build(const char *method, const Url *u, const char *headers,
     *o.p++ = ((const char *)body)[i];
   return (u32)(o.p - g_req);
 }
+
+static const char *read_num(const char *s, u32 *v);
+
+/* A stream's connection. Which host it is on is kept so the next GET can reuse
+ * it; a reply fully read leaves it ready for one. */
+enum { RX_NONE, RX_HEAD, RX_BODY, RX_DONE, RX_FAILED };
+
+#define STREAM_HEAD_MAX 3072u
+#define STREAM_REDIRECTS 5
+/* Bounds a stage with no progress at all, not a whole reply. */
+#define STREAM_STALL_MS APPNET_TIMEOUT_MS
+
+static struct {
+  char host[256];
+  u32 ip, port;
+  int tls, open;
+  int rx, status, closes, redirects;
+  int to_close; /* no Content-Length: the body ends with the connection */
+  /* Where the caller asked: its keys go nowhere else. */
+  char first_host[256];
+  u32 first_port;
+  int first_tls, moved;
+  u32 len, got, tx_len, tx_done, head_len, last_ms;
+  char head[STREAM_HEAD_MAX];
+  char tx[APPNET_URL_MAX + 1024u];
+  char headers[512];
+} g_st;
+
+static Url g_st_url;
+
+static int st_tcp_start(void) {
+  if (!claim())
+    return 0;
+  send(AUDIO_CMD_WIFI_NET, WIFI_NETOP_TCP_BG);
+  /* It ends as soon as the SYN is out; ARP may take a moment. Not wait(): its
+   * hook may draw, and a present would overwrite this command in its slot. */
+  for (u32 t0 = appnet_ms(); !core_done();)
+    if (appnet_ms() - t0 >= 5000u)
+      return 0;
+  g_busy = 0;
+  return 1;
+}
+
+static int st_tcp_done(void) { return wifi_tcp_state() == WIFI_TCP_CLOSED; }
+
+static void st_close(int graceful) {
+  if (!g_st.open)
+    return;
+  if (g_st.tls) {
+    tls_stream_close(graceful);
+  } else {
+    u32 t0 = appnet_ms();
+    wifi_tcp_close(graceful ? WIFI_TCP_FIN : WIFI_TCP_ABORT);
+    while (!st_tcp_done() && appnet_ms() - t0 < 5000u)
+      wifi_tcp_alive();
+  }
+  g_st.open = 0;
+}
+
+static int st_is_open(void) { return g_st.open; }
+
+void appnet_stream_close(void) {
+  st_close(1);
+  g_st.rx = RX_NONE;
+}
+
+static int st_fail(const char *why) {
+  if (why)
+    err(why, 0, 0);
+  st_close(0);
+  g_st.rx = RX_FAILED;
+  return APPNET_STREAM_FAILED;
+}
+
+static int st_open(const Url *u) {
+  static const TlsLink link = {st_tcp_start, st_tcp_done, 0, appnet_ms};
+  u32 ip, st;
+  if (!appnet_ready())
+    return 0;
+  if (ctrl->version < AUDIO_TCP_BG_VERSION) {
+    err("streams need a newer AuroraOS", 0, 0);
+    return 0;
+  }
+  if (!appnet_resolve(u->host, &ip))
+    return 0;
+  if (u->tls) {
+    st = tls_stream_open(&link, u->host, ip, u->port, APPNET_TIMEOUT_MS,
+                         &g_tls_err);
+    if (st != WIFI_NETS_OK) {
+      if (st == WIFI_NETS_TLS)
+        err(u->host, ": ", tls_error_text(g_tls_err));
+      else
+        err("the ARM11 core is busy", 0, 0);
+      return 0;
+    }
+  } else {
+    wifi_tcp_setup(ip, u->port, APPNET_TIMEOUT_MS);
+    if (!st_tcp_start()) {
+      err("the ARM11 core is busy", 0, 0);
+      return 0;
+    }
+  }
+  for (u32 i = 0; i <= len_of(u->host); i++)
+    g_st.host[i] = u->host[i];
+  g_st.ip = ip;
+  g_st.port = u->port;
+  g_st.tls = u->tls;
+  g_st.open = 1;
+  return 1;
+}
+
+static int st_send_request(const Url *u, const char *headers, int secret) {
+  Out o = {g_st.tx, g_st.tx + sizeof(g_st.tx), 0};
+  out_str(&o, "GET ");
+  out_str(&o, u->path);
+  out_str(&o, " HTTP/1.1\r\nHost: ");
+  out_str(&o, u->host);
+  if (u->port != (u->tls ? 443u : 80u)) {
+    out_str(&o, ":");
+    out_num(&o, u->port);
+  }
+  out_str(&o, "\r\n");
+  if (!has_header(headers, "user-agent:"))
+    out_str(&o, "User-Agent: AuroraOS/" AURORA_VERSION_NUM " (app)\r\n");
+  if (!has_header(headers, "accept:"))
+    out_str(&o, "Accept: */*\r\n");
+  if (!has_header(headers, "accept-encoding:"))
+    out_str(&o, "Accept-Encoding: identity\r\n");
+  out_str(&o, "Connection: keep-alive\r\n");
+  out_headers(&o, headers, secret);
+  out_str(&o, "\r\n");
+  if (o.over) {
+    err("the request is too long (address and headers)", 0, 0);
+    return 0;
+  }
+  g_st.tx_len = (u32)(o.p - g_st.tx);
+  g_st.tx_done = 0;
+  g_st.head_len = 0;
+  g_st.len = g_st.got = 0;
+  g_st.status = 0;
+  g_st.closes = 0;
+  g_st.to_close = 0;
+  g_st.rx = RX_HEAD;
+  g_st.last_ms = appnet_ms();
+  return 1;
+}
+
+static int st_ended(void) {
+  if (g_st.tls) {
+    int e = 0;
+    if (!tls_stream_closed(&e))
+      return 0;
+    if (e)
+      g_tls_err = e;
+    return 1;
+  }
+  return wifi_tcp_state() == WIFI_TCP_CLOSED;
+}
+
+/* The request to `u`, on the connection there is if it still suits. */
+static int st_request(const Url *u) {
+  if (g_st.open && g_st.tls)
+    while (tls_stream_pump())
+      ;
+  /* A reply not read to its end leaves its bytes in the way of the next, and a
+   * server may have ended a connection left idle. */
+  if (g_st.open && (g_st.rx == RX_HEAD || g_st.rx == RX_BODY || g_st.closes || st_ended() ||
+                    !same_ci(g_st.host, u->host) || g_st.port != u->port ||
+                    g_st.tls != u->tls))
+    st_close(g_st.rx == RX_DONE);
+  if (!g_st.open && !st_open(u)) {
+    g_st.rx = RX_FAILED;
+    return 0;
+  }
+  /* As in appnet_http: a key meant for one server goes to no other, and never in
+   * clear text after asking for TLS. */
+  g_st.moved = !same_ci(u->host, g_st.first_host) || u->port != g_st.first_port ||
+               u->tls != g_st.first_tls;
+  if (!st_send_request(u, g_st.headers[0] ? g_st.headers : 0, g_st.moved)) {
+    g_st.rx = RX_FAILED;
+    return 0;
+  }
+  return 1;
+}
+
+int appnet_stream_get(const char *url, const char *headers) {
+  Url *u = &g_st_url;
+  u32 n = 0;
+  g_err[0] = 0;
+  if (!url_parse(url, u))
+    return 0;
+  if (headers) {
+    n = len_of(headers);
+    if (n >= sizeof(g_st.headers)) {
+      err("the request's headers are too long", 0, 0);
+      return 0;
+    }
+    for (u32 i = 0; i <= n; i++)
+      g_st.headers[i] = headers[i];
+  } else {
+    g_st.headers[0] = 0;
+  }
+  g_st.redirects = 0;
+  for (u32 i = 0; i <= len_of(u->host); i++)
+    g_st.first_host[i] = u->host[i];
+  g_st.first_port = u->port;
+  g_st.first_tls = u->tls;
+  return st_request(u);
+}
+
+/* Raw bytes off the connection: TLS's plaintext, or TCP's own. */
+static u32 st_recv(void *p, u32 n) {
+  return g_st.tls ? tls_stream_read(p, n) : wifi_tcp_read(p, n);
+}
+
+static u32 st_xmit(const void *p, u32 n) {
+  return g_st.tls ? tls_stream_write(p, n) : wifi_tcp_write(p, n);
+}
+
+/* A Content-Length, which read_num would cut short above 268 MB; 0 if it is too big
+ * for 32 bits. */
+static int st_length(const char *s, u32 *v) {
+  *v = 0;
+  for (; *s >= '0' && *s <= '9'; s++) {
+    u32 d = (u32)(*s - '0');
+    if (*v > (0xFFFFFFFFu - d) / 10u)
+      return 0;
+    *v = *v * 10u + d;
+  }
+  return 1;
+}
+
+/* The status line and headers in, one piece at a time: only as much as the
+ * head needs, so body bytes stay in the engine for appnet_stream_read. Returns
+ * 1 when the head is complete and parsed. */
+static int st_head(void) {
+  u32 code;
+  for (;;) {
+    u32 n = g_st.head_len;
+    if (n >= 4u && g_st.head[n - 4] == '\r' && g_st.head[n - 3] == '\n' &&
+        g_st.head[n - 2] == '\r' && g_st.head[n - 1] == '\n') {
+      const char *s = g_st.head;
+      g_st.head[n] = 0;
+      if (!prefix_ci(s, "http/")) {
+        st_fail("the reply is not HTTP");
+        return 0;
+      }
+      while (*s && *s != ' ')
+        s++;
+      code = 0;
+      if (*s)
+        read_num(s + 1, &code);
+      if (code < 100u || code >= 200u)
+        break;
+      /* An interim reply: the real one follows. */
+      g_st.head_len = 0;
+      continue;
+    }
+    if (n >= sizeof(g_st.head) - 1u) {
+      st_fail("the server's reply headers are too long");
+      return 0;
+    }
+    if (!st_recv(g_st.head + n, 1u))
+      return 0;
+    g_st.head_len = n + 1u;
+    g_st.last_ms = appnet_ms();
+  }
+  g_st.status = (int)code;
+  g_st.len = 0;
+  {
+    const char *v = find_header(g_st.head, "content-length:");
+    int sized = v != 0;
+    if (v && !st_length(v, &g_st.len)) {
+      st_fail("the reply is over 4 GB, too long for a stream");
+      return 0;
+    }
+    if (find_header(g_st.head, "transfer-encoding:")) {
+      st_fail("the server sent a chunked reply, which a stream cannot read");
+      return 0;
+    }
+    v = find_header(g_st.head, "connection:");
+    g_st.closes = v ? prefix_ci(v, "close") : prefix_ci(g_st.head, "http/1.0");
+    /* Nothing says where the body ends but the connection; these two have none. */
+    g_st.to_close = !sized && code != 204u && code != 304u;
+    if (g_st.to_close)
+      g_st.closes = 1;
+  }
+  return 1;
+}
+
+int appnet_stream_poll(void) {
+  int ended;
+  if (!g_st.open) {
+    if (g_st.rx == RX_FAILED)
+      return APPNET_STREAM_FAILED;
+    if (g_st.rx == RX_DONE)
+      return APPNET_STREAM_DONE;
+    return APPNET_STREAM_IDLE;
+  }
+  if (g_st.tls)
+    while (tls_stream_pump())
+      ;
+  else
+    wifi_tcp_alive();
+  /* Asked before reading, so all that came ahead of the end is there to read. */
+  ended = st_ended();
+
+  if (g_st.rx != RX_NONE && g_st.tx_done < g_st.tx_len) {
+    u32 k = st_xmit(g_st.tx + g_st.tx_done, g_st.tx_len - g_st.tx_done);
+    if (k) {
+      g_st.tx_done += k;
+      g_st.last_ms = appnet_ms();
+    }
+  }
+  if (g_st.rx == RX_HEAD && st_head()) {
+    const char *v = redirect(g_st.status) ? find_header(g_st.head, "location:") : 0;
+    g_st.last_ms = appnet_ms();
+    if (v) {
+      static char loc[APPNET_URL_MAX];
+      u32 n = 0;
+      for (; v[n] && v[n] != '\r' && v[n] != '\n'; n++) {
+        if (n + 1u >= sizeof(loc))
+          return st_fail("the redirect address is too long");
+        loc[n] = v[n];
+      }
+      while (n && (loc[n - 1] == ' ' || loc[n - 1] == '\t'))
+        n--;
+      loc[n] = 0;
+      if (!n || ++g_st.redirects > STREAM_REDIRECTS)
+        return st_fail("too many redirects, or one that cannot be followed");
+      if (!url_follow(&g_st_url, loc))
+        return st_fail(0);
+      /* Maybe a new host, and the body of this one is usually empty. */
+      st_close(0);
+      return st_request(&g_st_url) ? APPNET_STREAM_WAITING : APPNET_STREAM_FAILED;
+    }
+    g_st.rx = g_st.len || g_st.to_close ? RX_BODY : RX_DONE;
+  }
+  /* In a body what is still buffered can be read: appnet_stream_read finds the end. */
+  if (g_st.rx == RX_HEAD && ended) {
+    if (g_st.tls && g_tls_err)
+      return st_fail(tls_error_text(g_tls_err));
+    return st_fail("the server closed the connection before replying");
+  }
+  if ((g_st.rx == RX_HEAD || g_st.rx == RX_BODY) &&
+      appnet_ms() - g_st.last_ms >= STREAM_STALL_MS)
+    return st_fail("the server stopped sending");
+  return g_st.rx == RX_HEAD     ? APPNET_STREAM_WAITING
+         : g_st.rx == RX_BODY   ? APPNET_STREAM_BODY
+         : g_st.rx == RX_DONE   ? APPNET_STREAM_DONE
+         : g_st.rx == RX_FAILED ? APPNET_STREAM_FAILED
+                                : APPNET_STREAM_IDLE;
+}
+
+u32 appnet_stream_read(void *buf, u32 max) {
+  u32 n;
+  if (g_st.rx != RX_BODY)
+    return 0;
+  if (!g_st.to_close && max > g_st.len - g_st.got)
+    max = g_st.len - g_st.got;
+  n = st_recv(buf, max);
+  if (!n) {
+    if (!st_ended())
+      return 0;
+    /* Once more, for what came just before the end. */
+    n = st_recv(buf, max);
+    if (!n) {
+      if (g_st.to_close && !(g_st.tls && g_tls_err))
+        g_st.rx = RX_DONE;
+      else
+        st_fail("the connection ended in the middle of a reply");
+      return 0;
+    }
+  }
+  g_st.got += n;
+  g_st.last_ms = appnet_ms();
+  if (!g_st.to_close && g_st.got == g_st.len)
+    g_st.rx = RX_DONE;
+  return n;
+}
+
+int appnet_stream_status(void) { return g_st.status; }
+
+const char *appnet_stream_url(void) {
+  static char at[APPNET_URL_MAX + 280];
+  Out o = {at, at + sizeof(at) - 1u, 0};
+  out_str(&o, g_st_url.tls ? "https://" : "http://");
+  out_str(&o, g_st_url.host);
+  if (g_st_url.port != (g_st_url.tls ? 443u : 80u)) {
+    out_str(&o, ":");
+    out_num(&o, g_st_url.port);
+  }
+  out_str(&o, g_st_url.path);
+  *o.p = 0;
+  return at;
+}
+
+u32 appnet_stream_length(void) { return g_st.len; }
+
+int appnet_stream_moved(void) { return g_st.moved; }
 
 static const char *read_num(const char *s, u32 *v) {
   *v = 0;
@@ -818,10 +1254,6 @@ int appnet_header(const AppNetReply *r, const char *name, char *out,
   return 1;
 }
 
-static int redirect(int st) {
-  return st == 301 || st == 302 || st == 303 || st == 307 || st == 308;
-}
-
 int appnet_http(const char *method, const char *url, const char *headers,
                 const void *body, u32 blen, AppNetReply *r) {
   static Url u;
@@ -876,20 +1308,8 @@ int appnet_http(const char *method, const char *url, const char *headers,
       err("too many redirects", 0, 0);
       return r->status;
     }
-    if (loc[0] == '/' && loc[1] == '/') {
-      static char abs[APPNET_URL_MAX + 8];
-      Out o = {abs, abs + sizeof(abs) - 1u, 0};
-      out_str(&o, u.tls ? "https:" : "http:");
-      out_str(&o, loc);
-      *o.p = 0;
-      if (!url_parse(abs, &u))
-        return r->status;
-    } else if (prefix_ci(loc, "http://") || prefix_ci(loc, "https://")) {
-      if (!url_parse(loc, &u))
-        return r->status;
-    } else if (!url_relative(&u, loc)) {
+    if (!url_follow(&u, loc))
       return r->status;
-    }
     /* As browsers do: 303 always, and 301 or 302 after a POST, become GET. */
     if (!same_ci(method, "HEAD") &&
         (r->status == 303 || ((r->status == 301 || r->status == 302) &&

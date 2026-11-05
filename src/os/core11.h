@@ -15,37 +15,42 @@ typedef volatile uint32_t vu32;
 static inline void dsb(void) {
   __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0) : "memory");
 }
-static inline void dcache_clean(void) {
-  __asm__ volatile("mcr p15, 0, %0, c7, c10, 0" ::"r"(0) : "memory");
-  dsb();
-}
-/* One cache line, for the command poll; a whole-cache operation per pass is too
- * slow. */
-static inline void dcache_inval_line(const void *p) {
-  __asm__ volatile("mcr p15, 0, %0, c7, c6, 1" ::"r"(p) : "memory");
-}
+/* What this core shares is never in its cache: Mmu11.c maps it strongly ordered,
+ * and without that map the D-cache is off. So these only order its writes. */
+static inline void dcache_clean(void) { dsb(); }
+static inline void dcache_inval_line(const void *p) { (void)p; }
 static inline void dcache_clean_line(const void *p) {
-  __asm__ volatile("mcr p15, 0, %0, c7, c10, 1" ::"r"(p) : "memory");
-}
-static inline void dcache_clean_inval(void) {
-  __asm__ volatile("mcr p15, 0, %0, c7, c14, 0" ::"r"(0) : "memory");
+  (void)p;
   dsb();
 }
+static inline void dcache_clean_inval(void) { dsb(); }
 
-/* Runs from uncached memory: a pass takes roughly a quarter of a microsecond,
- * so it only suits short pauses. */
+/* How long a pass takes depends on the caches and the clock, so this is only
+ * for what happens with Mmu11.c's map off, and for short pauses. */
 static inline void spin(uint32_t n) {
   while (n--)
     __asm__ volatile("nop");
 }
-/* At least `ms`, timed by this core's private timer (Core11.c). */
+/* At least `ms`: 804 MHz's millisecond, so three times that at 268 MHz, the
+ * length the codec and GPU start-up were proven with (Core11.c). */
 void sleep_ms(uint32_t ms);
+/* A free-running microsecond clock at any CPU clock, wrapping at 2^32. */
+uint32_t core11_now_us(void);
+/* The CPU clock over 268 MHz: 1, 2 (536 MHz) or 3 (804 MHz). */
+uint32_t core11_clock_div(void);
+
+/* Mmu11.c. mmu11_off leaves everything in memory with the caches and any L2
+ * off, for what must run without them; mmu11_on puts them back. */
+void mmu11_init(void);
+void mmu11_on(void);
+void mmu11_off(void);
+void mmu11_flush_all(void);
 
 /* IO_COMMON_BASE = 0x10100000 on the ARM11 (libn3ds mem_map). */
 #define IO_BASE 0x10100000u
 
 #define CFG11_SPI_CNT (IO_BASE + 0x401C0u) /* u16: bits0-2 enable new SPI IF */
-#define PDN_I2S_CNT   (IO_BASE + 0x41220u) /* u8:  bit1 = I2S clock 2 enable  */
+#define PDN_I2S_CNT   (IO_BASE + 0x41220u) /* u8:  bit1 = I2S clock 2 enable */
 
 /* SoC I2S controller (== GBATEK "SNDEXCNT"): two u16 halves at 0x10145000/2. */
 #define I2S1_CNT (IO_BASE + 0x45000u) /* u16 */
@@ -106,6 +111,8 @@ void wifi11_probe(void);
 void wifi11_boot(uint32_t opts);
 /* `op` is a WIFI_NETOP_*, on the session a WIFI_OPT_STAY boot left up. */
 void wifi11_net(uint32_t op);
+/* Keeps a WIFI_NETOP_TCP_BG connection going; every pass of the main loop. */
+void wifi11_tick(void);
 
 void gpu11_run(void);
 /* Leaves framebuffer A on screen, for whatever runs on the panels next. */
@@ -138,6 +145,19 @@ void backlight11_refresh(void);
 /* AUDIO_CMD_N3DS: ask for New 3DS clock mode `mode` and report the outcome in
  * ct->n3ds_before, n3ds_after and n3ds_status. */
 void clock11_set(AudioCtrl *ct, uint32_t mode);
+/* The running mode's clock over 268 MHz; see core11_clock_div. */
+uint32_t clock11_div(const AudioCtrl *ct);
+
+/* Does what VideoMail asks; every pass of the main loop. video11_reset ends it,
+ * sound and all. */
+void video11_tick(void);
+void video11_reset(void);
+void video11_init(void);
+
+/* AUDIO_CMD_SMP: arg is the op's operand (smp.h). */
+void smp11_command(AudioCtrl *ct, uint32_t op, uint32_t arg);
+/* After Clock11.c has had the timer or changed the clock. */
+void core11_clock_restart(AudioCtrl *ct);
 
 /* AUDIO_CMD_RUN11: calls `entry` (FCRAM, ARM code) with `arg`, with the MMU,
  * the L1 caches, branch prediction and the VFP on until it returns. */

@@ -21,18 +21,18 @@ static void crash11_init(void) {
 
   for (int i = 0; i < 8; i++)
     vec[i] = 0xE59FF018u; /* LDR PC, [PC, #0x18] */
-  vec[8]  = (uint32_t)crash_hang11;      /* reset    */
-  vec[9]  = (uint32_t)crash_vec_undef11; /* undef    */
-  vec[10] = (uint32_t)crash_hang11;      /* swi      */
+  vec[8]  = (uint32_t)crash_hang11;      /* reset */
+  vec[9]  = (uint32_t)crash_vec_undef11; /* undef */
+  vec[10] = (uint32_t)crash_hang11;      /* swi */
   vec[11] = (uint32_t)crash_vec_pabt11;  /* prefetch */
-  vec[12] = (uint32_t)crash_vec_dabt11;  /* data     */
+  vec[12] = (uint32_t)crash_vec_dabt11;  /* data */
   vec[13] = (uint32_t)crash_hang11;      /* reserved */
-  vec[14] = (uint32_t)crash_hang11;      /* irq      */
-  vec[15] = (uint32_t)crash_hang11;      /* fiq      */
+  vec[14] = (uint32_t)crash_hang11;      /* irq */
+  vec[15] = (uint32_t)crash_hang11;      /* fiq */
 
-  __asm__ volatile("mcr p15, 0, %0, c7, c10, 0" ::"r"(0)); /* clean D-cache  */
-  __asm__ volatile("mcr p15, 0, %0, c7, c5, 0" ::"r"(0));  /* invalidate I   */
-  __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0)); /* DSB            */
+  __asm__ volatile("mcr p15, 0, %0, c7, c10, 0" ::"r"(0)); /* clean D-cache */
+  __asm__ volatile("mcr p15, 0, %0, c7, c5, 0" ::"r"(0));  /* invalidate I */
+  __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" ::"r"(0)); /* DSB */
 }
 
 /* Each panel's LCD block (3dbrew "LCD Registers"): +0x00 bit 0 turns ABL on,
@@ -90,19 +90,20 @@ void backlight11_set(AudioCtrl *ct, uint32_t level) {
   ct->diag7 = LCD_BL_DUTY(LCD_BOT);
 }
 
-/* This core's MPCore private timer, used one-shot. Clock11.c borrows it and
- * puts it back. */
+/* This core's MPCore private timer runs free from start-up. It counts at half
+ * the CPU clock, so a prescaler of 134 gives a tick a microsecond at 268 MHz
+ * and three at 804 MHz. Clock11.c borrows it for a moment during a switch. */
 #define PTIMER_LOAD  0x17E00600u
 #define PTIMER_COUNT 0x17E00604u
 #define PTIMER_CNT   0x17E00608u
 #define PTIMER_STAT  0x17E0060Cu
 #define PTIMER_EN    (1u << 0)
-#define PTIMER_EVENT (1u << 0)
+#define PTIMER_RUN   ((133u << 8) | 2u | 1u) /* prescaler, reload, enable */
 
-/* The timer counts at half the CPU clock. Taking the New 3DS's 804 MHz keeps a
- * wait from ever being short; at 268 MHz it lasts three times as long, which
- * the codec settle delays allow. */
-#define PTIMER_PER_MS (804000000u / 2u / 1000u)
+/* A millisecond at 804 MHz, in those ticks. It keeps a wait from ever being
+ * short; at 268 MHz it lasts three times as long, which the codec settle delays
+ * allow. */
+#define PTIMER_TICKS_PER_MS 3000u
 
 static int ptimer_state; /* 0 unchecked, 1 counts, -1 does not */
 
@@ -118,27 +119,60 @@ static int ptimer_counts(void) {
   return b < a;
 }
 
-/* Timed rather than counted: this core runs uncached, where how long a nop
- * loop takes is anyone's guess (docs/audio.md "A core's start-up"). */
+static uint32_t tb_raw, tb_us, tb_rem, tb_div = 1u;
+
+static inline uint32_t ptimer_ticks(void) { return ~MMIO32(PTIMER_COUNT); }
+
+uint32_t core11_clock_div(void) { return tb_div; }
+
+/* Ticks folded into microseconds as they pass, so the result still wraps at
+ * 2^32 at any clock, which `now - then` needs. */
+uint32_t core11_now_us(void) {
+  uint32_t raw = ptimer_ticks(), d = raw - tb_raw;
+  tb_raw = raw;
+  if (tb_div == 1u) {
+    tb_us += d;
+    return tb_us;
+  }
+  d += tb_rem;
+  /* The reciprocal of 3, since a pass here should cost next to nothing. */
+  uint32_t q = tb_div == 3u
+                   ? (uint32_t)(((uint64_t)d * 0xAAAAAAABu) >> 33)
+                   : d >> 1;
+  tb_rem = d - q * tb_div;
+  tb_us += q;
+  return tb_us;
+}
+
+/* Starts the timer, or restarts it after Clock11.c had it. The clock carries on
+ * from its last reading, at the new rate, so the moments of a switch do not
+ * count, and nothing waiting across one sees a jump. Publishes the clock too. */
+static void timebase_start(AudioCtrl *ct) {
+  MMIO32(PTIMER_CNT) = 0;
+  MMIO32(PTIMER_STAT) = 1u;
+  MMIO32(PTIMER_LOAD) = 0xFFFFFFFFu;
+  MMIO32(PTIMER_CNT) = PTIMER_RUN;
+  tb_raw = ptimer_ticks();
+  tb_rem = 0;
+  tb_div = clock11_div(ct);
+  ct->clock_div = tb_div;
+}
+
+void core11_clock_restart(AudioCtrl *ct) { timebase_start(ct); }
+
+/* Timed rather than counted: how long a nop loop takes depends on the caches
+ * and the clock. */
 void sleep_ms(uint32_t ms) {
-  if (!ptimer_state)
-    ptimer_state = ptimer_counts() ? 1 : -1;
   if (ptimer_state < 0) {
     spin(ms * 300000u);
     return;
   }
   while (ms) {
     uint32_t part = ms > 1000u ? 1000u : ms;
+    uint32_t t0 = ptimer_ticks();
     ms -= part;
-    MMIO32(PTIMER_CNT) = 0;
-    MMIO32(PTIMER_STAT) = PTIMER_EVENT;
-    MMIO32(PTIMER_LOAD) = part * PTIMER_PER_MS;
-    MMIO32(PTIMER_CNT) = PTIMER_EN;
-    /* One-shot: it stops at zero and flags the event. */
-    while (!(MMIO32(PTIMER_STAT) & PTIMER_EVENT) && MMIO32(PTIMER_COUNT))
+    while (ptimer_ticks() - t0 < part * PTIMER_TICKS_PER_MS)
       ;
-    MMIO32(PTIMER_CNT) = 0;
-    MMIO32(PTIMER_STAT) = PTIMER_EVENT;
   }
 }
 
@@ -160,12 +194,21 @@ static void core11_park(AudioCtrl *ct) {
   for (uint32_t i = 0; i < n; i++)
     d[i] = s[i];
   MMIO32(AUDIO_ARM11_MAILBOX) = 0;
+  /* The next core starts from nothing and may load over this image. */
+  mmu11_off();
   ct->magic = 0;
   ct->ack_seq = ct->cmd_seq;
-  dcache_clean();
+  dsb();
   __asm__ volatile("mcr p15, 0, %0, c7, c5, 0" ::"r"(0)); /* invalidate I */
   ((void (*)(void))AUDIO_PARK_ADDR)();
 }
+
+/* The main loop's rhythm, in time, since a pass's length depends on the caches
+ * and the clock. */
+#define CORE_PASS_US  50u
+#define CORE_TOUCH_US 5000u
+#define CORE_MENU_US  5000u
+#define CORE_LID_US   100000u
 
 void core11_sleep_poll(void) {
   if (MMIO8(GPIO1_DATA) & GPIO1_SHELL_CLOSED) {
@@ -190,9 +233,7 @@ void core11_sleep_poll(void) {
 
 void audio11_main(void) {
   AudioCtrl *ct = (AudioCtrl *)AUDIO_CTRL_ADDR;
-  int poll_tick = 0;
-  int menu_tick = 0;
-  uint32_t lid_tick = 0;
+  uint32_t lid_t, menu_t, touch_t;
 
   ct->status = AUDIO_ST_BOOT;
   ct->ack_seq = ct->cmd_seq;
@@ -200,6 +241,11 @@ void audio11_main(void) {
   ct->diag0 = ct->diag1 = ct->diag2 = ct->diag3 = 0;
   ct->diag4 = ct->diag5 = ct->diag6 = ct->diag7 = 0;
   ct->socinfo = *(volatile uint32_t *)0x10140FFC; /* CFG11_SOCINFO */
+  ptimer_state = ptimer_counts() ? 1 : -1;
+  timebase_start(ct);
+  /* mmu11_init reads the clock div through l2_start, so after the timebase. */
+  mmu11_init();
+  video11_init();
   wifi11_init();
   ct->magic = AUDIO_MAGIC;
   dcache_clean();
@@ -214,20 +260,20 @@ void audio11_main(void) {
   /* After audio is up, so a touch problem cannot stop audio from initialising. */
   touch11_init();
 
+  lid_t = menu_t = touch_t = core11_now_us();
   for (;;) {
-    /* Check about every 100-150 ms, depending on the selected New 3DS clock. */
-    if (++lid_tick >= 32768u) {
-      lid_tick = 0;
+    uint32_t now = core11_now_us();
+    if (now - lid_t >= CORE_LID_US) {
+      lid_t = now;
       core11_sleep_poll();
     }
 
     /* Polled before a pending command is taken, so an app waiting on its
      * present stays held there while the menu is open. */
-    if (++menu_tick >= 16) {
-      menu_tick = 0;
+    if (now - menu_t >= CORE_MENU_US) {
+      menu_t = now;
       system_menu11_poll();
     }
-    dcache_inval_line((const void *)&ct->cmd_seq);
     if (ct->cmd_seq != ct->ack_seq) {
       dcache_clean_inval(); /* a command is here: pull everything it needs */
       uint32_t cmd = ct->cmd;
@@ -241,12 +287,19 @@ void audio11_main(void) {
           wifi11_net(arg0);
         else if (cmd == AUDIO_CMD_GPU)
           gpu11_run();
-        else if (cmd == AUDIO_CMD_N3DS)
+        else if (cmd == AUDIO_CMD_N3DS) {
+          /* As libn3ds says of the same switch, with no map on any core. */
+          mmu11_off();
           clock11_set(ct, arg0);
+          timebase_start(ct);
+          mmu11_on();
+        }
         else if (cmd == AUDIO_CMD_BRIGHTNESS)
           backlight11_set(ct, arg0);
         else if (cmd == AUDIO_CMD_RUN11)
           run11(ct, arg0, ct->arg1);
+        else if (cmd == AUDIO_CMD_SMP)
+          smp11_command(ct, arg0, ct->arg1);
         else if (cmd == AUDIO_CMD_PARK)
           core11_park(ct);
       }
@@ -254,11 +307,15 @@ void audio11_main(void) {
       dcache_clean();
     }
 
-    if (++poll_tick >= 16) {
-      poll_tick = 0;
+    if (now - touch_t >= CORE_TOUCH_US) {
+      touch_t = now;
       touch11_poll();
     }
     stereo11_tick();
-    spin(1200);
+    wifi11_tick();
+    video11_tick();
+    /* Reads only this core's own timer, so the ARM9 keeps the bus meanwhile. */
+    while (core11_now_us() - now < CORE_PASS_US)
+      ;
   }
 }

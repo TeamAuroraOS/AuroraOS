@@ -1,6 +1,7 @@
 #include "aurora.h"
 #include "audio.h"
 #include "gpu.h"
+#include "smp.h"
 #include "timer.h"
 #include "audio11_blob.h" /* generated: audio11_bin[], audio11_bin_len */
 
@@ -204,6 +205,41 @@ void audio_set_brightness(uint32_t level) {
   gpu_wait_idle();
   if (audio_alive())
     post_wait(AUDIO_CMD_BRIGHTNESS, level);
+}
+
+uint32_t audio_core_flags(void) {
+  sync_line(&ctrl->core_flags);
+  return ctrl->core_flags;
+}
+
+uint32_t audio_clock_div(void) {
+  sync_line(&ctrl->clock_div);
+  return ctrl->clock_div ? ctrl->clock_div : 1u;
+}
+
+uint32_t audio_smp(uint32_t op, uint32_t arg) {
+  gpu_wait_idle();
+  if (!audio_alive() || ctrl->version < AUDIO_SMP_VERSION)
+    return 0;
+  ctrl->arg1 = arg;
+  sync_line(&ctrl->arg1);
+  post(AUDIO_CMD_SMP, op);
+  /* The self-test takes seconds, and a start with a clock switch takes far
+   * longer than the wait for an ordinary ack. */
+  for (u32 t0 = timer_ticks(); timer_us_since(t0) < 8000000u;) {
+    os_cache_sync();
+    if (ctrl->ack_seq == ctrl->cmd_seq)
+      return 1u;
+    delay(2000);
+  }
+  return 0;
+}
+
+void audio_smp_end(void) {
+  const SmpBlock *b = (const SmpBlock *)SMP_BLOCK_ADDR;
+  os_cache_sync();
+  if (audio_alive() && ctrl->version >= AUDIO_SMP_VERSION && b->started)
+    audio_smp(SMP_OP_END, 0);
 }
 
 void audio_play_pcm(uint32_t samples, uint32_t rate, uint32_t depth) {

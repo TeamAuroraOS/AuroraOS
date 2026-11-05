@@ -49,7 +49,7 @@ OS_SOURCES = [OS_SRC / n for n in (
     "sdmmc.c",
     "os/Gpu9.c", "os/Touch9.c", "os/Timer9.c", "os/crash.c", "os/crash.s",
     "os/AppNet.c", "os/WiFiJoin.c", "os/Crypto.c", "os/WiFiTcp.c",
-    "os/Tls.c", "os/TlsRoots.c")]
+    "os/Tls.c", "os/TlsRoots.c", "os/Json.c")]
 BEARSSL = AURORA_ROOT / "lib" / "bearssl"
 BEARSSL_SOURCES = sorted((BEARSSL / "src").glob("*/*.c"))
 
@@ -304,10 +304,35 @@ def safe_name(name: str) -> str:
     return re.sub(r'[^A-Za-z0-9 _.()+-]', "_", name)[:64] or "app"
 
 
+def video_objects(work: Path, build_dir: Path, verbose: bool) -> list:
+    """The engine as an object holding its binary, and the ARM9 side of video."""
+    sys.path.insert(0, str(SDK_DIR / "video11"))
+    import build as video11_build
+    blob = video11_build.build(build_dir / "video11", verbose)
+    out = blob.parent / "video11_blob.o"
+    if not out.exists() or out.stat().st_mtime < blob.stat().st_mtime:
+        # From the blob's folder, so the symbols do not take a path's name.
+        r = subprocess.run([find_tool(OBJCOPY), "-I", "binary", "-O", "elf32-littlearm",
+                            "-B", "arm", "--rename-section",
+                            ".data=.rodata.video11,alloc,load,readonly,data,contents",
+                            blob.name, out.name], cwd=blob.parent, env=tool_env(),
+                           capture_output=True, text=True)
+        if r.returncode:
+            raise BuildError(r.stderr)
+    objs = [out]
+    jobs = []
+    for name in ("app_video.c", "app_fmp4.c"):
+        o = work / ("rt_" + name[:-2] + ".o")
+        objs.append(o)
+        jobs.append((RUNTIME_DIR / name, o, RUNTIME_CFLAGS + ["-fbuiltin"]))
+    compile_all(jobs, verbose)
+    return objs
+
+
 def build(inputs: list, output: Path | None, *, icon: Path | None = None,
           build_dir: Path = DEFAULT_BUILD_DIR, cflags: list | None = None,
           opt: str = "2", magic: str = "AURC", rebuild: bool = False,
-          verbose: bool = False) -> Path:
+          video: bool = False, verbose: bool = False) -> Path:
     find_tool(CC)
     find_tool(OBJCOPY)
     sources, found_icon = collect_sources(inputs)
@@ -335,6 +360,8 @@ def build(inputs: list, output: Path | None, *, icon: Path | None = None,
         app_objs.append(obj)
         jobs.append((src, obj, ARCH if src.suffix == ".s" else flags))
     compile_all(jobs, verbose)
+    if video:
+        app_objs += video_objects(work, build_dir, verbose)
 
     elf = work / (name + ".elf")
     payload = work / (name + ".payload")
@@ -425,7 +452,8 @@ def cmd_build(a) -> int:
               build_dir=Path(a.build_dir) if a.build_dir else DEFAULT_BUILD_DIR,
               cflags=[f"-I{d}" for d in a.include] + [f"-D{d}" for d in a.define]
               + (a.cflags.split() if a.cflags else []),
-              opt=a.opt, magic=a.magic, rebuild=a.rebuild, verbose=a.verbose)
+              opt=a.opt, magic=a.magic, rebuild=a.rebuild, video=a.video,
+              verbose=a.verbose)
     except BuildError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -484,6 +512,9 @@ def main(argv=None) -> int:
     b.add_argument("--build-dir", help=f"objects (default {DEFAULT_BUILD_DIR})")
     b.add_argument("--rebuild", action="store_true",
                    help="compile the SDK runtime again too")
+    b.add_argument("--video", action="store_true",
+                   help="include the video engine (about 2 MB; the first build "
+                        "also compiles FFmpeg)")
     b.add_argument("-v", "--verbose", action="store_true",
                    help="show the toolchain commands")
     b.set_defaults(func=cmd_build)
