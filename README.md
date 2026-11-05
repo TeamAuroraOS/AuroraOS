@@ -19,7 +19,7 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta 7 v0.1.6.**
 
 | Area | State | Notes |
 |------|-------|-------|
-| Home Menu + Settings | working | app grid, accent colors, three languages, About page with More Info (eMMC CID) and credits (the card's free space is counted while the page stays responsive); Settings > Reset deletes `USER.dat` so the setup runs again |
+| Home Menu + Settings | working | app grid, accent colors, four languages, About page with More Info (eMMC CID) and credits (the card's free space is counted while the page stays responsive); Settings > Reset deletes `USER.dat` so the setup runs again |
 | Wallpaper themes | new | Settings > Theme lists the folders in `SD:/Aurora/themes` that hold a 400x240 `top.png` and a 320x240 `bottom.png`, and puts them on both screens instead of the built-in wallpaper; the choice is kept in `SD:/Aurora/theme.txt`; see [`docs/home.md`](docs/home.md) |
 | Deleting apps | new | **Y** on an SD app > Delete App removes its `.bin` after asking, then offers to delete its data folder as well; see [`docs/home.md`](docs/home.md) |
 | Home Menu pages and folders | working | up to 12 pages of 15; folders two levels deep; moving apps by dragging or with the D-pad; Power in the bar; saved in `SD:/Aurora/HomeMenu.txt`; see [`docs/home.md`](docs/home.md) |

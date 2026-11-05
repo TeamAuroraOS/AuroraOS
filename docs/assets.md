@@ -309,8 +309,8 @@ covers are `assets/fonts/Figtree-{Regular,Bold}.ttf`. The copyright line
 declares no Reserved Font Name.
 
 Each atlas covers U+0020 to U+00FF: printable ASCII plus Latin-1, which holds
-every accented letter Spanish and French use (acute, grave, circumflex,
-diaeresis, tilde, cedilla, and the inverted marks). U+007F to U+009F are
+every accented letter Spanish, French and Portuguese use (acute, grave,
+circumflex, diaeresis, tilde, cedilla, and the inverted marks). U+007F to U+009F are
 control codes and get empty glyphs, as does any codepoint the font lacks.
 Strings are UTF-8, decoded by `draw_text` and `text_width` in `src/screen.c`.
 C sources write the accents as escapes such as `\u00E9`, so the tree

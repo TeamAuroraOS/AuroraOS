@@ -13,7 +13,7 @@ When the firmware is missing from the SD card, Settings > Wi-Fi offers to copy
 it from the console's own NWM module, read from the system NAND after a button
 code, so no PC is needed (see *Copying the firmware on the console*). The
 setup wizard's Network step leads to the same screen, and Settings > Wi-Fi
-and the copy speak English, Spanish and French.
+and the copy speak English, Spanish, French and Portuguese.
 
 **Apps reach the network (2026-10-08; Auric's net example works on a New
 3DS).** Auric

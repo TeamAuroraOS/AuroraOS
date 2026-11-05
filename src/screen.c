@@ -177,8 +177,8 @@ void draw_string(volatile u8 *fb, int x, int y, int screen_height,
         else if (cp >= 0xE8u && cp <= 0xEBu) { mark = cp == 0xE8u ? 1 : cp == 0xE9u ? 2 : cp == 0xEAu ? 6 : 7; cp = 'e'; }
         else if (cp >= 0xCCu && cp <= 0xCFu) { mark = cp == 0xCCu ? 1 : cp == 0xCDu ? 2 : cp == 0xCEu ? 6 : 7; cp = 'I'; }
         else if (cp >= 0xECu && cp <= 0xEFu) { mark = cp == 0xECu ? 1 : cp == 0xEDu ? 2 : cp == 0xEEu ? 6 : 7; cp = 'i'; }
-        else if (cp == 0xD2u || cp == 0xD3u || cp == 0xD4u || cp == 0xD6u) { mark = cp == 0xD2u ? 1 : cp == 0xD3u ? 2 : cp == 0xD4u ? 6 : 7; cp = 'O'; }
-        else if (cp == 0xF2u || cp == 0xF3u || cp == 0xF4u || cp == 0xF6u) { mark = cp == 0xF2u ? 1 : cp == 0xF3u ? 2 : cp == 0xF4u ? 6 : 7; cp = 'o'; }
+        else if (cp >= 0xD2u && cp <= 0xD6u) { mark = cp == 0xD2u ? 1 : cp == 0xD3u ? 2 : cp == 0xD4u ? 6 : cp == 0xD5u ? 3 : 7; cp = 'O'; }
+        else if (cp >= 0xF2u && cp <= 0xF6u) { mark = cp == 0xF2u ? 1 : cp == 0xF3u ? 2 : cp == 0xF4u ? 6 : cp == 0xF5u ? 3 : 7; cp = 'o'; }
         else if (cp == 0xD9u || cp == 0xDAu || cp == 0xDBu || cp == 0xDCu) { mark = cp == 0xD9u ? 1 : cp == 0xDAu ? 2 : cp == 0xDBu ? 6 : 7; cp = 'U'; }
         else if (cp == 0xF9u || cp == 0xFAu || cp == 0xFBu || cp == 0xFCu) { mark = cp == 0xF9u ? 1 : cp == 0xFAu ? 2 : cp == 0xFBu ? 6 : 7; cp = 'u'; }
         else if (cp == 0xDDu) { cp = 'Y'; mark = 2; }

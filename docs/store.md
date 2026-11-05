@@ -17,8 +17,8 @@ carousel (`shop-main-bottom` with the `shop-main-icon-*`, `shop-promo-1` and
 (`downloading`) and the Home Menu preview (`topscreen-home-menu`,
 `topscreen-icon`).
 
-aShop's own screens follow the language chosen in setup (English, Spanish or
-French); the catalogue's text (app pages, section names, news) is shown as the
+aShop's own screens follow the language chosen in setup (English, Spanish,
+French or Portuguese); the catalogue's text (app pages, section names, news) is shown as the
 server sends it.
 
 ## Opening it

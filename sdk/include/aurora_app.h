@@ -360,6 +360,7 @@ typedef enum {
   SYS_LANG_ENGLISH = 0,
   SYS_LANG_SPANISH = 1,
   SYS_LANG_FRENCH = 2,
+  SYS_LANG_PORTUGUESE = 3,
 } SysLanguage;
 
 /* From the user's settings (the setup wizard and Settings). */

@@ -8,7 +8,7 @@
 | The system menu (L + Down + Select) | `src/os/HomeMenu.c` (`home_system_menu`), `get_keys_down()` in `src/os/os_main.c`; in apps `src/os/SystemMenu11.c` and `include/system_menu.h` |
 | Delete App | `MI_DELETE_APP` in `src/os/HomeMenu.c`, the `remove_app` hook (`home_remove_app` in `src/os/os_main.c`) |
 | Wallpaper themes (Settings > Theme) | `theme_*` in `src/os/os_main.c`, `ui_theme_load` / `ui_theme_clear` in `src/ui.c` |
-| Strings, in English, Spanish and French | `src/os/os_setup.c`, `include/lang.h` |
+| Strings, in English, Spanish, French and Portuguese | `src/os/os_setup.c`, `include/lang.h` |
 | Folder icon | `icons/folder-icon-without-text.png` (`ASSET_ICON_FOLDER_*`), `icon_folder_bits` in `include/icons.h` |
 
 **Status: working on a New 3DS** (2026-10-03). Every behaviour below was also
