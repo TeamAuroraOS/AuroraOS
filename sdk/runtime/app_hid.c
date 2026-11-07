@@ -32,6 +32,7 @@ static u32 pad(void) {
                        : : "r"(&menu->menu_open) : "memory");
       if (!menu->menu_open)
         break;
+      app_sock_tick();
       delay(60000);
     }
   }

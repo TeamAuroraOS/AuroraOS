@@ -54,6 +54,8 @@ static bool begin(void) {
     g_err = "a network call is already running";
     return false;
   }
+  if (g_app_sock)
+    g_app_sock->settle();
   g_err = NULL;
   g_home = false;
   g_in_call = true;
@@ -68,6 +70,15 @@ static void end(void) {
   g_in_call = false;
   if (g_home)
     exit(0);
+}
+
+bool app_net_begin(void) { return begin(); }
+void app_net_end(void) { end(); }
+void app_net_fail(const char *why) { g_err = why; }
+
+void app_net_waiting(u32 ms) {
+  if (g_wait_fn)
+    g_wait_fn(ms);
 }
 
 const char *net_error(void) { return g_err ? g_err : appnet_error(); }

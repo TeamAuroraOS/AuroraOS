@@ -13,6 +13,35 @@
 /* Where the stdio file descriptors start: 0..2 are the console. */
 #define APP_FD_FIRST 3
 #define APP_FD_COUNT 16
+/* Sockets (app_socket.c) come after the files. */
+#define APP_SOCK_FIRST (APP_FD_FIRST + APP_FD_COUNT)
+#define APP_SOCK_COUNT 8
+
+/* Filled in by the first socket(), so an app that never makes one does not
+ * link the code behind them. Negative errno values on failure. */
+typedef struct {
+  int (*read)(int fd, void *buf, size_t n);
+  int (*write)(int fd, const void *buf, size_t n);
+  int (*close)(int fd);
+  int (*fstat)(int fd, void *st);
+  /* Tells the core the app still uses its connection: the core drops one the
+   * app has not touched for WIFI_TCP_ALIVE_MS. */
+  void (*tick)(void);
+  /* Waits for a closed socket's connection to end, so the next network call
+   * gets the core. */
+  void (*settle)(void);
+  void (*leave)(void);
+} AppSockOps;
+extern const AppSockOps *g_app_sock;
+
+static inline bool app_sock_fd(int fd) {
+  return fd >= APP_SOCK_FIRST && fd < APP_SOCK_FIRST + APP_SOCK_COUNT;
+}
+
+static inline void app_sock_tick(void) {
+  if (g_app_sock)
+    g_app_sock->tick();
+}
 
 extern bool g_app_leaving;
 bool app_core(void);
@@ -48,6 +77,14 @@ void app_snd_leave(void);
 bool app_net_busy(void);
 /* Waits for such a call before the app leaves. */
 void app_net_leave(void);
+/* Around a call that posts to the core and waits: net_on_wait() runs
+ * meanwhile, and HOME pressed during it leaves once it is over. */
+bool app_net_begin(void);
+void app_net_end(void);
+/* Sets net_error() for a failure found by the SDK itself. */
+void app_net_fail(const char *why);
+/* The net_on_wait() function, if any, for a socket call that waits. */
+void app_net_waiting(u32 ms);
 
 /* The C library's file calls: negative errno values on failure. */
 bool app_fs_mount(void);
@@ -70,6 +107,7 @@ int app_fs_fsync(int fd);
 int app_fs_chdir(const char *path);
 /* "/" or "/Aurora/...". */
 const char *app_fs_getcwd(void);
+void app_fs_dir_rewind(FsDir *dir);
 void app_fs_close_all(void);
 
 /* The ARM9 timer as 64 bits; wall-clock time is built on this. */

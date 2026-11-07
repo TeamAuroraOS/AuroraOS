@@ -31,6 +31,7 @@ AURORA_SOURCES = [
     (os.path.join("os", "Crypto.c"), os.path.join("aurora_src", "os")),
     (os.path.join("os", "Json.c"), os.path.join("aurora_src", "os")),
     (os.path.join("os", "WiFiTcp.c"), os.path.join("aurora_src", "os")),
+    (os.path.join("os", "WiFiUdp.c"), os.path.join("aurora_src", "os")),
     (os.path.join("os", "Tls.c"), os.path.join("aurora_src", "os")),
     (os.path.join("os", "TlsRoots.c"), os.path.join("aurora_src", "os")),
     ("power.c", "aurora_src"),

@@ -35,7 +35,7 @@
 extern "C" {
 #endif
 
-#define AURORA_SDK_VERSION "1.5"
+#define AURORA_SDK_VERSION "1.6"
 
 #define AURORA_PRINTF(fmt, args) __attribute__((format(printf, fmt, args)))
 
@@ -302,7 +302,8 @@ typedef struct {
 
 typedef struct FsDir FsDir;
 
-/* The entries of a folder, unsorted, without "." and "..". */
+/* The entries of a folder, unsorted, without "." and "..". From SDK 1.6
+ * <dirent.h> (opendir(), readdir(), scandir(), ...) reads folders too. */
 FsDir *fs_dir_open(const char *path);
 bool fs_dir_read(FsDir *dir, FsEntry *entry); /* false at the end */
 void fs_dir_close(FsDir *dir);
@@ -415,7 +416,9 @@ void net_on_wait(void (*fn)(uint32_t ms));
 /* Plain TCP, once: connects to host:port, sends `length` bytes (2 KB at
  * most) and reads what comes back until the server closes the connection.
  * Copies up to `max` bytes to `reply` and returns how many came (at most
- * 1020 KB), or -1. */
+ * 1020 KB), or -1. For more than one exchange, BSD sockets
+ * (<sys/socket.h>, <netdb.h>, from SDK 1.6) keep a TCP connection open, and
+ * from ARM11 core 126 send and receive UDP; sdk/README.md "Sockets". */
 int net_tcp_exchange(const char *host, int port, const void *data,
                      size_t length, void *reply, size_t max);
 

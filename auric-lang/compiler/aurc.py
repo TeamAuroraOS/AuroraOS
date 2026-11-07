@@ -65,11 +65,11 @@ AURORA_SOUND = [AURORA_SRC / name for name in
                  "string.c")]
 # The network built-ins: the OS's client for apps, the join's request and
 # WPA2 key, the JSON reader, and HTTPS (Tls.c with its roots, the TCP rings
-# and the clock its certificate checks read). Dropped again from an app that
-# does not use them.
+# and the clock its certificate checks read); AppNet.c reaches the UDP rings
+# too. Dropped again from an app that does not use them.
 AURORA_NET = [AURORA_SRC / "os" / name for name in
               ("AppNet.c", "WiFiJoin.c", "Crypto.c", "Json.c", "WiFiTcp.c",
-               "Tls.c", "TlsRoots.c")] + [AURORA_SRC / "power.c"]
+               "WiFiUdp.c", "Tls.c", "TlsRoots.c")] + [AURORA_SRC / "power.c"]
 
 RUNTIME_C = RUNTIME_DIR / "auric_runtime.c"
 RUNTIME_NET = RUNTIME_DIR / "auric_net.c"

@@ -290,12 +290,23 @@ enum {
                             going between other commands: presents and
                             sounds work meanwhile. WifiTcp.state saying
                             WIFI_TCP_CLOSED is the end, with WifiNetIo.status
-                            as with WIFI_NETOP_TCP. No other network op runs
-                            until then. */
+                            as with WIFI_NETOP_TCP. STATUS, and from
+                            AUDIO_UDP_VERSION DNS and the UDP ops, run
+                            beside it; any other network op ends it first. */
+  WIFI_NETOP_UDP_BIND,   /* from AUDIO_UDP_VERSION: datagrams to and from
+                            local port `port` (0: the core picks one) go
+                            through WifiUdp, in the background as with
+                            TCP_BG, until UDP_UNBIND, a join, or no `alive`
+                            bump for WIFI_TCP_ALIVE_MS. Binding again moves
+                            it to the new port and empties the rings. */
+  WIFI_NETOP_UDP_UNBIND,
 };
 
 /* The first core that runs WIFI_NETOP_TCP_BG. */
 #define AUDIO_TCP_BG_VERSION 124
+/* The first core with WIFI_NETOP_UDP_BIND, DNS beside a background TCP
+ * connection, and WifiTcp.end_status. */
+#define AUDIO_UDP_VERSION 126
 
 enum {
   WIFI_NETS_OK = 0,
@@ -362,7 +373,8 @@ enum {
   WIFI_TCP_IDLE = 0,   /* not started yet */
   WIFI_TCP_CONNECTING, /* SYN sent */
   WIFI_TCP_OPEN,
-  WIFI_TCP_CLOSED,     /* over; WifiNetIo.status says how */
+  WIFI_TCP_CLOSED,     /* over; end_status (WifiNetIo.status before
+                          AUDIO_UDP_VERSION) says how */
 };
 
 enum {
@@ -383,10 +395,50 @@ typedef struct {
   volatile uint32_t tx_tail; /* bytes of tx the server acknowledged */
   volatile uint32_t rx_head; /* bytes put in rx */
   volatile uint32_t eof;     /* 1 once the server closed after rx_head */
-  volatile uint32_t core_pad[4];
+  /* The WIFI_NETS_* it ended with, set with WIFI_TCP_CLOSED. WifiNetIo.status
+   * gets it too, but a DNS op beside the connection also writes that. */
+  volatile uint32_t end_status;
+  volatile uint32_t core_pad[3];
   volatile uint8_t tx[WIFI_TCP_TX];
   volatile uint8_t rx[WIFI_TCP_RX];
 } WifiTcp;
+
+/* WIFI_NETOP_UDP_BIND's rings, after WifiTcp's, laid out the same way:
+ * counters are byte totals, each side writes only its own line. A datagram
+ * is a record of an 8-byte head (address, port, length; big-endian, as on
+ * the wire) and its bytes, padded to 4; records wrap around the ring's end
+ * byte by byte. */
+#define WIFI_UDP_ADDR 0x233FC100u
+#define WIFI_UDP_TX   0x1000u
+#define WIFI_UDP_RX   0x2000u
+#define WIFI_UDP_HEAD 8u
+/* The most a datagram sent can carry: one frame, as the core sends them. */
+#define WIFI_UDP_SEND_MAX 524u
+/* What one received in one frame can carry (a 1500-byte IP packet). */
+#define WIFI_UDP_RECV_MAX 1472u
+
+enum {
+  WIFI_UDP_OFF = 0,
+  WIFI_UDP_ON,
+};
+
+typedef struct {
+  /* The ARM9's line. */
+  volatile uint32_t tx_head;
+  volatile uint32_t rx_tail;
+  volatile uint32_t alive;
+  volatile uint32_t arm9_pad[5];
+  /* The core's line. */
+  volatile uint32_t state;   /* WIFI_UDP_* */
+  volatile uint32_t port;    /* the local port bound */
+  volatile uint32_t tx_tail; /* past records sent, or dropped as unsendable */
+  volatile uint32_t rx_head;
+  volatile uint32_t dropped; /* received with no room in rx */
+  volatile uint32_t unsent;  /* no route: ARP unanswered, bad length       */
+  volatile uint32_t core_pad[2];
+  volatile uint8_t tx[WIFI_UDP_TX];
+  volatile uint8_t rx[WIFI_UDP_RX];
+} WifiUdp;
 
 /* How far the scan got (WifiShared.wmi_stage). */
 enum {
@@ -522,11 +574,35 @@ uint32_t wifi_tcp_state(void); /* WIFI_TCP_* */
 uint32_t wifi_tcp_write(const void *p, uint32_t n);
 /* Takes up to n bytes out of rx; returns how many. */
 uint32_t wifi_tcp_read(void *p, uint32_t n);
+/* The same, leaving them in rx. */
+uint32_t wifi_tcp_peek(void *p, uint32_t n);
+/* Bytes waiting in rx, and room left in tx (0 once the connection is over). */
+uint32_t wifi_tcp_rx_ready(void);
+uint32_t wifi_tcp_tx_room(void);
 /* 1 once the server has closed and everything it sent was read. */
 int wifi_tcp_eof(void);
 void wifi_tcp_close(uint32_t how); /* WIFI_TCP_FIN or WIFI_TCP_ABORT */
 /* Tells the core this side is still working on the connection. */
 void wifi_tcp_alive(void);
+/* WifiTcp.end_status, for a core from AUDIO_UDP_VERSION on. */
+uint32_t wifi_tcp_end_status(void);
+
+/* WiFiUdp.c, apps: the ARM9 side of WIFI_NETOP_UDP_BIND. wifi_udp_setup
+ * clears this side's line and fills the operands; the caller then posts the
+ * operation. */
+void wifi_udp_setup(uint32_t port);
+uint32_t wifi_udp_state(void); /* WIFI_UDP_* */
+uint32_t wifi_udp_port(void);
+/* Queues one datagram (at most WIFI_UDP_SEND_MAX bytes); 0 if tx has no
+ * room for it now. */
+int wifi_udp_send(uint32_t ip, uint32_t port, const void *p, uint32_t n);
+/* The next datagram: its length (which may be more than `max`; that much is
+ * copied), or -1 if none has come. `take` 0 leaves it in rx. */
+int wifi_udp_recv(void *p, uint32_t max, uint32_t *ip, uint32_t *port,
+                  int take);
+/* Whether a datagram of n bytes would fit in tx now. */
+int wifi_udp_room(uint32_t n);
+void wifi_udp_alive(void);
 
 /* os_main.c: joins the network saved in Settings > Wi-Fi and keeps it up for
  * wifi_net. 1 when it is up; otherwise `why` says what stopped it. Staging

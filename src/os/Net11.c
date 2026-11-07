@@ -247,6 +247,24 @@ uint32_t net_dns(NetState *n, uint8_t *f, uint32_t server,
   return 14u + 20u + ul;
 }
 
+uint32_t net_udp(NetState *n, uint8_t *f, uint32_t dst, const uint8_t *dmac,
+                 uint32_t sport, uint32_t dport, const uint8_t *data,
+                 uint32_t len) {
+  uint8_t *u = f + 14 + 20;
+  uint32_t ul = 8u + len;
+  if (len > NET_UDP_MAX)
+    return 0;
+  eth(f, dmac, n->mac, ETH_IP);
+  put16(u, sport);
+  put16(u + 2, dport);
+  put16(u + 4, ul);
+  put16(u + 6, 0);
+  copy(u + 8, data, len);
+  put16(u + 6, udp_csum(n->ip, dst, u, ul));
+  ip(f, IP_UDP, n->ip, dst, ul);
+  return 14u + 20u + ul;
+}
+
 /* Past a (possibly compressed) name at `off`; 0 if it runs out. */
 static uint32_t dns_skip(const uint8_t *d, uint32_t len, uint32_t off) {
   while (off < len) {
@@ -598,6 +616,26 @@ int net_rx(NetState *n, const uint8_t *f, uint32_t len, uint8_t *reply,
     }
     *value = dns_answer(n, d, dl);
     return NET_RX_DNS;
+  }
+
+  /* To our bound port, for us or broadcast. A checksum of 0 means none was
+   * sent; any other must sum right. */
+  if (proto == IP_UDP && n->udp_lport && n->ip && plen >= 8u &&
+      get16(p + 2) == n->udp_lport && !(get16(h + 6) & 0x3FFFu) &&
+      (dst == n->ip || dst == 0xFFFFFFFFu ||
+       (n->mask && dst == (n->ip | ~n->mask)))) {
+    uint32_t ul = get16(p + 4);
+    if (ul < 8u || ul > plen ||
+        (get16(p + 6) && l4_sum(IP_UDP, src, dst, p, ul) != 0xFFFFu)) {
+      *value = type | (proto << 16);
+      return NET_RX_OTHER;
+    }
+    n->udp_src = src;
+    n->udp_sport = (uint16_t)get16(p);
+    n->udp_off = (uint32_t)(p + 8 - f);
+    n->udp_len = ul - 8u;
+    *value = n->udp_len;
+    return NET_RX_UDP;
   }
 
   /* Fragments (MF or an offset) are not put back together. */

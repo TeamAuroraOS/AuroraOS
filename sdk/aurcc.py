@@ -37,7 +37,8 @@ PNG_READER = AURORA_ROOT / "tools" / "png_read.py"
 
 RUNTIME_SOURCES = [RUNTIME_DIR / n for n in (
     "app_start.s", "app_main.c", "app_gfx.c", "app_console.c", "app_hid.c",
-    "app_sound.c", "app_fs.c", "app_sys.c", "app_syscalls.c", "app_net.c")]
+    "app_sound.c", "app_fs.c", "app_sys.c", "app_syscalls.c", "app_net.c",
+    "app_socket.c", "app_dirent.c")]
 # The OS's own code: drawing, GPU presents, touch, the timer, I2C (HOME, the
 # clock, the battery), FatFs and the SD driver, images, WAV, the crash screen,
 # and the network (AppNet.c, with the join's request and WPA2 key, and HTTPS:
@@ -49,6 +50,7 @@ OS_SOURCES = [OS_SRC / n for n in (
     "sdmmc.c",
     "os/Gpu9.c", "os/Touch9.c", "os/Timer9.c", "os/crash.c", "os/crash.s",
     "os/AppNet.c", "os/WiFiJoin.c", "os/Crypto.c", "os/WiFiTcp.c",
+    "os/WiFiUdp.c",
     "os/Tls.c", "os/TlsRoots.c", "os/Json.c")]
 BEARSSL = AURORA_ROOT / "lib" / "bearssl"
 BEARSSL_SOURCES = sorted((BEARSSL / "src").glob("*/*.c"))
@@ -256,7 +258,7 @@ def runtime_objects(build_dir: Path, rebuild: bool, verbose: bool) -> list:
     a header or this script changes."""
     out = build_dir / "runtime"
     out.mkdir(parents=True, exist_ok=True)
-    deps = newest([*OS_INCLUDE.glob("*.h"), *SDK_INCLUDE.glob("*.h"),
+    deps = newest([*OS_INCLUDE.glob("*.h"), *SDK_INCLUDE.rglob("*.h"),
                    *RUNTIME_DIR.glob("*.h"), *(BEARSSL / "inc").glob("*.h"),
                    *(BEARSSL / "src").glob("*.h"), Path(__file__)])
     jobs, objs = [], []

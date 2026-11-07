@@ -419,6 +419,11 @@ bool fs_dir_read(FsDir *dir, FsEntry *entry) {
   return true;
 }
 
+void app_fs_dir_rewind(FsDir *dir) {
+  if (dir)
+    f_rewinddir(&dir->d);
+}
+
 void fs_dir_close(FsDir *dir) {
   if (dir) {
     f_closedir(&dir->d);

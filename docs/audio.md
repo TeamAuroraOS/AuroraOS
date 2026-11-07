@@ -451,6 +451,10 @@ live in the core too:
   whose runtime set `app_caps`, and it closes the menu as soon as
   `app_active` drops (an older app left by HOME meanwhile), so the restarting
   OS's probe is answered. See [`home.md`](home.md), "The system menu".
+- **Core 126**: only the Wi-Fi code changed: one UDP port for apps
+  (`WIFI_NETOP_UDP_BIND`, `AUDIO_UDP_VERSION`, rings at `0x233FC100`), and
+  lookups beside a background TCP connection ([`wifi.md`](wifi.md), "A UDP
+  port for apps").
 - **Core 123**: only the Wi-Fi code changed ([`wifi.md`](wifi.md), "When a
   session stops working").
 - **Core 122**: the crash tone (`audio11_error_play()`) stops every channel

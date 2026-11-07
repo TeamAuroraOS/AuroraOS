@@ -102,6 +102,24 @@ the console (wrapping, scrolling, ANSI colours) were run frame by frame and
 the frames looked at, with the demo's BMP save and Bricks' high score going
 through the SDK's file layer.
 
+From SDK 1.6 such checks live in the tree, in `sdk/tests/host/` (`py
+sdk/tests/host/run.py`; its README says how it works): the real runtime and OS
+sources, built for the PC by devkitPro's msys gcc with the inline assembly
+taken out, run against a model of the ARM11 core's network side, scripted
+servers and a FatFs RAM disk, each scenario in a process of its own. On
+2026-11-07: `<dirent.h>` over the real `app_fs.c` and FatFs, 130 checks;
+sockets over the real `AppNet.c`, `WiFiTcp.c` and `WiFiUdp.c`, 346 checks
+(addresses and names, TCP echo and 250 KB through the rings, HTTP, refused,
+timed out and reset connections, non-blocking calls, `poll`, `select`,
+timeouts, the one-connection rule, the keep-alive and the lid, ways of
+closing; UDP send, receive, connected sockets, broadcasts, sizes, a full
+ring, lookups beside a TCP connection, the end status a lookup cannot
+overwrite, an older core); and the core's own UDP frames in `Net11.c`, 31
+checks. Two bugs it found are fixed: `net_connected()` said no while a stream
+or socket held the connection (the core answers `STATUS` then without writing
+`WifiNetIo`), and a call refused for that reason dropped the cached name of
+its host. None of this has run on a console.
+
 ## The network
 
 Auric and C apps can use the network over the Wi-Fi network saved in

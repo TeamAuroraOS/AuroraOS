@@ -7,7 +7,8 @@ files, system information and the network (HTTP), and the whole C standard
 library besides:
 `printf()` writes to an on-screen console, `malloc()` has a 16 MB heap,
 `fopen()` reads and writes the SD card, `time()` reads the console's clock,
-and `<math.h>`, `qsort()`, `strtod()` and the rest are there.
+`<dirent.h>` lists folders, BSD sockets reach the network, and `<math.h>`,
+`qsort()`, `strtod()` and the rest are there.
 
 `aurcc.py` builds it into an app container like the ones Auric produces, with
 the magic `AURC` in place of `AUR1`, so Aurora knows it is a C app: the Home
@@ -210,6 +211,84 @@ if (r) {
 The `net` example joins with a spinner on the bottom screen, fetches a page,
 pings a host and downloads the page into its data folder.
 
+### Sockets
+
+From SDK 1.6 the usual BSD calls work too, for code that wants its own
+protocol over TCP, or UDP, rather than HTTP: `socket()`, `connect()`,
+`send()`, `recv()`, `sendto()`, `recvfrom()`, `close()`, `getaddrinfo()`,
+`poll()`, `select()` and the rest of the subset in [The C library](#the-c-library),
+from `<sys/socket.h>`, `<netinet/in.h>`, `<arpa/inet.h>`, `<netdb.h>` and
+`<poll.h>`. A socket descriptor works with `read()`, `write()` and
+`fdopen()` as well.
+
+```c
+struct addrinfo hints = {0}, *res;
+hints.ai_socktype = SOCK_STREAM;
+if (getaddrinfo("example.com", "80", &hints, &res) == 0) {
+  int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+  if (connect(fd, res->ai_addr, res->ai_addrlen) == 0) {
+    send(fd, request, strlen(request), 0);
+    while ((n = recv(fd, buf, sizeof(buf), 0)) > 0)
+      ...
+  }
+  close(fd);
+  freeaddrinfo(res);
+}
+```
+
+What the console's network allows, all of it run by the OS's ARM11 core:
+
+* **TCP** (ARM11 core 124 or later): one connection at a time, for the
+  whole app. `connect()` on a second socket fails with `EBUSY` until the first
+  is closed; `close()` sends the FIN and returns at once, and the next
+  `connect()` or network call waits for the core to finish it (4.5 s at
+  most, then it resets the connection).
+  The core keeps 16 KB of what you send and 32 KB of what comes in; a
+  connection with nothing acknowledged for 20 s ends with `ETIMEDOUT`.
+* **UDP** (ARM11 core 126 or later): one bound port at a time, so one UDP
+  socket at a time. It is bound at its first `sendto()`, `recv()` or
+  `connect()` if `bind()` did not, to a port from 49152 on. A datagram sent
+  carries at most 524 bytes (`EMSGSIZE` above that); one received at most
+  1472, and one that came in pieces (an IP fragment) is dropped. The core
+  keeps 4 KB of datagrams to send and 8 KB received; what comes in while
+  those 8 KB are full is dropped. Broadcasts to 255.255.255.255 need
+  `SO_BROADCAST`. A datagram to a host on your own network whose address the
+  core has not seen waits up to a second for its ARP answer, then is
+  dropped. On an older core `socket(AF_INET, SOCK_DGRAM, 0)` fails with
+  `EPROTONOSUPPORT`.
+* **While a socket holds the TCP connection**, the other network calls
+  (`http_get()` and the rest, `net_ping()`, a stream) fail, with
+  "a socket holds the network connection: close it first" in `net_error()`,
+  rather than take the connection away. Names already looked up still
+  resolve; new ones, and UDP, work beside it from core 126. `net_connected()`
+  says yes.
+* **The first socket call joins** the saved network if the console is not on
+  it yet, as `net_connect()` does (about 25 seconds), so ported code works
+  unchanged; calling `net_connect()` first lets you show a spinner.
+* **Blocking calls wait in the runtime**, which notices HOME, a closed lid and
+  an ARM11 fault meanwhile and calls a `net_on_wait()` function ten times a
+  second; unlike the `http_` calls, the screens, sound and touch keep working,
+  since the core is free. `SO_RCVTIMEO` and `SO_SNDTIMEO` bound a wait;
+  `O_NONBLOCK` (`fcntl()`, `SOCK_NONBLOCK`, `ioctl(FIONBIO)`), `MSG_DONTWAIT`,
+  `poll()` and `select()` work as usual, a non-blocking `connect()` returning
+  `EINPROGRESS` with `SO_ERROR` after. A non-blocking `connect()` still waits
+  for its first packet to go out, which an ARP lookup can stretch to 3 s.
+* **Keep it alive**: the core drops a socket the app has not touched for 15 s.
+  `app_loop()`, `hid_scan()`, `sys_sleep()`, every socket call and a closed lid
+  count as touching it, so this only bites a loop that does none of them.
+  HOME and `exit()` close sockets (a FIN, then a reset after 1 s).
+* **Not there**: `listen()`/`accept()` (`EOPNOTSUPP`; nothing can connect to
+  the console), IPv6 (`EAFNOSUPPORT`), raw sockets, `sendmsg()`/`recvmsg()`,
+  `SIGPIPE` (`send()` gives `EPIPE`), reverse lookups (`getnameinfo()` gives
+  numbers), TLS on a socket (use `https://` with the `http_` calls),
+  `getsockname()`'s port for TCP (0). `shutdown(SHUT_WR)` stops `send()` but
+  the FIN waits for `close()`, since the core ends a connection soon after its
+  FIN. TCP options are accepted and do nothing but `SO_LINGER` with 0 s, which
+  makes `close()` reset the connection; `TCP_NODELAY` is how it works anyway.
+
+The `sockets` example fetches a page over TCP, asks an NTP server for the time
+over UDP and lists its data folder with `scandir()`.
+
 ### When the app was not started from the Home Menu
 
 The GPU, sound, touch and the circle pad are run by the OS's ARM11 core, which
@@ -237,7 +316,7 @@ Everything is declared, with comments, in
 | Sound | `snd_load` (WAV), `snd_play`, `snd_play_volume`, `snd_music`, `snd_music_volume`, `snd_stop_music`, `snd_stop_sounds`, `snd_unload_all`, `snd_available` |
 | Files | stdio, plus `fs_read_file`, `fs_write_file`, `fs_exists`, `fs_is_dir`, `fs_mkdir` (with parents), `fs_dir_open`/`read`/`close`, `fs_available` |
 | System | `sys_millis`, `sys_micros`, `sys_sleep`, `sys_time`, `sys_battery`, `sys_battery_tenths`, `sys_battery_temperature`, `sys_battery_millivolts`, `sys_charging`, `sys_is_new3ds`, `sys_user_name`, `sys_language`, `sys_accent`, `sys_power_off`, `sys_reboot` |
-| Network | `net_available`, `net_connect`, `net_connected`, `net_error`, `net_address`, `net_resolve`, `net_ping`, `net_on_wait`, `net_tcp_exchange`; `http_get`, `http_post`, `http_request`, `http_header`, `http_free`, `http_download`, `http_url_encode` |
+| Network | `net_available`, `net_connect`, `net_connected`, `net_error`, `net_address`, `net_resolve`, `net_ping`, `net_on_wait`, `net_tcp_exchange`; `http_get`, `http_post`, `http_request`, `http_header`, `http_free`, `http_download`, `http_url_encode`; and BSD sockets ([Sockets](#sockets)) |
 
 Notes:
 
@@ -269,12 +348,15 @@ The SDK links devkitARM's **newlib** and provides the system calls under it:
 | `clock`, `usleep`, `nanosleep`, `sleep` | the ARM9 timer, less any time the lid was closed |
 | `rand`, `srand`, `qsort`, `bsearch`, `strtol`, `strtod`, `<string.h>`, `<ctype.h>`, `<math.h>` | as usual |
 | `exit`, `atexit`, `abort`, `assert` | `exit` goes back to the Home Menu; `abort` and a failed `assert` show the message on the console and wait for HOME |
+| `opendir`, `readdir`, `readdir_r`, `closedir`, `rewinddir`, `telldir`, `seekdir`, `scandir`, `alphasort` (SDK 1.6) | folders on the SD card, unsorted but for `scandir()`, without `.` and `..`; `d_type` is `DT_DIR` or `DT_REG` |
+| `socket`, `connect`, `send`, `recv`, `sendto`, `recvfrom`, `bind`, `shutdown`, `close`, `getsockopt`, `setsockopt`, `getpeername`, `getsockname` (SDK 1.6) | IPv4 TCP and UDP through the ARM11 core, 8 sockets open at once; [Sockets](#sockets) says what the core allows |
+| `getaddrinfo`, `freeaddrinfo`, `gai_strerror`, `gethostbyname`, `getnameinfo`, `inet_pton`, `inet_ntop`, `inet_aton`, `inet_addr`, `inet_ntoa`, `htons` and friends (SDK 1.6) | names through the network's DNS server; numbers only the other way |
+| `poll`, `select`, `fcntl` (`O_NONBLOCK`), `ioctl` (`FIONBIO`, `FIONREAD`) (SDK 1.6) | sockets; files and the console count as always ready |
 
 Not available: reading `stdin` (it is always at end of file), threads,
-BSD sockets (the network is the `net_` and `http_` functions), signals
-other than `abort`, and directories through `<dirent.h>` (use
-`fs_dir_open()`). `rename()` replaces an existing file, as POSIX says, and
-`localtime()` is the console's own time (there are no time zones).
+signals other than `abort`, listening sockets and IPv6. `rename()` replaces
+an existing file, as POSIX says, and `localtime()` is the console's own time
+(there are no time zones).
 
 ## Memory
 
@@ -283,6 +365,7 @@ other than `abort`, and directories through `<dirent.h>` (use
 | `0x22000000` up to `0x22F00000` | the app: code, data and `.bss` (15 MB); the build stops if it does not fit |
 | `0x22F00000`-`0x23000000` | the stack, 1 MB, growing down from `0x23000000` |
 | `0x23200000`, 1020 KB | the ARM11 core's network replies, copied out by `http_` calls |
+| `0x233F0000`-`0x233FF140` | the core's TCP rings (sockets, HTTPS, streams), then its UDP rings |
 | `0x23400000`, 10 MB | the sound pool (`snd_load`) |
 | `0x23E00000` | the Wi-Fi firmware, staged there while `net_connect()` joins |
 | `0x23E80000`, `0x23F00000` | the off-screen copies of the top and bottom screens |
@@ -333,7 +416,9 @@ the Bricks example 167 KB. The link map is left beside the objects
 small program to change) and `NAME/NAME.icon`.
 
 The tool's own tests: `py sdk/tests/test_aurcc.py` (the build test runs when
-`arm-none-eabi-gcc` is on `PATH`).
+`arm-none-eabi-gcc` is on `PATH`). The runtime's own tests run its real code
+on a PC against a model of the ARM11 core: `py sdk/tests/host/run.py`
+([`tests/host/README.md`](tests/host/README.md)).
 
 ## Examples
 
@@ -344,6 +429,7 @@ The tool's own tests: `py sdk/tests/test_aurcc.py` (the build test runs when
 | [`examples/bricks`](examples/bricks/main.c) | a breakout game: D-pad, circle pad or touch; the best score saved through `atexit()`; optional `paddle.wav`, `brick.wav`, `lost.wav` |
 | [`examples/net`](examples/net/main.c) | the network: joins with a spinner from `net_on_wait()`, fetches a page (A), pings a host (Y), downloads the page into its data folder (X) |
 | [`examples/system_menu`](examples/system_menu/main.c) | checks L + Down + Select while the app uses Down and Select for gameplay |
+| [`examples/sockets`](examples/sockets/main.c) | BSD sockets and `<dirent.h>`: a page over a TCP socket (A), the time from an NTP server over UDP (X), the data folder through `scandir()` (Y) |
 
 ```
 py sdk/aurcc.py build sdk/examples/bricks -o Bricks.bin
@@ -415,8 +501,25 @@ go to framebuffer A by the CPU while a `net_on_wait()` handler runs, sounds
 are dropped, and leaving waits for the call.
 
 **System calls** for newlib are in `runtime/app_syscalls.c`: file descriptors
-0-2 are the console, 3 on are FatFs files (`runtime/app_fs.c`), `_sbrk` hands
-out the heap, and the locks do nothing (one thread).
+0-2 are the console, 3 to 18 are FatFs files (`runtime/app_fs.c`), 19 to 26
+sockets (`runtime/app_socket.c`), `_sbrk` hands out the heap, and the locks do
+nothing (one thread). The socket code is reached through a table the first
+`socket()` fills in, so an app that makes none does not link it.
+
+**Sockets** move bytes through rings the ARM9 and the core share: a TCP socket
+is a `WIFI_NETOP_TCP_BG` connection the core keeps going between its other work
+(`appnet_tcp_open` in `src/os/AppNet.c`, `src/os/WiFiTcp.c`), and a UDP socket
+the core's one UDP port (`appnet_udp_bind`, `src/os/WiFiUdp.c`); see
+[`../docs/wifi.md`](../docs/wifi.md), *A connection in the background* and
+*A UDP port for apps*. `app_poll_home()`, which the frame loop and every wait
+call, tells the core the app is still using them. newlib's headers have no
+sockets, so `include/` carries `<sys/socket.h>`, `<netinet/in.h>`,
+`<netinet/tcp.h>`, `<arpa/inet.h>`, `<netdb.h>`, `<poll.h>` and
+`<sys/ioctl.h>`.
+
+**Folders** through `<dirent.h>` use devkitARM's header, whose `DIR` is
+libsysbase's; libsysbase is not linked, so `runtime/app_dirent.c` fills that
+`DIR` in over `fs_dir_open()`.
 
 | File | |
 |------|--|
@@ -431,6 +534,8 @@ out the heap, and the locks do nothing (one thread).
 | `runtime/app_fs.c` | paths, the file descriptor table, `fs_` functions |
 | `runtime/app_sys.c` | time, the clock, battery, the user's settings, power |
 | `runtime/app_net.c` | the network: `net_` and `http_` over `src/os/AppNet.c`, CPU presents while a call waits |
+| `runtime/app_socket.c` | BSD sockets, `poll`, `select`, `fcntl`, `ioctl`, `getaddrinfo` and the address helpers |
+| `runtime/app_dirent.c` | `<dirent.h>` |
 | `runtime/app_syscalls.c` | newlib's system calls, `assert`, `abort` |
 | `aurcc.py` | the build tool |
 
@@ -447,10 +552,13 @@ and `examples/videotest`. The first such build also compiles FFmpeg
 
 * One screen layer each, 24-bit colour, no 3D or stereoscopic drawing yet
   (the OS's PICA200 3D pipeline is not exposed).
-* The network is HTTP and HTTPS (TLS 1.2 only) over the saved Wi-Fi network:
-  no BSD sockets, no listening or UDP, no TLS for `net_tcp_exchange()`, one
-  call at a time, requests up to 2 KB and responses up to 1020 KB
-  (`http_download()` for bigger files).
+* The network is HTTP and HTTPS (TLS 1.2 only) over the saved Wi-Fi network,
+  one call at a time, requests up to 2 KB and responses up to 1020 KB
+  (`http_download()` for bigger files), and BSD sockets: one TCP connection
+  and one UDP port at a time, UDP datagrams sent up to 524 bytes, no
+  listening, no IPv6, no TLS on a socket or `net_tcp_exchange()`
+  ([Sockets](#sockets)). The sockets are new: they were run on a PC against
+  a model of the core, not yet on a console.
 * The New 3DS's extra buttons (ZL, ZR, C-stick) are not read.
 * One thread; no interrupts.
 * `stdin` is empty; there is no on-screen keyboard API yet.
@@ -467,7 +575,7 @@ and `examples/videotest`. The first such build also compiles FFmpeg
 The runtime and the OS code an app links are part of AuroraOS: GPL-3.0, with
 `src/os/Gpu9.c` under GPL-2.0, and the network code (`src/os/AppNet.c`,
 `WiFiJoin.c`, `Crypto.c`, `WiFiTcp.c`, part of the Wi-Fi driver) under
-GPL-2.0 too (see the main [README](../README.md#license)). BearSSL
+GPL-2.0 too, as is `WiFiUdp.c` (see the main [README](../README.md#license)). BearSSL
 (`../lib/bearssl`, for HTTPS) is under the MIT licence.
 newlib is under its own BSD-style licences. An app built with the SDK
 contains that code, so its distribution follows those licences.

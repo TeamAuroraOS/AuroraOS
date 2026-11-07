@@ -87,7 +87,7 @@ u32 wifi_tcp_write(const void *p, u32 n) {
   return done;
 }
 
-u32 wifi_tcp_read(void *p, u32 n) {
+static u32 rx_copy(void *p, u32 n) {
   u8 *d = (u8 *)p;
   u32 tail = t->rx_tail, have, done = 0;
   core_line();
@@ -105,11 +105,32 @@ u32 wifi_tcp_read(void *p, u32 n) {
       d[done + i] = t->rx[pos + i];
     done += k;
   }
+  return done;
+}
+
+u32 wifi_tcp_read(void *p, u32 n) {
+  u32 done = rx_copy(p, n);
   if (done) {
-    t->rx_tail = tail + done;
+    t->rx_tail = t->rx_tail + done;
     clean(&t->rx_tail, 4u);
   }
   return done;
+}
+
+u32 wifi_tcp_peek(void *p, u32 n) { return rx_copy(p, n); }
+
+u32 wifi_tcp_rx_ready(void) {
+  u32 have;
+  core_line();
+  have = t->rx_head - t->rx_tail;
+  return have > WIFI_TCP_RX ? 0 : have;
+}
+
+u32 wifi_tcp_tx_room(void) {
+  u32 room;
+  core_line();
+  room = WIFI_TCP_TX - (t->tx_head - t->tx_tail);
+  return room > WIFI_TCP_TX || t->state == WIFI_TCP_CLOSED ? 0 : room;
 }
 
 int wifi_tcp_eof(void) {
@@ -125,4 +146,9 @@ void wifi_tcp_close(u32 how) {
 void wifi_tcp_alive(void) {
   t->alive = t->alive + 1u;
   clean(&t->alive, 4u);
+}
+
+u32 wifi_tcp_end_status(void) {
+  core_line();
+  return t->end_status;
 }

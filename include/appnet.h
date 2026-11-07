@@ -120,4 +120,27 @@ u32 appnet_stream_length(void);
 int appnet_stream_moved(void);
 void appnet_stream_close(void);
 
+/* A plain TCP connection for the C SDK's sockets (WIFI_NETOP_TCP_BG, a core
+ * from AUDIO_TCP_BG_VERSION on), with bytes moved by wifi_tcp_*. 1 once the
+ * core has taken it: wifi_tcp_state() then says how it goes, and
+ * appnet_tcp_status() why it ended. The caller holds the rings from here until
+ * appnet_tcp_release(); until then every other call here fails, except a link
+ * check and, from AUDIO_UDP_VERSION, a name lookup and the UDP port below. Not
+ * while a stream is open. */
+int appnet_tcp_open(u32 ip, u32 port, u32 timeout_ms);
+/* The connection's WIFI_NETS_* once wifi_tcp_state() is WIFI_TCP_CLOSED. */
+u32 appnet_tcp_status(void);
+void appnet_tcp_release(void);
+
+/* The core's one UDP port for the C SDK's datagram sockets
+ * (WIFI_NETOP_UDP_BIND), with datagrams moved by wifi_udp_*; `port` 0 lets
+ * the core pick one, which wifi_udp_port() then says. Binding again moves
+ * it. */
+int appnet_udp_bind(u32 port);
+void appnet_udp_unbind(void);
+/* The running core's AUDIO_CORE_VERSION; 0 with no core. */
+u32 appnet_core_version(void);
+/* The WIFI_NETS_* of the last call that failed. */
+u32 appnet_last_status(void);
+
 #endif

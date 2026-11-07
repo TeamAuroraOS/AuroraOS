@@ -1657,6 +1657,8 @@ static int wifi_data_send(WifiShared *w, const uint8_t *f, uint32_t len) {
  * for the IP stack, and out with any answer it owes. */
 static void wifi_wpa_rx(WifiShared *w, const uint8_t *f, uint32_t n);
 
+static void udp_deliver(const uint8_t *f);
+
 static void wifi_data_rx(WifiShared *w, const uint8_t *p, uint32_t len) {
   static uint8_t f[HTC_FRAME_MAX], reply[NET_FRAME_MAX];
   uint32_t n = len, rl, v;
@@ -1690,6 +1692,8 @@ static void wifi_data_rx(WifiShared *w, const uint8_t *p, uint32_t len) {
   int t = net_rx(&g_net, f, n, reply, &rl, &v);
   if (t == NET_RX_DNS) {
     g_dns_ip = v;
+  } else if (t == NET_RX_UDP) {
+    udp_deliver(f);
   } else if (t == NET_RX_PING_REPLY || t == NET_RX_PING_ERR) {
     uint32_t seq = t == NET_RX_PING_REPLY ? v : v >> 16;
     if (seq == g_ping_seq && !g_net_hit) {
@@ -2562,6 +2566,8 @@ static void wifi_op_dns(WifiShared *w, WifiNetIo *io, uint32_t ms) {
     uint32_t r = wifi_now();
     n->dns_id = (uint16_t)(r ^ (r >> 16));
     n->dns_port = (uint16_t)(0xC000u | (r & 0x3FFFu));
+    if (n->dns_port == n->udp_lport)
+      n->dns_port ^= 1u;
     uint32_t len = net_dns(n, f, server, mac, name);
     if (!len) {
       io->status = WIFI_NETS_BADNAME;
@@ -2784,6 +2790,7 @@ static void tcp_publish(WifiTcp *t, NetState *n, uint32_t base, uint32_t head,
 typedef struct {
   uint32_t ms, rto, base, head, una, una_t, last, t0, alive, alive_t;
   uint32_t fin_seq, fin_t;
+  uint32_t status; /* WIFI_NETS_* it will end with */
   int fin, graceful;
   uint8_t mac[6];
 } TcpRun;
@@ -2807,13 +2814,13 @@ static int tcp_begin(WifiShared *w, WifiNetIo *io, uint32_t ms) {
   t->state = WIFI_TCP_CONNECTING;
   dcache_clean();
   if (!io->port || io->port > 0xFFFFu) {
-    io->status = WIFI_NETS_TOOBIG;
+    io->status = t->end_status = WIFI_NETS_TOOBIG;
     t->state = WIFI_TCP_CLOSED;
     dcache_clean();
     return 0;
   }
   if (!wifi_mac_for(w, io->ip, r->mac, ms)) {
-    io->status = WIFI_NETS_NOHOST;
+    io->status = t->end_status = WIFI_NETS_NOHOST;
     t->state = WIFI_TCP_CLOSED;
     dcache_clean();
     return 0;
@@ -2823,7 +2830,7 @@ static int tcp_begin(WifiShared *w, WifiNetIo *io, uint32_t ms) {
   r->una = n->snd_una;
   g_net_want = NET_BIT(NET_RX_TCP);
   io->stage = WIFI_HTTP_CONNECT;
-  io->status = WIFI_NETS_TIMEOUT;
+  io->status = r->status = WIFI_NETS_TIMEOUT;
   wifi_data_send(w, g_tcp_f,
                  net_tcp_seg(n, g_tcp_f, r->mac, NET_TCP_SYN, n->tcp_iss, 0, 0));
   r->t0 = r->last = r->una_t = r->alive_t = wifi_now();
@@ -2855,11 +2862,11 @@ static int tcp_step(WifiShared *w, WifiNetIo *io) {
     r->head = t->tx_head;
 
   if (n->tcp_state == NET_TCP_RESET) {
-    io->status = WIFI_NETS_REFUSED;
+    r->status = WIFI_NETS_REFUSED;
     return 0;
   }
   if (how == WIFI_TCP_ABORT) {
-    io->status = WIFI_NETS_OK;
+    r->status = WIFI_NETS_OK;
     return 0;
   }
   if (now - r->alive_t >= WIFI_TCP_ALIVE_MS * 1000u)
@@ -2924,12 +2931,12 @@ static int tcp_step(WifiShared *w, WifiNetIo *io) {
   }
   if (r->fin && n->snd_una == r->fin_seq + 1u &&
       (n->tcp_fin || now - r->fin_t >= 500000u)) {
-    io->status = WIFI_NETS_OK;
+    r->status = WIFI_NETS_OK;
     r->graceful = 1;
     return 0;
   }
   if (r->fin_t && now - r->fin_t >= 3000000u) {
-    io->status = WIFI_NETS_OK; /* the ARM9 is done, whatever became of the FIN */
+    r->status = WIFI_NETS_OK; /* the ARM9 is done, whatever became of the FIN */
     return 0;
   }
   if (n->tcp_state == NET_TCP_SYN_SENT && now - r->t0 >= r->ms * 1000u)
@@ -2956,8 +2963,9 @@ static void tcp_end(WifiShared *w, WifiNetIo *io) {
                                n->snd_nxt, 0, 0));
   g_net_want = 0;
   n->tcp_state = NET_TCP_CLOSED;
-  if (g_link <= 0 && io->status == WIFI_NETS_TIMEOUT)
-    io->status = WIFI_NETS_NOLINK;
+  if (g_link <= 0 && r->status == WIFI_NETS_TIMEOUT)
+    r->status = WIFI_NETS_NOLINK;
+  io->status = t->end_status = r->status;
   tcp_publish(t, n, r->base, r->head, WIFI_TCP_CLOSED);
 }
 
@@ -3058,6 +3066,174 @@ static void wifi_session_end(WifiShared *w, uint32_t why) {
   w->session_reason = w->conn_reason;
 }
 
+/* What runs between other work: a TCP_BG connection and the UDP port. */
+static int g_tcp_bg, g_udp_bg;
+static uint32_t g_tcp_bg_keys;
+
+_Static_assert(WIFI_TCP_ADDR + sizeof(WifiTcp) <= WIFI_UDP_ADDR,
+               "WifiUdp overlaps WifiTcp");
+_Static_assert(WIFI_UDP_ADDR + sizeof(WifiUdp) <= AUDIO_PCM_ADDR,
+               "WifiUdp overlaps the PCM buffer");
+_Static_assert(WIFI_UDP_SEND_MAX == NET_UDP_MAX, "WIFI_UDP_SEND_MAX");
+
+/* A datagram to a host on our subnet whose MAC is not known waits, without
+ * holding up the core, for the answer to one ARP request; then it is
+ * dropped. */
+#define UDP_ARP_US     1000000u
+#define UDP_PER_PASS   4
+#define UDP_SEND_TRIES 64u
+
+static uint32_t g_udp_alive, g_udp_alive_t, g_udp_arp_ip, g_udp_arp_t;
+static uint32_t g_udp_fails;
+
+static void udp_stop(void) {
+  WifiUdp *u = (WifiUdp *)WIFI_UDP_ADDR;
+  g_udp_bg = 0;
+  g_net.udp_lport = 0;
+  u->state = WIFI_UDP_OFF;
+  dcache_clean();
+}
+
+static void udp_bind(WifiNetIo *io) {
+  WifiUdp *u = (WifiUdp *)WIFI_UDP_ADDR;
+  uint32_t port = io->port;
+  if (port > 0xFFFFu || port == 68u) { /* 68: the DHCP client's */
+    io->status = WIFI_NETS_TOOBIG;
+    return;
+  }
+  if (!port) {
+    uint32_t r = wifi_now();
+    port = 0xC000u | ((r ^ (r >> 14)) & 0x3FFFu);
+  }
+  u->tx_tail = u->rx_head = u->dropped = u->unsent = 0;
+  u->port = port;
+  u->state = WIFI_UDP_ON;
+  g_net.udp_lport = (uint16_t)port;
+  g_udp_bg = 1;
+  g_udp_alive = u->alive;
+  g_udp_alive_t = g_tcp_bg_keys = wifi_now();
+  g_udp_arp_ip = 0;
+  g_udp_fails = 0;
+  io->status = WIFI_NETS_OK;
+  dcache_clean();
+}
+
+/* The datagram net_rx just took, into rx if it fits. */
+static void udp_deliver(const uint8_t *f) {
+  WifiUdp *u = (WifiUdp *)WIFI_UDP_ADDR;
+  const NetState *n = &g_net;
+  uint32_t len = n->udp_len, need = WIFI_UDP_HEAD + ((len + 3u) & ~3u);
+  uint32_t head = u->rx_head, room = WIFI_UDP_RX - (head - u->rx_tail);
+  uint8_t h[WIFI_UDP_HEAD];
+  if (!g_udp_bg)
+    return;
+  if (room > WIFI_UDP_RX || need > room) {
+    u->dropped++;
+    return;
+  }
+  h[0] = (uint8_t)(n->udp_src >> 24);
+  h[1] = (uint8_t)(n->udp_src >> 16);
+  h[2] = (uint8_t)(n->udp_src >> 8);
+  h[3] = (uint8_t)n->udp_src;
+  h[4] = (uint8_t)(n->udp_sport >> 8);
+  h[5] = (uint8_t)n->udp_sport;
+  h[6] = (uint8_t)(len >> 8);
+  h[7] = (uint8_t)len;
+  for (uint32_t i = 0; i < WIFI_UDP_HEAD; i++)
+    u->rx[(head + i) & (WIFI_UDP_RX - 1u)] = h[i];
+  for (uint32_t i = 0; i < len; i++)
+    u->rx[(head + WIFI_UDP_HEAD + i) & (WIFI_UDP_RX - 1u)] = f[n->udp_off + i];
+  u->rx_head = head + need;
+}
+
+/* 1 with dst's MAC in `mac`: broadcast, the router's, or the host on our
+ * subnet ARP last answered for. 0 while an ARP request for it is out, -1 if
+ * there is no way to it. */
+static int udp_mac(WifiShared *w, uint32_t dst, uint8_t *mac, uint32_t now) {
+  static const uint8_t bc[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  static uint8_t f[NET_FRAME_MAX];
+  NetState *n = &g_net;
+  const uint8_t *src = 0;
+  if (dst == 0xFFFFFFFFu || (n->mask && dst == (n->ip | ~n->mask))) {
+    src = bc;
+  } else if (dst == n->gw || !n->mask || ((dst ^ n->ip) & n->mask)) {
+    if (!n->have_gw_mac)
+      return -1;
+    src = n->gw_mac;
+  } else if (n->arp_ip == dst && n->have_arp) {
+    src = n->arp_mac;
+  } else {
+    if (g_udp_arp_ip != dst) {
+      n->arp_ip = dst;
+      n->have_arp = 0;
+      g_udp_arp_ip = dst;
+      g_udp_arp_t = now;
+      wifi_data_send(w, f, net_arp_request(n, f, dst));
+    }
+    return now - g_udp_arp_t >= UDP_ARP_US ? -1 : 0;
+  }
+  for (uint32_t k = 0; k < 6; k++)
+    mac[k] = src[k];
+  return 1;
+}
+
+/* Sends a few of the datagrams queued in tx; 0 once the port should close. */
+static int udp_step(WifiShared *w) {
+  static uint8_t data[NET_UDP_MAX], f[NET_TX_MAX];
+  WifiUdp *u = (WifiUdp *)WIFI_UDP_ADDR;
+  NetState *n = &g_net;
+  uint32_t now = wifi_now();
+  if (g_link <= 0 || g_fw_asserted || !g_session)
+    return 0;
+  if (u->alive != g_udp_alive) {
+    g_udp_alive = u->alive;
+    g_udp_alive_t = now;
+  }
+  if (now - g_udp_alive_t >= WIFI_TCP_ALIVE_MS * 1000u)
+    return 0;
+  for (int k = 0; k < UDP_PER_PASS; k++) {
+    uint32_t tail = u->tx_tail, have = u->tx_head - tail;
+    uint8_t h[WIFI_UDP_HEAD], mac[6];
+    if (!have)
+      break;
+    if (have > WIFI_UDP_TX || have < WIFI_UDP_HEAD) {
+      u->tx_tail = u->tx_head; /* not records: start again from here */
+      u->unsent++;
+      break;
+    }
+    for (uint32_t i = 0; i < WIFI_UDP_HEAD; i++)
+      h[i] = u->tx[(tail + i) & (WIFI_UDP_TX - 1u)];
+    uint32_t dst = (uint32_t)h[0] << 24 | (uint32_t)h[1] << 16 |
+                   (uint32_t)h[2] << 8 | h[3];
+    uint32_t dport = (uint32_t)h[4] << 8 | h[5];
+    uint32_t len = (uint32_t)h[6] << 8 | h[7];
+    uint32_t need = WIFI_UDP_HEAD + ((len + 3u) & ~3u);
+    if (len > NET_UDP_MAX || need > have || !dport) {
+      u->tx_tail = tail + (need <= have ? need : have);
+      u->unsent++;
+      continue;
+    }
+    int route = udp_mac(w, dst, mac, now);
+    if (route == 0)
+      break;
+    if (route > 0) {
+      for (uint32_t i = 0; i < len; i++)
+        data[i] = u->tx[(tail + WIFI_UDP_HEAD + i) & (WIFI_UDP_TX - 1u)];
+      if (wifi_data_send(w, f, net_udp(n, f, dst, mac, n->udp_lport, dport,
+                                       data, len)) != 0 &&
+          ++g_udp_fails < UDP_SEND_TRIES)
+        break; /* no credit yet: again next pass */
+    }
+    if (route < 0 || g_udp_fails >= UDP_SEND_TRIES)
+      u->unsent++;
+    if (g_udp_arp_ip == dst)
+      g_udp_arp_ip = 0;
+    g_udp_fails = 0;
+    u->tx_tail = tail + need;
+  }
+  return 1;
+}
+
 /* What every network operation ends with, however it ended. */
 static void wifi_net_after(WifiShared *w) {
   if (g_session) {
@@ -3071,7 +3247,10 @@ static void wifi_net_after(WifiShared *w) {
     wpa_end(&g_wpa);
     g_wpa_on = 0;
   }
-  g_net_bus = 0;
+  if (!g_session && g_udp_bg)
+    udp_stop();
+  if (!g_tcp_bg && !g_udp_bg)
+    g_net_bus = 0;
   w->session = (uint32_t)g_session;
   w->bus_div = bus_div();
   w->bus_rx53 = !g_rx53_bad;
@@ -3080,32 +3259,32 @@ static void wifi_net_after(WifiShared *w) {
   wifi_finish(w);
 }
 
-/* A background connection, set going by wifi_net_op. */
-static int g_tcp_bg;
-static uint32_t g_tcp_bg_keys;
-
 #define TCP_BG_KEYS_US 100000u /* how often a group rekey is looked for */
 
 void wifi11_tick(void) {
   WifiShared *w = (WifiShared *)WIFI_SHARED_ADDR;
   WifiNetIo *io = (WifiNetIo *)WIFI_NET_ADDR;
-  if (!g_tcp_bg)
+  if (!g_tcp_bg && !g_udp_bg)
     return;
-  if (tcp_step(w, io)) {
-    uint32_t now = wifi_now();
-    /* Only what has already arrived: this runs between other work. */
-    g_tick_us = 1u;
-    g_net_hit = 0;
-    wifi_wmi_events(w, 0, 1, 4);
-    if (g_wpa_on && g_link > 0 && now - g_tcp_bg_keys >= TCP_BG_KEYS_US) {
-      g_tcp_bg_keys = now;
-      wifi_wpa_keys(w);
-    }
+  if (g_tcp_bg && !tcp_step(w, io)) {
+    tcp_end(w, io);
+    g_tcp_bg = 0;
+  }
+  if (g_udp_bg && !udp_step(w))
+    udp_stop();
+  if (!g_tcp_bg && !g_udp_bg) {
+    wifi_net_after(w);
     return;
   }
-  tcp_end(w, io);
-  g_tcp_bg = 0;
-  wifi_net_after(w);
+  uint32_t now = wifi_now();
+  /* Only what has already arrived: this runs between other work. */
+  g_tick_us = 1u;
+  g_net_hit = 0;
+  wifi_wmi_events(w, 0, 1, 4);
+  if (g_wpa_on && g_link > 0 && now - g_tcp_bg_keys >= TCP_BG_KEYS_US) {
+    g_tcp_bg_keys = now;
+    wifi_wpa_keys(w);
+  }
 }
 
 /* Whatever needs the chip for itself comes before a connection left running. */
@@ -3114,7 +3293,7 @@ static void wifi_bg_stop(void) {
   WifiNetIo *io = (WifiNetIo *)WIFI_NET_ADDR;
   if (!g_tcp_bg)
     return;
-  io->status = WIFI_NETS_OK;
+  g_tr.status = WIFI_NETS_OK;
   tcp_end(w, io);
   g_tcp_bg = 0;
   wifi_net_after(w);
@@ -3133,8 +3312,11 @@ static void wifi_net_op(uint32_t op) {
       return;
     }
     /* A caller that did not know of it, such as the OS after an app crashed:
-     * it should get the network, not wait out the connection's 15 s. */
-    wifi_bg_stop();
+     * it should get the network, not wait out the connection's 15 s. DNS and
+     * the UDP port leave it running. */
+    if (op != WIFI_NETOP_DNS && op != WIFI_NETOP_UDP_BIND &&
+        op != WIFI_NETOP_UDP_UNBIND)
+      wifi_bg_stop();
   }
   uint32_t ms = io->timeout_ms;
   uint32_t cap = op == WIFI_NETOP_HTTP || op == WIFI_NETOP_TCP ||
@@ -3178,8 +3360,14 @@ static void wifi_net_op(uint32_t op) {
         g_tcp_bg_keys = wifi_now();
         return; /* wifi11_tick finishes it */
       }
+    } else if (op == WIFI_NETOP_UDP_BIND) {
+      udp_bind(io);
+    } else if (op == WIFI_NETOP_UDP_UNBIND) {
+      udp_stop();
+      io->status = WIFI_NETS_OK;
     } else if (op == WIFI_NETOP_LEAVE) {
       uint8_t c[2] = {0, 0};
+      udp_stop();
       g_disc = 0;
       wifi_wmi_send(w, WMI_DISCONNECT_CMDID, c, 0, g_style);
       wifi_pump(w, 1000, &g_disc);
@@ -3187,16 +3375,20 @@ static void wifi_net_op(uint32_t op) {
       io->status = WIFI_NETS_OK;
     }
   }
+  if (g_tcp_bg)
+    g_net_want = NET_BIT(NET_RX_TCP);
   wifi_net_after(w);
 }
 
 void wifi11_probe(void) {
   wifi_bg_stop();
+  udp_stop();
   wifi_probe_run();
 }
 
 void wifi11_boot(uint32_t opts) {
   wifi_bg_stop();
+  udp_stop();
   wifi_boot_run(opts);
 }
 

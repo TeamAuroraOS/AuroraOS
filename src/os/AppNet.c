@@ -38,6 +38,8 @@ static int g_busy;
  * request's: worth trying again. */
 static int g_transient;
 static int g_tls_err; /* the last WIFI_NETS_TLS's reason */
+static u32 g_last_st;
+static int g_tcp_held; /* appnet_tcp_open's caller has the rings */
 
 static u32 len_of(const char *s) {
   u32 n = 0;
@@ -114,10 +116,12 @@ const char *appnet_error(void) { return g_err; }
 int appnet_ready(void) {
   os_cache_sync();
   if (!appnet_launched() || ctrl->magic != AUDIO_MAGIC) {
+    g_last_st = WIFI_NETS_NOLINK;
     err("the network needs the app started from the Home Menu", 0, 0);
     return 0;
   }
   if (ctrl->version < APPNET_CORE_VERSION) {
+    g_last_st = WIFI_NETS_NOLINK;
     err("the network needs a newer AuroraOS", 0, 0);
     return 0;
   }
@@ -143,19 +147,35 @@ void appnet_finish(void) {
   g_busy = 0;
 }
 
+/* What the core runs without ending a background TCP connection. */
+static int beside_tcp(u32 op) {
+  return op == WIFI_NETOP_STATUS ||
+         (ctrl->version >= AUDIO_UDP_VERSION &&
+          (op == WIFI_NETOP_DNS || op == WIFI_NETOP_UDP_BIND ||
+           op == WIFI_NETOP_UDP_UNBIND));
+}
+
 /* The block holds one command, and a GPU present or a sound may still be in
  * it: the operands are written only once the core is idle. */
-static int claim(void) {
+static int claim_op(u32 op) {
   u32 t0;
+  if (g_tcp_held && !beside_tcp(op)) {
+    g_last_st = WIFI_NETS_BUSY;
+    err("a socket holds the network connection: close it first", 0, 0);
+    return 0;
+  }
   gpu_wait_idle();
   t0 = appnet_ms();
   while (!core_done())
     if (appnet_ms() - t0 > 3000u) {
+      g_last_st = WIFI_NETS_BUSY;
       err("the ARM11 core is busy", 0, 0);
       return 0;
     }
   return 1;
 }
+
+static int claim(void) { return claim_op(0); }
 
 /* The operands reach memory before the counter that announces them. */
 static void send(u32 cmd, u32 arg0) {
@@ -187,6 +207,7 @@ static int wait(u32 max_ms) {
 
 static void net_err(u32 st, const char *host) {
   g_transient = 0;
+  g_last_st = st;
   switch (st) {
     case WIFI_NETS_NOLINK:
       err("not connected to a network", 0, 0);
@@ -225,6 +246,12 @@ static void net_err(u32 st, const char *host) {
     case WIFI_NETS_TLS:
       err(host ? host : "the server", ": ", tls_error_text(g_tls_err));
       break;
+    case WIFI_NETS_BUSY:
+      if (g_tcp_held) {
+        err("a socket holds the network connection: close it first", 0, 0);
+        break;
+      }
+      /* fall through */
     default:
       err("the Wi-Fi chip did not finish in time", 0, 0);
       g_transient = 1;
@@ -234,7 +261,7 @@ static void net_err(u32 st, const char *host) {
 
 static u32 net_op(u32 op, u32 ip, u32 seq, const char *name, u32 timeout_ms) {
   u32 n = 0;
-  if (!claim())
+  if (!claim_op(op))
     return WIFI_NETS_BUSY;
   io->ip = ip;
   io->seq = seq;
@@ -249,9 +276,17 @@ static u32 net_op(u32 op, u32 ip, u32 seq, const char *name, u32 timeout_ms) {
   return io->status;
 }
 
+/* With a connection running in the background the core answers STATUS
+ * without writing WifiNetIo, which still reports on the connection. */
+static int bg_running(void) {
+  return st_is_open() || (g_tcp_held && wifi_tcp_state() != WIFI_TCP_CLOSED);
+}
+
 int appnet_online(void) {
   if (!appnet_ready())
     return 0;
+  if (bg_running())
+    return 1;
   if (net_op(WIFI_NETOP_STATUS, 0, 0, 0, 1000u) == WIFI_NETS_OK)
     return 1;
   err("not connected to a network", 0, 0);
@@ -300,7 +335,7 @@ int appnet_join(void) {
   g_err[0] = 0;
   if (!appnet_ready())
     return 0;
-  if (st_is_open())
+  if (bg_running())
     return 1;
   if (net_op(WIFI_NETOP_STATUS, 0, 0, 0, 1000u) == WIFI_NETS_OK)
     return 1;
@@ -813,6 +848,10 @@ static int st_open(const Url *u) {
     err("streams need a newer AuroraOS", 0, 0);
     return 0;
   }
+  if (g_tcp_held) {
+    err("a socket holds the network connection: close it first", 0, 0);
+    return 0;
+  }
   if (!appnet_resolve(u->host, &ip))
     return 0;
   if (u->tls) {
@@ -1291,7 +1330,7 @@ int appnet_http(const char *method, const char *url, const char *headers,
                : exchange(ip, u.port, g_req, len, &got, &stage);
     wipe(g_req, len); /* it may carry a key */
     if (st != WIFI_NETS_OK) {
-      if (stage <= WIFI_HTTP_CONNECT)
+      if (stage <= WIFI_HTTP_CONNECT && st != WIFI_NETS_BUSY)
         dns_forget(ip);
       net_err(st, u.host);
       return 0;
@@ -1460,3 +1499,90 @@ int appnet_download(const char *url, const char *headers, const char *path,
     f_unlink(part);
   return ok;
 }
+
+int appnet_tcp_open(u32 ip, u32 port, u32 timeout_ms) {
+  g_err[0] = 0;
+  if (!appnet_ready())
+    return 0;
+  if (ctrl->version < AUDIO_TCP_BG_VERSION) {
+    g_last_st = WIFI_NETS_NOLINK;
+    err("sockets need a newer AuroraOS", 0, 0);
+    return 0;
+  }
+  if (g_tcp_held || st_is_open()) {
+    g_last_st = WIFI_NETS_BUSY;
+    err("the network connection is in use", 0, 0);
+    return 0;
+  }
+  wifi_tcp_setup(ip, port, timeout_ms);
+  if (!st_tcp_start()) {
+    if (!g_err[0]) {
+      g_last_st = WIFI_NETS_BUSY;
+      err("the ARM11 core did not take the connection", 0, 0);
+    }
+    return 0;
+  }
+  g_tcp_held = 1;
+  return 1;
+}
+
+u32 appnet_tcp_status(void) {
+  os_cache_sync();
+  return ctrl->version >= AUDIO_UDP_VERSION ? wifi_tcp_end_status()
+                                            : io->status;
+}
+
+u32 appnet_core_version(void) {
+  os_cache_sync();
+  return ctrl->magic == AUDIO_MAGIC ? ctrl->version : 0;
+}
+
+/* As st_tcp_start: a short wait, with nothing drawn meanwhile. */
+static int udp_op(u32 op) {
+  if (!claim_op(op))
+    return 0;
+  send(AUDIO_CMD_WIFI_NET, op);
+  for (u32 t0 = appnet_ms(); !core_done();)
+    if (appnet_ms() - t0 >= 5000u) {
+      g_last_st = WIFI_NETS_BUSY;
+      err("the ARM11 core did not answer", 0, 0);
+      return 0;
+    }
+  g_busy = 0;
+  return 1;
+}
+
+int appnet_udp_bind(u32 port) {
+  u32 st;
+  g_err[0] = 0;
+  if (!appnet_ready())
+    return 0;
+  if (ctrl->version < AUDIO_UDP_VERSION) {
+    g_last_st = WIFI_NETS_NOLINK;
+    err("UDP needs a newer AuroraOS", 0, 0);
+    return 0;
+  }
+  wifi_udp_setup(port);
+  if (!udp_op(WIFI_NETOP_UDP_BIND))
+    return 0;
+  st = io->status;
+  if (st == WIFI_NETS_TOOBIG) {
+    g_last_st = st;
+    err("that UDP port cannot be used", 0, 0);
+    return 0;
+  }
+  if (st != WIFI_NETS_OK) {
+    net_err(st, 0);
+    return 0;
+  }
+  return 1;
+}
+
+void appnet_udp_unbind(void) {
+  if (appnet_ready() && ctrl->version >= AUDIO_UDP_VERSION)
+    udp_op(WIFI_NETOP_UDP_UNBIND);
+}
+
+void appnet_tcp_release(void) { g_tcp_held = 0; }
+
+u32 appnet_last_status(void) { return g_last_st; }

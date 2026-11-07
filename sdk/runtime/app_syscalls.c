@@ -62,13 +62,20 @@ int _open_r(struct _reent *r, const char *path, int flags, int mode) {
   return fail(r, app_fs_open(path, flags));
 }
 
+/* A descriptor in the sockets' range when no socket was ever made. */
+static int sock_none(void) { return -EBADF; }
+
 int _close_r(struct _reent *r, int fd) {
+  if (app_sock_fd(fd))
+    return fail(r, g_app_sock ? g_app_sock->close(fd) : sock_none());
   return fd < APP_FD_FIRST ? 0 : fail(r, app_fs_close(fd));
 }
 
 _ssize_t _read_r(struct _reent *r, int fd, void *buf, size_t n) {
   if (fd == STDIN_FILENO)
     return 0;
+  if (app_sock_fd(fd))
+    return fail(r, g_app_sock ? g_app_sock->read(fd, buf, n) : sock_none());
   if (fd < APP_FD_FIRST)
     return fail(r, -EBADF);
   return fail(r, app_fs_read(fd, buf, n));
@@ -79,6 +86,8 @@ _ssize_t _write_r(struct _reent *r, int fd, const void *buf, size_t n) {
     app_con_write(buf, n);
     return (_ssize_t)n;
   }
+  if (app_sock_fd(fd))
+    return fail(r, g_app_sock ? g_app_sock->write(fd, buf, n) : sock_none());
   if (fd < APP_FD_FIRST)
     return fail(r, -EBADF);
   return fail(r, app_fs_write(fd, buf, n));
@@ -86,7 +95,7 @@ _ssize_t _write_r(struct _reent *r, int fd, const void *buf, size_t n) {
 
 _off_t _lseek_r(struct _reent *r, int fd, _off_t off, int whence) {
   long pos;
-  if (fd < APP_FD_FIRST)
+  if (fd < APP_FD_FIRST || app_sock_fd(fd))
     return fail(r, -ESPIPE);
   pos = app_fs_lseek(fd, off, whence);
   if (pos < 0) {
@@ -102,6 +111,8 @@ int _fstat_r(struct _reent *r, int fd, struct stat *st) {
     st->st_mode = S_IFCHR;
     return 0;
   }
+  if (app_sock_fd(fd))
+    return fail(r, g_app_sock ? g_app_sock->fstat(fd, st) : sock_none());
   return fail(r, app_fs_fstat(fd, st));
 }
 
@@ -150,6 +161,8 @@ int ftruncate(int fd, off_t len) {
 }
 
 int fsync(int fd) {
+  if (app_sock_fd(fd))
+    return fail(_REENT, -EINVAL);
   return fd < APP_FD_FIRST ? 0 : fail(_REENT, app_fs_fsync(fd));
 }
 

@@ -190,7 +190,8 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_fwdump.o \
            $(BUILD_DIR)/os_account.o $(BUILD_DIR)/os_qr.o \
            $(BUILD_DIR)/os_http.o $(BUILD_DIR)/os_uisound.o \
-           $(BUILD_DIR)/os_wifitcp.o $(BUILD_DIR)/os_tls.o \
+           $(BUILD_DIR)/os_wifitcp.o $(BUILD_DIR)/os_wifiudp.o \
+           $(BUILD_DIR)/os_tls.o \
            $(BUILD_DIR)/os_tlsroots.o $(BUILD_DIR)/os_appnet.o \
            $(BEARSSL_OBJS)
 
@@ -360,6 +361,10 @@ $(BUILD_DIR)/os_uisound.o: $(OS_DIR)/UiSound.c $(wildcard $(INC_DIR)/*.h) | dirs
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_wifitcp.o: $(OS_DIR)/WiFiTcp.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_wifiudp.o: $(OS_DIR)/WiFiUdp.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 

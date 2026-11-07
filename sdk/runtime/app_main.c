@@ -24,6 +24,7 @@ extern void os_cache_sync(void);
 extern void os_dcache_clean_range(const void *addr, u32 len);
 
 bool g_app_leaving;
+const AppSockOps *g_app_sock;
 
 static u32 g_entry_mode; /* CPSR at entry, for leaving from the crash screen */
 static bool g_quit;
@@ -112,6 +113,7 @@ bool app_home_pressed(void) {
 }
 
 void app_poll_home(void) {
+  app_sock_tick();
   if (g_app_leaving || !app_from_home())
     return;
   app_hid_home_menu_poll();
@@ -129,6 +131,8 @@ void app_leave(int code) {
   g_app_leaving = true;
   if (app_leave_video)
     app_leave_video();
+  if (g_app_sock)
+    g_app_sock->leave();
   app_net_leave();
   app_fs_close_all();
   app_snd_leave();

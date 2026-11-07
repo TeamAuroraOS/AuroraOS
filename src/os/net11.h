@@ -46,6 +46,10 @@ typedef struct {
   uint32_t tcp_rx_cap, tcp_rx_len, tcp_rx_done;
   uint32_t tcp_rx_pos;   /* where the next byte goes */
   uint32_t tcp_wnd_sent; /* the window our last segment announced */
+  /* The one UDP port bound for the ARM9 (0: none), and the datagram the last
+   * NET_RX_UDP was about: its sender, and where its bytes are in the frame. */
+  uint16_t udp_lport, udp_sport;
+  uint32_t udp_src, udp_off, udp_len;
 } NetState;
 
 enum {
@@ -76,6 +80,7 @@ enum {
   NET_RX_PING_ERR,   /* value: ICMP type << 8 | code | sequence << 16, for
                         an unreachable or time-exceeded about our echo */
   NET_RX_TCP,        /* value: the segment's flags; an ACK may be built */
+  NET_RX_UDP,        /* value: the length; udp_src, udp_sport, udp_off set */
 };
 
 /* Longest frame built here but for TCP data (a DHCP message). */
@@ -85,6 +90,8 @@ enum {
 /* Most TCP data put in one segment, and the longest frame that makes. */
 #define NET_TCP_SEG 512u
 #define NET_TX_MAX  (14u + 20u + 20u + NET_TCP_SEG)
+/* The most data a UDP frame built here carries. */
+#define NET_UDP_MAX (NET_TX_MAX - 14u - 20u - 8u)
 /* The MSS we announce: a whole segment, with room to spare, still fits one
  * HTC frame (WiFi11.c HTC_FRAME_MAX). */
 #define NET_TCP_MSS 1200u
@@ -102,6 +109,11 @@ uint32_t net_ping(NetState *n, uint8_t *f, uint32_t dst, const uint8_t *dmac,
  * valid host name. */
 uint32_t net_dns(NetState *n, uint8_t *f, uint32_t server,
                  const uint8_t *dmac, const char *name);
+/* A datagram from our port sport to dst:dport; 0 if len > NET_UDP_MAX. f
+ * holds NET_TX_MAX bytes. */
+uint32_t net_udp(NetState *n, uint8_t *f, uint32_t dst, const uint8_t *dmac,
+                 uint32_t sport, uint32_t dport, const uint8_t *data,
+                 uint32_t len);
 
 /* Starts the connection: a SYN goes to dmac (net_tcp_seg with NET_TCP_SYN),
  * and the reply is read into rx, at most rx_cap bytes. */

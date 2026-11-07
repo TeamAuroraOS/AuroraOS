@@ -34,6 +34,7 @@ bool app_lid_wait(void) {
   t0 = app_raw_ticks64();
   while (aurora_lid_is_closed()) {
     app_raw_ticks64(); /* keeps seeing the wraps, however long it stays shut */
+    app_sock_tick();
     delay(60000);
   }
   g_lid_ticks += app_raw_ticks64() - t0;

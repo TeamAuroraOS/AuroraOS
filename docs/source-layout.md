@@ -10,7 +10,7 @@ ARM9 runs the OS; the ARM11 handles the hardware the ARM9 cannot reach.
 |-----------|------|-------|
 | Audio (codec output, CSND) | `src/os/Audio9.c` | `src/os/Audio11.c` |
 | Touchscreen | `src/os/Touch9.c` | `src/os/Touch11.c` |
-| Wi-Fi | `src/os/WiFi9.c`, `src/os/WiFiJoin.c` (the join, shared with apps), `src/os/AppNet.c` (the network for apps and `curl`), `src/os/WiFiTcp.c` (the TCP rings), `src/os/Crypto.c` (the PMK) | `src/os/WiFi11.c`, `src/os/Wpa11.c` (WPA2), `src/os/Net11.c` (DHCP, ARP, DNS, ping, TCP) |
+| Wi-Fi | `src/os/WiFi9.c`, `src/os/WiFiJoin.c` (the join, shared with apps), `src/os/AppNet.c` (the network for apps and `curl`), `src/os/WiFiTcp.c` (the TCP rings), `src/os/WiFiUdp.c` (the UDP rings, for apps), `src/os/Crypto.c` (the PMK) | `src/os/WiFi11.c`, `src/os/Wpa11.c` (WPA2), `src/os/Net11.c` (DHCP, ARP, DNS, ping, TCP, UDP) |
 | HTTPS | `src/os/Tls.c` (the TLS client, over BearSSL in `lib/bearssl`), `src/os/TlsRoots.c` (the roots, made by `tools/mkroots.py` from `assets/certs/roots.pem`) | the TCP connection in `src/os/WiFi11.c` |
 | GPU | `src/os/Gpu9.c` | `src/os/Gpu11.c` |
 | GPU 3D pipeline (P3D) | `src/os/P3d9.c` (command lists) | `src/os/P3d11.c` (runs them) |
@@ -50,8 +50,11 @@ tools) and converted by `tools/shbin2c.py`.
 Apps have two toolchains. `auric-lang/` is the Auric language and its
 compiler. `sdk/` is for apps in C: the public header `sdk/include/aurora_app.h`,
 the runtime in `sdk/runtime/` (which links the OS's own drivers from `src/`
-and devkitARM's newlib), the build tool `sdk/aurcc.py` and examples in
-`sdk/examples/`. `cpu-stress/` is a CPU benchmark built both as an AuroraOS C
+and devkitARM's newlib; `app_socket.c` and `app_dirent.c` add BSD sockets and
+`<dirent.h>`, with the socket headers newlib lacks in `sdk/include/`), the
+build tool `sdk/aurcc.py`, examples in `sdk/examples/`, and tests:
+`sdk/tests/test_aurcc.py` for the tool, `sdk/tests/host/` for the runtime's
+code run on a PC against a model of the ARM11 core. `cpu-stress/` is a CPU benchmark built both as an AuroraOS C
 app and as Horizon homebrew, to compare the two systems.
 
 Art, fonts and the OS's sounds are built into `Aurora/assets.pak` by

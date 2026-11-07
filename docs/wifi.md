@@ -581,6 +581,8 @@ if it cannot, the session ends and the answer is `WIFI_NETS_NOLINK`.
 | `HTTP` | one HTTP exchange over TCP with `ip`:`port` (core 114): the request at `WIFI_HTTP_REQ` (`0x233B9000`, 2 KB) goes out, the reply comes back at `WIFI_HTTP_RESP` (`0x23200000`, 1020 KB; 8 KB at `0x233B9800` before core 115) until the server closes or its `Content-Length` is in; `resp_len`, `stage`, `resent`, or `REFUSED` (RST), `TOOBIG`, `TIMEOUT` |
 | `TCP` | a connection with `ip`:`port` that the ARM9 drives through `WifiTcp` until it closes it (core 121; see *A connection the ARM9 drives*); `stage`, `resent`, or `REFUSED`, `NOHOST`, `TIMEOUT` |
 | `TCP_BG` | the same, but the command ends as soon as the SYN is out, and the core keeps the connection going between other commands (core 124; see *A connection in the background*) |
+| `UDP_BIND` | from core 126: datagrams to and from local port `port` (0: the core picks one from 49152) go through `WifiUdp`, in the background, until `UDP_UNBIND`, a join, a probe, `LEAVE`, the session ending, or 15 s without an `alive` bump; binding again moves it and empties the rings. `TOOBIG` for port 68, the DHCP client's (see *A UDP port for apps*) |
+| `UDP_UNBIND` | from core 126: the port closes |
 
 A frame for an address off our subnet goes to the router's MAC; one on the
 subnet first needs that host's MAC, asked for with ARP (one entry is kept).
@@ -601,9 +603,15 @@ through `WifiTcp` at `0x233F0000` (`include/wifi.h`):
 | Part | Size | Written by |
 |------|------|------------|
 | `tx_head`, `rx_tail`, `close`, `alive` | one 32-byte line | the ARM9 |
-| `state`, `tx_tail`, `rx_head`, `eof` | one 32-byte line | the core (the ARM9 sets them once, before posting) |
+| `state`, `tx_tail`, `rx_head`, `eof`, `end_status` | one 32-byte line | the core (the ARM9 sets them once, before posting) |
 | `tx` | 16 KB ring | the ARM9 |
 | `rx` | 32 KB ring | the core |
+
+`end_status` (core 126, in what was padding) is the `WIFI_NETS_*` the connection
+ended with, written with `WIFI_TCP_CLOSED`; `WifiNetIo.status` still gets it too,
+for older ARM9 code, but from core 126 a `DNS` op may run beside the connection and
+write `WifiNetIo` meanwhile. On an older core `end_status` stays 0, so the ARM9
+reads it only from core 126 (`appnet_tcp_status`).
 
 Counters are byte totals since the connection began; a ring position is the
 total modulo the ring's size. Each side writes only its own line, since a
@@ -659,10 +667,61 @@ have already arrived. So presents, sounds, the touchscreen, the lid and the syst
 menu all work during the connection. `WifiTcp.state` reaching `WIFI_TCP_CLOSED`
 is its end, and `WifiNetIo.status` says how, as before.
 
-Only one network operation runs at a time. Until it ends, `STATUS` acks without
-touching `WifiNetIo`, which still reports on the connection; anything else, such
-as the OS needing the network after an app crashed, ends the connection first, so
-nothing waits out the 15 s `alive` limit. A boot or a probe does the same.
+Only one TCP connection runs at a time. Until it ends, `STATUS` acks without
+touching `WifiNetIo`, which still reports on the connection. From core 126 `DNS`,
+`UDP_BIND` and `UDP_UNBIND` run beside it: a lookup pumps the chip as any op does,
+so the connection's segments are taken (and acknowledged) meanwhile, though
+`tcp_step` does not run until the lookup is over (up to three tries of
+`timeout_ms`). The connection keeps the status it will end with in `TcpRun`, so the
+lookup cannot change it. Anything else, such as the OS needing the network after an
+app crashed, ends the connection first, so nothing waits out the 15 s `alive`
+limit; before core 126 a `DNS` did too. A boot or a probe does the same.
+
+### A UDP port for apps
+
+`WIFI_NETOP_UDP_BIND` (core 126) gives the ARM9 one UDP port, for the C SDK's
+datagram sockets. Like a `TCP_BG` connection it lives between commands:
+`wifi11_tick()` serves it on every pass of the core's main loop, beside a TCP
+connection or alone, and the frames it reads are only those already in the chip.
+`WifiUdp` at `0x233FC100`, after `WifiTcp`, holds it (`include/wifi.h`):
+
+| Part | Size | Written by |
+|------|------|------------|
+| `tx_head`, `rx_tail`, `alive` | one 32-byte line | the ARM9 |
+| `state`, `port`, `tx_tail`, `rx_head`, `dropped`, `unsent` | one 32-byte line | the core |
+| `tx` | 4 KB ring | the ARM9 |
+| `rx` | 8 KB ring | the core |
+
+It ends at `0x233FF140`, in what was free below the PCM buffer at `0x23400000`
+(`_Static_assert`s in `WiFi11.c` check both ends). A datagram is a record: an
+8-byte head (the address, the port and the length, big-endian as on the wire) and
+the bytes, padded to 4; records wrap around the end of a ring byte by byte, and
+counters are byte totals as in `WifiTcp`. The ARM9 side is `src/os/WiFiUdp.c`
+(`wifi_udp_*`), which apps link.
+
+- **Receiving**: `net_rx` (`Net11.c`) takes a datagram for the bound port sent to
+  our address, to 255.255.255.255 or to our subnet's broadcast address; a
+  checksum, when the sender gave one, must sum right, and fragments are dropped
+  (nothing puts them back together). `udp_deliver` copies it into `rx` with the
+  sender's address and port, or counts it in `dropped` when there is no room.
+  One frame can carry 1472 bytes (`WIFI_UDP_RECV_MAX`).
+- **Sending**: up to four records a pass. A datagram to a host off our subnet goes
+  to the router's MAC, a broadcast to `ff:ff:ff:ff:ff:ff`; one to a host on our
+  subnet whose MAC is not known sends one ARP request and waits for the answer,
+  without holding up the core, for up to 1 s, then is dropped and counted in
+  `unsent`. A frame the chip has no credit for is tried again on the next pass, 64
+  times at most. A datagram carries at most 524 bytes (`WIFI_UDP_SEND_MAX`, one
+  frame of `NET_TX_MAX` as TCP sends them).
+- **Ending**: `UDP_UNBIND`, a join, a probe, `LEAVE`, the session ending, or 15 s
+  with no `alive` bump (`WIFI_TCP_ALIVE_MS`) sets `state` to `WIFI_UDP_OFF`. A
+  lookup never answers to the bound port: `wifi_op_dns` picks another for itself.
+
+Checked on a PC (2026-11-07, `sdk/tests/host`): `net_udp` and `net_rx` as they
+are, building datagrams in one `NetState` and taking them apart in another (31
+checks: the frame, the checksum, ports, our address, both broadcasts, damaged
+lengths and checksums, fragments). The rest of the core's side (`udp_bind`,
+`udp_step`, `udp_mac`, the tick, `DNS` beside a connection) was built and read, and
+the ARM9 side was run against a model of it; none of it has run on a console.
 
 On top of it, `appnet_stream_*` (`src/os/AppNet.c`) runs HTTP/1.1 keep-alive GETs
 over one connection, and `tls_stream_*` (`src/os/Tls.c`) runs TLS over it without
@@ -803,7 +862,15 @@ does for the OS:
   and the reason a join failed (`wifi_join_why`) are in
   `src/os/WiFiJoin.c`, shared with the OS.
 - **DNS, ping, one TCP exchange** are `WIFI_NETOP_DNS`, `PING` and `HTTP`;
-  names are kept (eight) and looked up again when a server did not connect.
+  names are kept (eight) and looked up again when a server did not connect
+  (not when the call never reached the network because the core was taken).
+- **Sockets** (C SDK 1.6, `sdk/runtime/app_socket.c`): a TCP socket is a
+  `TCP_BG` connection (`appnet_tcp_open`), a UDP socket the core's UDP port
+  (`appnet_udp_bind`, core 126). While a socket holds the TCP connection,
+  AppNet refuses every other call rather than let the core end it: all but a
+  link check before core 126, all but lookups and the UDP port from 126.
+  `net_connected()` and the join answer from the connection itself then, since
+  the core leaves `WifiNetIo` alone for a `STATUS` meanwhile.
   `https://` goes over `WIFI_NETOP_TCP` with TLS on the ARM9 (`Tls.c`,
   `docs/tls.md`), from core 121.
 - **HTTP** is built on the ARM9: HTTP/1.0 with `Host`, `Connection: close`
@@ -1032,12 +1099,12 @@ there into shared FCRAM before each boot. Main.type5 is copied but not used.
 
 ## Path forward
 
-1. Servicing the chip between commands (today frames wait in it until the
-   next one). A TCP connection lives inside one command (`WIFI_NETOP_HTTP`,
-   or `WIFI_NETOP_TCP` for as long as the ARM9 keeps it, which TLS uses);
-   sockets that outlive a command, and several at once, still need the chip
-   serviced in the background. Keeping segments that arrive out of order,
-   rather than dropping them, would help links that reorder.
+1. Servicing the chip between commands: done for one TCP connection
+   (`TCP_BG`, core 124) and one UDP port (core 126), which the C SDK's sockets
+   use. Several TCP connections at once, a listening socket, and UDP datagrams
+   larger than one 566-byte frame (or fragments) are still to do. Keeping
+   segments that arrive out of order, rather than dropping them, would help
+   links that reorder.
 2. WPA3 (SAE) would need the firmware to pass authentication frames to the
    host, which this one may not do; WPA2/WPA3 transition networks already
    work as WPA2.
