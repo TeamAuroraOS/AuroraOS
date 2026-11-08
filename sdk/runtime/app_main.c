@@ -3,6 +3,7 @@
 #include "audio.h"
 #include "container.h"
 #include "crash.h"
+#include "crash_shared.h"
 #include "gpu.h"
 #include "i2c.h"
 #include "loader.h"
@@ -25,6 +26,9 @@ extern void os_dcache_clean_range(const void *addr, u32 len);
 
 bool g_app_leaving;
 const AppSockOps *g_app_sock;
+
+static bool g_sd_initialized;
+static bool g_sd_previous;
 
 static u32 g_entry_mode; /* CPSR at entry, for leaving from the crash screen */
 static bool g_quit;
@@ -119,6 +123,23 @@ void app_poll_home(void) {
   app_hid_home_menu_poll();
   if (app_home_pressed())
     exit(0);
+}
+
+void app_sdcard_poll(void) {
+  bool present = (sdmmc_read16(REG_SDSTATUS0) & TMIO_STAT0_SIGSTATE) != 0;
+  if (!g_sd_initialized) {
+    g_sd_previous = present;
+    g_sd_initialized = true;
+    return;
+  }
+  if (present == g_sd_previous) {
+    return;
+  }
+
+  g_sd_previous = present;
+  if (!present) {
+    crash_with_reason(CRASH_SD_EJECT, CRASH_CPU_ARM11);
+  }
 }
 
 /* An app built without --video does not have this. */
@@ -240,6 +261,8 @@ static int g_fps;
 bool app_loop(void) {
   u32 now;
   u32 shown;
+
+  app_sdcard_poll();
 
   /* Before the present as well as at the input scan, so a slow frame does not
    * hold up HOME or Return to Home. */

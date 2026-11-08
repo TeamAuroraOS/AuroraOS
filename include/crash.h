@@ -6,9 +6,10 @@
 /* Also the index into the reason strings. */
 enum {
   CRASH_UNDEF = 0,
-  CRASH_PABT  = 1,
-  CRASH_DABT  = 2,
-  CRASH_USER  = 3,
+  CRASH_PABT     = 1,
+  CRASH_DABT     = 2,
+  CRASH_USER     = 3,
+  CRASH_SD_EJECT = 4,
 };
 
 /* CPU snapshot captured at the fault. Layout is shared with crash.s, keep the
@@ -35,6 +36,8 @@ extern void (*g_crash_poll)(void);
 
 /* Never returns. */
 void crash_handle(CrashDump *d);
+
+void crash_with_reason(int reason, int cpu);
 
 /* A user-forced crash of the current state; never returns. */
 void crash_force(void);
