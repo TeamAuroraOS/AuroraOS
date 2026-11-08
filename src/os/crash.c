@@ -1,5 +1,5 @@
-#include "audio.h"
 #include "crash.h"
+#include "audio.h"
 #include "crash_shared.h"
 #include "font.h"
 #include "gpu.h"
@@ -39,11 +39,18 @@ static void hex8(char *o, u32 v) { /* "XXXXXXXX" (8 chars, no prefix) */
 
 static const char *reason_name(u32 exc) {
   switch (exc) {
-    case CRASH_UNDEF: return "Undefined Instruction";
-    case CRASH_PABT:  return "Prefetch Abort";
-    case CRASH_DABT:  return "Data Abort";
-    case CRASH_USER:  return "User Forced Crash";
-    default:          return "Unknown";
+  case CRASH_UNDEF:
+    return "Undefined Instruction";
+  case CRASH_PABT:
+    return "Prefetch Abort";
+  case CRASH_DABT:
+    return "Data Abort";
+  case CRASH_USER:
+    return "User Forced Crash";
+  case CRASH_SD_EJECT:
+    return "SD Card Eject";
+  default:
+    return "Unknown";
   }
 }
 
@@ -141,7 +148,8 @@ static void draw_dump(CrashDump *d) {
     if (col == 2)
       y += 14;
   }
-  /* The auto-power-off countdown is drawn along the bottom by crash_handle(). */
+  /* The auto-power-off countdown is drawn along the bottom by crash_handle().
+   */
 }
 
 /* Same sequence as power_shutdown() in src/power.c. */
@@ -245,6 +253,16 @@ void crash_force(void) {
   crash_handle(&g_crash_dump);
 }
 
+void crash_with_reason(int reason, int cpu) {
+  crash_capture(&g_crash_dump);
+  g_crash_dump.exc = reason;
+  g_crash_dump.dfsr = 0;
+  g_crash_dump.dfar = 0;
+  g_crash_dump.cpu = cpu;
+  g_crash_dump.core = 0;
+  crash_handle(&g_crash_dump);
+}
+
 /* Fast path: invalidate one cache line and read the magic. */
 void crash_poll_arm11(void) {
   volatile CrashShared *cs = (volatile CrashShared *)CRASH_SHARED_ADDR;
@@ -274,18 +292,19 @@ void crash_init(void) {
   volatile u32 *vec =
       (volatile u32 *)((sctlr & (1u << 13)) ? 0xFFFF0000u : 0x00000000u);
 
-  /* Each of the 8 vectors: LDR PC, [PC, #0x18]  (fetch handler from vec[i+8]). */
+  /* Each of the 8 vectors: LDR PC, [PC, #0x18]  (fetch handler from vec[i+8]).
+   */
   for (int i = 0; i < 8; i++)
     vec[i] = 0xE59FF018u;
 
-  vec[8]  = (u32)crash_hang;       /* reset */
-  vec[9]  = (u32)crash_vec_undef;  /* undef */
-  vec[10] = (u32)crash_hang;       /* swi */
-  vec[11] = (u32)crash_vec_pabt;   /* prefetch */
-  vec[12] = (u32)crash_vec_dabt;   /* data */
-  vec[13] = (u32)crash_hang;       /* reserved */
-  vec[14] = (u32)crash_hang;       /* irq */
-  vec[15] = (u32)crash_hang;       /* fiq */
+  vec[8] = (u32)crash_hang;      /* reset */
+  vec[9] = (u32)crash_vec_undef; /* undef */
+  vec[10] = (u32)crash_hang;     /* swi */
+  vec[11] = (u32)crash_vec_pabt; /* prefetch */
+  vec[12] = (u32)crash_vec_dabt; /* data */
+  vec[13] = (u32)crash_hang;     /* reserved */
+  vec[14] = (u32)crash_hang;     /* irq */
+  vec[15] = (u32)crash_hang;     /* fiq */
 
   /* Clear the cross-core crash block so a stale/garbage magic (FCRAM is not
    * cleared at boot) can't be mistaken for an ARM11 crash. */

@@ -22,6 +22,7 @@
 #include "audio.h"
 #include "container.h"
 #include "crash.h"
+#include "crash_shared.h"
 #include "font.h"
 #include "gpu.h"
 #include "homemenu.h"
@@ -46,8 +47,29 @@ void delay(volatile u32 cycles) {
  * get_keys_down() acts on it: screens also call get_keys() directly. */
 static int lid_resumed;
 
+static bool g_sd_initialized;
+static bool g_sd_previous;
+
+void sdcard_poll(void) {
+  bool present = (sdmmc_read16(REG_SDSTATUS0) & TMIO_STAT0_SIGSTATE) != 0;
+  if (!g_sd_initialized) {
+    g_sd_previous = present;
+    g_sd_initialized = true;
+    return;
+  }
+  if (present == g_sd_previous) {
+    return;
+  }
+
+  g_sd_previous = present;
+  if (!present) {
+    crash_with_reason(CRASH_SD_EJECT, CRASH_CPU_ARM9);
+  }
+}
+
 /* HID pad bits 0..9 are A/B/Select/Start/D-pad/R/L; 10 and 11 are X and Y. */
 u32 get_keys(void) {
+  sdcard_poll();
   if (aurora_lid_is_closed()) {
     ui_sound_lid_closed();
     aurora_lid_wait_open();
