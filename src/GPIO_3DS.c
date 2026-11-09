@@ -11,7 +11,7 @@ int GPIO_write(const char *c) {
 int GPIO_write_full(const char *c) {
   if (c == 0)
     return -1;
-  while (*c =! '\0') {
+  while (*c != '\0') {
     *(volatile unsigned char *)GPIO_MEM = (unsigned char)*c;
     c++;
   }
