@@ -1,7 +1,7 @@
 TARGET = AuroraOS
 OBJS = display.o GPIO_write.o virt_addr.o
 
-INCDIR = 
+INCDIR = /arch/PSP/
 CFLAGS = -O0 -Wall -g -ffreestanding 
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS = $(CFLAGS)
