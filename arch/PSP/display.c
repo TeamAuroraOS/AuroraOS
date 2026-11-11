@@ -7,6 +7,7 @@ int psp_screen_init_slim(){
 __asm__ volatile ("sync");
 LCD_SLIM = 0x1;
 DISPLAY_MEM = 0x04000000;
+DISPLAY_CONTROL = 0x1;
 return 0;
 }
 
