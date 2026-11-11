@@ -9,9 +9,9 @@ DISPLAY_MEM = 0x04000000;
 return 0;
 }
 
-int psp_screen_init_fat(){
+/* int psp_screen_init_fat(){
 __asm__ volatile ("sync");
 LCD_FAT = 0x10000000;
 DISPLAY_MEM = 0x04000000;
 return 0;
-}
+} */
