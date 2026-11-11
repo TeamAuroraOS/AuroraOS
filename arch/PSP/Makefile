@@ -1,5 +1,5 @@
 TARGET = AuroraOS
-OBJS = display.o GPIO_write.o virt_addr.o
+OBJS = display.o GPIO_write.o virt_addr.o uart.o
 
 INCDIR = /arch/PSP/
 CFLAGS = -O0 -Wall -g -ffreestanding 
