@@ -300,6 +300,7 @@ enum {
                             bump for WIFI_TCP_ALIVE_MS. Binding again moves
                             it to the new port and empties the rings. */
   WIFI_NETOP_UDP_UNBIND,
+  WIFI_NETOP_TCP_BG2,
 };
 
 /* The first core that runs WIFI_NETOP_TCP_BG. */
@@ -307,6 +308,7 @@ enum {
 /* The first core with WIFI_NETOP_UDP_BIND, DNS beside a background TCP
  * connection, and WifiTcp.end_status. */
 #define AUDIO_UDP_VERSION 126
+#define AUDIO_TCP_LISTEN_VERSION 127
 
 enum {
   WIFI_NETS_OK = 0,
@@ -338,7 +340,7 @@ enum {
 #define WIFI_HTTP_REQ      0x233B9000u
 #define WIFI_HTTP_REQ_MAX  0x800u
 #define WIFI_HTTP_RESP     0x23200000u
-#define WIFI_HTTP_RESP_MAX 0xFF000u
+#define WIFI_HTTP_RESP_MAX 0xF0000u
 
 typedef struct {
   volatile uint32_t status;     /* WIFI_NETS_* */
@@ -364,6 +366,8 @@ typedef struct {
  * ring position is the total modulo the ring's size. The ARM9 cleans what it
  * wrote before moving tx_head, and invalidates before reading. */
 #define WIFI_TCP_ADDR 0x233F0000u
+#define WIFI_TCP2_ADDR 0x232F0000u
+#define WIFI_TCP_CHANNEL_ADDR(c) ((c) ? WIFI_TCP2_ADDR : WIFI_TCP_ADDR)
 #define WIFI_TCP_TX   0x4000u
 #define WIFI_TCP_RX   0x8000u
 /* The core drops a connection whose ARM9 side stopped bumping `alive`. */
@@ -398,7 +402,7 @@ typedef struct {
   /* The WIFI_NETS_* it ended with, set with WIFI_TCP_CLOSED. WifiNetIo.status
    * gets it too, but a DNS op beside the connection also writes that. */
   volatile uint32_t end_status;
-  volatile uint32_t core_pad[3];
+  volatile uint32_t peer_ip, peer_port, local_port;
   volatile uint8_t tx[WIFI_TCP_TX];
   volatile uint8_t rx[WIFI_TCP_RX];
 } WifiTcp;
@@ -568,7 +572,12 @@ uint32_t wifi_https(const char *host, uint32_t ip, uint32_t port,
  * fills the operands; the caller then posts the operation and, while the
  * core runs it, moves bytes with the calls below, each of which looks at the
  * rings afresh. */
+void wifi_tcp_select(uint32_t channel);
+uint32_t wifi_tcp_channel(void);
 void wifi_tcp_setup(uint32_t ip, uint32_t port, uint32_t timeout_ms);
+uint32_t wifi_tcp_peer_ip(void);
+uint32_t wifi_tcp_peer_port(void);
+uint32_t wifi_tcp_local_port(void);
 uint32_t wifi_tcp_state(void); /* WIFI_TCP_* */
 /* Copies what fits into tx; returns how much. */
 uint32_t wifi_tcp_write(const void *p, uint32_t n);
