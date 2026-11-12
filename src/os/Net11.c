@@ -389,15 +389,40 @@ static int tcp_rx(NetState *n, const uint8_t *f, const uint8_t *t,
                   uint32_t len, uint8_t *reply, uint32_t *reply_len,
                   uint32_t *value) {
   uint32_t off = (uint32_t)(t[12] >> 4) * 4u, fl = t[13];
-  if (off < 20u || off > len || get16(t) != n->tcp_rport ||
+  uint32_t source = get32(f + 26);
+  if (off < 20u || off > len || (n->tcp_state != NET_TCP_LISTEN && get16(t) != n->tcp_rport) ||
       get16(t + 2) != n->tcp_lport ||
-      l4_sum(IP_TCP, n->tcp_ip, n->ip, t, len) != 0xFFFFu)
+      l4_sum(IP_TCP, source, n->ip, t, len) != 0xFFFFu)
     return NET_RX_OTHER;
   uint32_t seq = get32(t + 4), ack = get32(t + 8), wnd = get16(t + 14);
   const uint8_t *d = t + off;
   uint32_t dl = len - off;
   *value = fl;
 
+  if (n->tcp_state == NET_TCP_LISTEN) {
+    if ((fl & (NET_TCP_SYN | NET_TCP_ACK | NET_TCP_RST | NET_TCP_FIN)) != NET_TCP_SYN || !get16(t))
+      return NET_RX_OTHER;
+    n->tcp_ip = source; n->tcp_rport = get16(t);
+    copy(n->tcp_peer_mac, f + 6, 6);
+    n->rcv_nxt = seq + 1u; n->tcp_wnd = wnd;
+    n->tcp_mss = tcp_mss_opt(t + 20, off - 20u);
+    n->tcp_state = NET_TCP_SYN_RECEIVED;
+    *reply_len = net_tcp_seg(n, reply, f + 6, NET_TCP_SYN | NET_TCP_ACK, n->tcp_iss, 0, 0);
+    return NET_RX_TCP;
+  }
+  if (n->tcp_state == NET_TCP_SYN_RECEIVED) {
+    if ((fl & NET_TCP_SYN) && seq + 1u == n->rcv_nxt) {
+      *reply_len = net_tcp_seg(n, reply, f + 6, NET_TCP_SYN | NET_TCP_ACK, n->tcp_iss, 0, 0);
+      return NET_RX_TCP;
+    }
+    if (fl & NET_TCP_RST) {
+      if (seq == n->rcv_nxt) n->tcp_state = NET_TCP_RESET;
+      return NET_RX_TCP;
+    }
+    if (!(fl & NET_TCP_ACK) || (fl & NET_TCP_SYN) || ack != n->snd_nxt || seq != n->rcv_nxt)
+      return NET_RX_OTHER;
+    n->snd_una = ack; n->tcp_state = NET_TCP_OPEN;
+  }
   if (fl & NET_TCP_RST) {
     if (n->tcp_state == NET_TCP_SYN_SENT
             ? (fl & NET_TCP_ACK) && ack == n->snd_nxt
@@ -640,7 +665,7 @@ int net_rx(NetState *n, const uint8_t *f, uint32_t len, uint8_t *reply,
 
   /* Fragments (MF or an offset) are not put back together. */
   if (proto == IP_TCP && n->tcp_state != NET_TCP_CLOSED && n->ip &&
-      dst == n->ip && src == n->tcp_ip && plen >= 20u &&
+      dst == n->ip && (src == n->tcp_ip || n->tcp_state == NET_TCP_LISTEN) && plen >= 20u &&
       !(get16(h + 6) & 0x3FFFu))
     return tcp_rx(n, f, p, plen, reply, reply_len, value);
 
