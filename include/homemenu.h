@@ -15,6 +15,8 @@ typedef struct {
   const char *path; /* an SD app's container */
   u32 asset_art;    /* full-colour pack art the top screen shows alone in place
                        of the icon and name card, or UI_NO_ASSET */
+  const u16 *color_icon;
+  u32 icon_animation;
 } HomeApp;
 
 typedef struct {
