@@ -8,7 +8,10 @@
 #include "aurora.h"
 #include "wifi.h"
 
-static WifiTcp *const t = (WifiTcp *)WIFI_TCP_ADDR;
+static WifiTcp *t = (WifiTcp *)WIFI_TCP_ADDR;
+static u32 selected;
+void wifi_tcp_select(u32 channel) { selected = channel == 1; t = (WifiTcp *)WIFI_TCP_CHANNEL_ADDR(selected); }
+u32 wifi_tcp_channel(void) { return selected; }
 
 /* ARM946E-S data cache: 32-byte lines, 4 KB. */
 static void drain(void) {
@@ -56,6 +59,10 @@ void wifi_tcp_setup(u32 ip, u32 port, u32 timeout_ms) {
   io->resent = 0;
   clean(io, sizeof(*io));
 }
+
+u32 wifi_tcp_peer_ip(void) { core_line(); return t->peer_ip; }
+u32 wifi_tcp_peer_port(void) { core_line(); return t->peer_port; }
+u32 wifi_tcp_local_port(void) { core_line(); return t->local_port; }
 
 u32 wifi_tcp_state(void) {
   core_line();
