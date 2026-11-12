@@ -150,6 +150,7 @@ void appnet_finish(void) {
 /* What the core runs without ending a background TCP connection. */
 static int beside_tcp(u32 op) {
   return op == WIFI_NETOP_STATUS ||
+         (ctrl->version >= AUDIO_TCP_LISTEN_VERSION && (op == WIFI_NETOP_TCP_BG || op == WIFI_NETOP_TCP_BG2)) ||
          (ctrl->version >= AUDIO_UDP_VERSION &&
           (op == WIFI_NETOP_DNS || op == WIFI_NETOP_UDP_BIND ||
            op == WIFI_NETOP_UDP_UNBIND));
@@ -241,7 +242,7 @@ static void net_err(u32 st, const char *host) {
       err(host ? host : "the server", " refused the connection", 0);
       break;
     case WIFI_NETS_TOOBIG:
-      err("the reply is larger than 1020 KB", 0, 0);
+      err("the reply exceeds the network buffer", 0, 0);
       break;
     case WIFI_NETS_TLS:
       err(host ? host : "the server", ": ", tls_error_text(g_tls_err));
@@ -1500,31 +1501,38 @@ int appnet_download(const char *url, const char *headers, const char *path,
   return ok;
 }
 
-int appnet_tcp_open(u32 ip, u32 port, u32 timeout_ms) {
+int appnet_tcp_open_channel(u32 channel, u32 ip, u32 port, u32 timeout_ms) {
   g_err[0] = 0;
-  if (!appnet_ready())
-    return 0;
-  if (ctrl->version < AUDIO_TCP_BG_VERSION) {
-    g_last_st = WIFI_NETS_NOLINK;
-    err("sockets need a newer AuroraOS", 0, 0);
-    return 0;
+  if (channel > 1 || !port || port > 65535u || !appnet_ready()) return 0;
+  if (ctrl->version < AUDIO_TCP_BG_VERSION || ((channel || !ip) && ctrl->version < AUDIO_TCP_LISTEN_VERSION)) {
+    g_last_st = WIFI_NETS_NOLINK; err("sockets need Aurora core 127", 0, 0); return 0;
   }
-  if (g_tcp_held || st_is_open()) {
-    g_last_st = WIFI_NETS_BUSY;
-    err("the network connection is in use", 0, 0);
-    return 0;
+  if ((g_tcp_held & (1 << channel)) || st_is_open()) {
+    g_last_st = WIFI_NETS_BUSY; err("TCP channel is in use", 0, 0); return 0;
   }
-  wifi_tcp_setup(ip, port, timeout_ms);
-  if (!st_tcp_start()) {
-    if (!g_err[0]) {
-      g_last_st = WIFI_NETS_BUSY;
-      err("the ARM11 core did not take the connection", 0, 0);
+  u32 op = channel ? WIFI_NETOP_TCP_BG2 : WIFI_NETOP_TCP_BG;
+  if (!claim_op(op)) return 0;
+  wifi_tcp_select(channel); wifi_tcp_setup(ip, port, timeout_ms);
+  send(AUDIO_CMD_WIFI_NET, op);
+  for (u32 t0 = appnet_ms(); !core_done();) {
+    if (appnet_ms() - t0 >= 5000u) {
+      wifi_tcp_close(WIFI_TCP_ABORT);
+      err("TCP start timed out", 0, 0); return 0;
     }
-    return 0;
   }
-  g_tcp_held = 1;
+  g_busy = 0;
+  if (wifi_tcp_state() == WIFI_TCP_CLOSED) { g_last_st = wifi_tcp_end_status(); return 0; }
+  g_tcp_held |= 1 << channel;
   return 1;
 }
+int appnet_tcp_open(u32 ip, u32 port, u32 timeout_ms) {
+  return appnet_tcp_open_channel(0, ip, port, timeout_ms);
+}
+int appnet_tcp_listen_channel(u32 channel, u32 port) {
+  return appnet_tcp_open_channel(channel, 0, port, APPNET_TIMEOUT_MS);
+}
+int appnet_tcp_listen(u32 port) { return appnet_tcp_listen_channel(0, port); }
+void appnet_tcp_release_channel(u32 channel) { if (channel < 2) g_tcp_held &= ~(1 << channel); }
 
 u32 appnet_tcp_status(void) {
   os_cache_sync();
@@ -1583,6 +1591,6 @@ void appnet_udp_unbind(void) {
     udp_op(WIFI_NETOP_UDP_UNBIND);
 }
 
-void appnet_tcp_release(void) { g_tcp_held = 0; }
+void appnet_tcp_release(void) { appnet_tcp_release_channel(0); }
 
 u32 appnet_last_status(void) { return g_last_st; }

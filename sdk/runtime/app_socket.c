@@ -30,12 +30,13 @@
 #define CLOSE_MS   4000u
 #define LEAVE_MS   1000u
 
-enum { S_FREE, S_NEW, S_CONNECTING, S_OPEN, S_DONE };
+enum { S_FREE, S_NEW, S_CONNECTING, S_OPEN, S_DONE, S_LISTEN };
 #define SHUT_R 1u
 #define SHUT_W 2u
 
 typedef struct {
   u8 state, type, nonblock, shut;
+  u16 local_port;
   u8 holds;   /* TCP: this socket has the core's connection and its rings */
   u8 bound;   /* UDP: this socket has the core's port */
   u8 has_peer; /* UDP: connect() gave it one */
@@ -130,7 +131,7 @@ static void release(Sock *s) {
  * rings back once everything it received has been read. */
 static void update(Sock *s) {
   u32 st;
-  if (!s->holds)
+  if (!s->holds || s->state == S_LISTEN)
     return;
   st = wifi_tcp_state();
   if (s->state == S_CONNECTING && st == WIFI_TCP_OPEN) {
@@ -167,7 +168,7 @@ static void settle(void) {
 
 static Sock *udp_holder(void) {
   for (int i = 0; i < APP_SOCK_COUNT; i++)
-    if (g_s[i].bound)
+    if (g_s[i].bound && g_s[i].type == SOCK_DGRAM)
       return &g_s[i];
   return NULL;
 }
@@ -193,7 +194,7 @@ static ssize_t tcp_recv(Sock *s, void *buf, size_t n, int flags) {
   u64 t0 = app_ticks64();
   size_t done = 0;
 
-  if (s->state == S_NEW)
+  if (s->state == S_NEW || s->state == S_LISTEN)
     return -ENOTCONN;
   if (!n)
     return 0;
@@ -238,7 +239,7 @@ static ssize_t tcp_send(Sock *s, const void *buf, size_t n, int flags) {
 
   if (s->shut & SHUT_W)
     return -EPIPE;
-  if (s->state == S_NEW)
+  if (s->state == S_NEW || s->state == S_LISTEN)
     return -ENOTCONN;
   for (;;) {
     update(s);
@@ -400,7 +401,7 @@ static int sock_close(int fd) {
   Sock *s = sock_of(fd, &e);
   if (!s)
     return -e;
-  if (s->bound)
+  if (s->bound && s->type == SOCK_DGRAM)
     appnet_udp_unbind();
   update(s);
   if (s->holds) {
@@ -576,26 +577,67 @@ int bind(int fd, const struct sockaddr *addr, socklen_t len) {
   ip = ntohl(in->sin_addr.s_addr);
   if (ip != INADDR_ANY && ip != appnet_ip())
     return fail(EADDRNOTAVAIL);
-  /* The core picks a TCP connection's own port. */
-  if (s->type == SOCK_STREAM)
-    return in->sin_port ? fail(EADDRNOTAVAIL) : 0;
+  if (s->type == SOCK_STREAM) {
+    if (appnet_core_version() < AUDIO_TCP_LISTEN_VERSION)
+      return in->sin_port ? fail(EADDRNOTAVAIL) : 0;
+    if (s->state != S_NEW || s->bound) return fail(EINVAL);
+    u16 port = ntohs(in->sin_port);
+    if (!port) port = 49152;
+    for (int i = 0; i < APP_SOCK_COUNT; i++)
+      if (&g_s[i] != s && g_s[i].type == SOCK_STREAM && g_s[i].bound && g_s[i].local_port == port)
+        return fail(EADDRINUSE);
+    s->local_port = port; s->bound = 1; return 0;
+  }
   if (s->bound)
     return fail(EINVAL);
   e = udp_bind_port(s, ntohs(in->sin_port));
   return e ? fail(e) : 0;
 }
 
-int listen(int fd, int backlog) {
-  int e;
-  (void)backlog;
-  return sock_of(fd, &e) ? fail(EOPNOTSUPP) : fail(e);
+static int listener_arm(Sock *s) {
+  for (int i = 0; i < APP_SOCK_COUNT; i++) if (g_s[i].holds) return EBUSY;
+  settle();
+  if (!app_net_begin()) return EBUSY;
+  int e = !online() ? ENETDOWN : !appnet_tcp_listen(s->local_port) ? EIO : 0;
+  app_net_end();
+  if (!e) s->holds = 1;
+  return e;
 }
-
+int listen(int fd, int backlog) {
+  int e; Sock *s = sock_of(fd, &e); (void)backlog;
+  if (!s) return fail(e);
+  if (s->type != SOCK_STREAM || appnet_core_version() < AUDIO_TCP_LISTEN_VERSION) return fail(EOPNOTSUPP);
+  if (s->state == S_LISTEN) return 0;
+  if (s->state != S_NEW) return fail(EINVAL);
+  if (!s->bound) { s->local_port = 49152; s->bound = 1; }
+  if ((e = listener_arm(s))) return fail(e);
+  s->state = S_LISTEN; return 0;
+}
+static void put_addr(const struct sockaddr_in *, struct sockaddr *, socklen_t *);
 int accept(int fd, struct sockaddr *addr, socklen_t *len) {
-  int e;
-  (void)addr;
-  (void)len;
-  return sock_of(fd, &e) ? fail(EOPNOTSUPP) : fail(e);
+  int e; Sock *s = sock_of(fd, &e);
+  if (!s) return fail(e);
+  if (s->type != SOCK_STREAM || appnet_core_version() < AUDIO_TCP_LISTEN_VERSION) return fail(EOPNOTSUPP);
+  if (s->state != S_LISTEN || (addr && !len)) return fail(EINVAL);
+  u64 t0 = app_ticks64();
+  for (;;) {
+    tick();
+    if (s->holds && wifi_tcp_state() == WIFI_TCP_CLOSED) { release(s); return fail(ECONNABORTED); }
+    if (!s->holds && (e = listener_arm(s))) {
+      if (e != EBUSY) return fail(e);
+    }
+    if (s->holds && wifi_tcp_state() == WIFI_TCP_OPEN) {
+      int i; for (i = 0; i < APP_SOCK_COUNT && g_s[i].state != S_FREE; i++);
+      if (i == APP_SOCK_COUNT) return fail(EMFILE);
+      Sock *c = &g_s[i]; memset(c, 0, sizeof(*c));
+      c->state = S_OPEN; c->type = SOCK_STREAM; c->holds = 1; c->local_port = s->local_port;
+      c->peer.sin_family = AF_INET; c->peer.sin_port = htons((u16)wifi_tcp_peer_port());
+      c->peer.sin_addr.s_addr = htonl(wifi_tcp_peer_ip()); s->holds = 0;
+      put_addr(&c->peer, addr, len); return APP_SOCK_FIRST + i;
+    }
+    if (s->nonblock || (s->rcv_ms && since_ms(t0) >= s->rcv_ms)) return fail(EAGAIN);
+    pause_from(t0);
+  }
 }
 
 static ssize_t result(ssize_t r) { return r < 0 ? fail((int)-r) : r; }
@@ -819,7 +861,9 @@ int getsockname(int fd, struct sockaddr *addr, socklen_t *len) {
   memset(&in, 0, sizeof(in));
   in.sin_family = AF_INET;
   in.sin_addr.s_addr = htonl(appnet_ip());
-  if (s->bound)
+  if (s->type == SOCK_STREAM)
+    in.sin_port = htons(s->local_port ? s->local_port : s->holds ? (u16)wifi_tcp_local_port() : 0);
+  else if (s->bound)
     in.sin_port = htons((u16)wifi_udp_port());
   put_addr(&in, addr, len);
   return 0;
@@ -897,6 +941,10 @@ static short udp_ready(Sock *s) {
 
 static short sock_ready(Sock *s) {
   short r = 0;
+  if (s->state == S_LISTEN) {
+    if (!s->holds) { int e = listener_arm(s); if (e && e != EBUSY) return POLLERR; }
+    return s->holds && wifi_tcp_state() == WIFI_TCP_OPEN ? POLLIN : 0;
+  }
   if (s->type == SOCK_DGRAM)
     return udp_ready(s);
   update(s);

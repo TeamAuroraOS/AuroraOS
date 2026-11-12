@@ -191,7 +191,31 @@ static void icon16(volatile u8 *fb, int x, int y, int sh, u32 asset,
     bits_half(fb, x, y, sh, bits, c);
 }
 
+static unsigned galaxy_phase;
+static int color_icon(volatile u8 *fb, int x, int y, int size, int sh, int e) {
+  if (e < 0 || HL_IS_FOLDER(e) || !apps[e].color_icon) return 0;
+  const HomeApp *app = &apps[e];
+  for (int yy = 0; yy < size; yy++) for (int xx = 0; xx < size; xx++) {
+    int px = x + xx, py = y + yy;
+    if (px < 0 || px >= (sh == BSH && fb == VRAM_BOT_A ? 320 : 400) || py < 0 || py >= sh) continue;
+    unsigned sx = xx * 32 / size, sy = yy * 32 / size;
+    u16 c = app->color_icon[sy * 32 + sx];
+    Color col = {(u8)((c >> 11) * 255 / 31), (u8)(((c >> 5) & 63) * 255 / 63), (u8)((c & 31) * 255 / 31)};
+    if (app->icon_animation) {
+      unsigned wave = (sx + sy + galaxy_phase) & 63;
+      if (wave > 31) wave = 63 - wave;
+      col.r = (u8)(col.r + (255 - col.r) * wave / 180);
+      col.b = (u8)(col.b + (255 - col.b) * wave / 100);
+      if (((sx * 73 + sy * 127) % 193) == 0 && ((galaxy_phase + sx) & 15) < 5)
+        col.r = col.g = col.b = 245;
+    }
+    draw_pixel(fb, px, py, sh, col);
+  }
+  return 1;
+}
+
 static void entry_icon16(volatile u8 *fb, int x, int y, int sh, int e) {
+  if (color_icon(fb, x, y, 16, sh, e)) return;
   if (HL_IS_FOLDER(e))
     icon16(fb, x, y, sh, ASSET_ICON_FOLDER_16, icon_folder_bits,
            COLOR_HM_TEXT2);
@@ -200,6 +224,7 @@ static void entry_icon16(volatile u8 *fb, int x, int y, int sh, int e) {
 }
 
 static void entry_icon32(volatile u8 *fb, int x, int y, int sh, int e) {
+  if (color_icon(fb, x, y, 32, sh, e)) return;
   if (HL_IS_FOLDER(e))
     ui_icon(fb, x, y, 32, sh, ASSET_ICON_FOLDER_32, icon_folder_bits,
             COLOR_HM_TEXT2);
@@ -212,7 +237,8 @@ static void tile(volatile u8 *fb, int e, int x, int y, int size) {
   if (!HL_IS_FOLDER(e)) {
     draw_gradient_round_rect(fb, x, y, size, size, r, BSH, COLOR_HM_SLOT_TOP,
                              COLOR_HM_SLOT_BOT);
-    ui_icon(fb, x, y, size, BSH, apps[e].asset_sm, apps[e].icon, COLOR_WHITE);
+    if (!color_icon(fb, x, y, size, BSH, e))
+      ui_icon(fb, x, y, size, BSH, apps[e].asset_sm, apps[e].icon, COLOR_WHITE);
     return;
   }
   draw_gradient_round_rect(fb, x, y, size, size, r, BSH, folder_top,
@@ -522,7 +548,8 @@ static void top_item(void) {
       entry_icon32(fb, PV_BOX_X + 10 + (i % 2) * 44,
                    PV_BOX_Y + 10 + (i / 2) * 44, TSH, hl_at(f, i));
   } else if (bits || asset != UI_NO_ASSET) {
-    ui_icon(fb, PV_BOX_X, PV_BOX_Y, PV_BOX, TSH, asset, bits, COLOR_WHITE);
+    if (!color_icon(fb, PV_BOX_X, PV_BOX_Y, PV_BOX, TSH, e))
+      ui_icon(fb, PV_BOX_X, PV_BOX_Y, PV_BOX, TSH, asset, bits, COLOR_WHITE);
   }
 
   draw_gradient_round_rect(fb, PV_CARD_X, PV_CARD_Y, PV_CARD_W, PV_CARD_H, 11,
@@ -1656,8 +1683,19 @@ void home_run(void) {
     }
 
     ms = anim_frame(&frame_at);
-    if (ms)
+    if (ms) {
+      static unsigned elapsed;
+      elapsed += (unsigned)ms;
+      int e = held != HL_NONE ? held : entry_at(cur());
+      if (elapsed >= 100) {
+        elapsed = 0; galaxy_phase++;
+        if (e >= 0 && !HL_IS_FOLDER(e) && apps[e].icon_animation) {
+          dirty = 1;
+          top_item(); screen_present_top();
+        }
+      }
       animate(ms);
+    }
     ui_idle();
   }
 }

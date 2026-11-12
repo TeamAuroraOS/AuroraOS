@@ -38,6 +38,7 @@ typedef struct {
    * cap - (len - done). */
   uint32_t tcp_state; /* NET_TCP_* */
   uint32_t tcp_ip;
+  uint8_t tcp_peer_mac[6];
   uint16_t tcp_lport, tcp_rport;
   uint32_t tcp_iss, snd_una, snd_nxt, rcv_nxt;
   uint32_t tcp_mss, tcp_wnd; /* the server's */
@@ -56,6 +57,8 @@ enum {
   NET_TCP_CLOSED = 0,
   NET_TCP_SYN_SENT,
   NET_TCP_OPEN,
+  NET_TCP_LISTEN,
+  NET_TCP_SYN_RECEIVED,
   NET_TCP_RESET, /* the server sent RST */
 };
 

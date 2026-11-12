@@ -128,6 +128,12 @@ void appnet_stream_close(void);
  * check and, from AUDIO_UDP_VERSION, a name lookup and the UDP port below. Not
  * while a stream is open. */
 int appnet_tcp_open(u32 ip, u32 port, u32 timeout_ms);
+int appnet_tcp_listen(u32 port);
+/* Two independent connections. Select the same channel before wifi_tcp_* IO.
+ * The second channel requires core 127. A port of zero is invalid. */
+int appnet_tcp_open_channel(u32 channel, u32 ip, u32 port, u32 timeout_ms);
+int appnet_tcp_listen_channel(u32 channel, u32 port);
+void appnet_tcp_release_channel(u32 channel);
 /* The connection's WIFI_NETS_* once wifi_tcp_state() is WIFI_TCP_CLOSED. */
 u32 appnet_tcp_status(void);
 void appnet_tcp_release(void);
