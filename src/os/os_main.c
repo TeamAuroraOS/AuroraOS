@@ -224,6 +224,8 @@ static char app_name[MAX_APPS][APP_NAME_MAX]; /* file name minus ".bin" */
 static char app_path[MAX_APPS][APP_PATH_MAX]; /* "Aurora/Apps/Name.bin" */
 static unsigned char app_icon[MAX_APPS][ICON_SIZE * ICON_ROW_BYTES];
 static int  app_has_icon[MAX_APPS];
+static u16 app_color_icon[MAX_APPS][1024];
+static u8 app_color_valid[MAX_APPS], app_color_anim[MAX_APPS];
 static char app_kind[MAX_APPS]; /* aurora_magic_kind(): 'C' for a C app */
 static int  app_count;
 
@@ -3505,6 +3507,23 @@ static int read_app_icon(const char *path, unsigned char *dest, char *kind) {
   return ok;
 }
 
+static void read_color_icon(const char *path, int index) {
+  char side[300]; unsigned len = str_len(path);
+  app_color_valid[index] = app_color_anim[index] = 0;
+  if (len + 5 >= sizeof side) return;
+  for (unsigned i = 0; i <= len; i++) side[i] = path[i];
+  const char *suffix = ".rgb";
+  for (unsigned i = 0; i < 5; i++) side[len + i] = suffix[i];
+  FIL f; UINT got; u8 header[8];
+  if (f_open(&f, side, FA_READ) != FR_OK) return;
+  if (f_size(&f) == 2056 && f_read(&f, header, 8, &got) == FR_OK && got == 8 &&
+      header[0]=='A' && header[1]=='I' && header[2]=='C' && header[3]=='1' && header[4] <= 1 && !header[5] && !header[6] && !header[7] &&
+      f_read(&f, app_color_icon[index], 2048, &got) == FR_OK && got == 2048) {
+    app_color_valid[index] = 1; app_color_anim[index] = header[4];
+  }
+  f_close(&f);
+}
+
 static void scan_folder(const char *folder) {
   static DIR dir;
   static FILINFO fno;
@@ -3551,8 +3570,10 @@ static int scan_apps(void) {
     hm_str_copy(app_path[j + 1], tp);
   }
 
-  for (int i = 0; i < app_count; i++)
+  for (int i = 0; i < app_count; i++) {
     app_has_icon[i] = read_app_icon(app_path[i], app_icon[i], &app_kind[i]);
+    read_color_icon(app_path[i], i);
+  }
 
   f_mount(NULL, "", 0);
   return app_count;
@@ -3572,6 +3593,8 @@ static void build_home(void) {
     h->dev = app_kind[i] == 'C' ? "C SDK" : "SD App";
     h->key = app_path[i] + sizeof(APPS_DIR); /* "Name.bin" or "C/Name.bin" */
     h->icon = app_has_icon[i] ? app_icon[i] : icon_boot_bits;
+    h->color_icon = app_color_valid[i] ? app_color_icon[i] : 0;
+    h->icon_animation = app_color_anim[i];
     h->asset_lg = h->asset_sm = h->asset_xs = h->asset_art = UI_NO_ASSET;
     if (!app_has_icon[i]) {
       h->asset_lg = ASSET_ICON_GAMECARD_64;
@@ -3584,16 +3607,16 @@ static void build_home(void) {
   }
   *h++ = (HomeApp){L(STR_MUSIC), "Aurora", "@music", icon_music_bits,
                    ASSET_ICON_MUSIC_64, ASSET_ICON_MUSIC_32,
-                   ASSET_ICON_MUSIC_16, music_tint, ACT_MUSIC, 0, UI_NO_ASSET};
+                   ASSET_ICON_MUSIC_16, music_tint, ACT_MUSIC, 0, UI_NO_ASSET, 0, 0};
   *h++ = (HomeApp){"Files", L(STR_SYSTEM), "@files", icon_boot_bits,
                    ASSET_APP_FILES_64, ASSET_APP_FILES_32, ASSET_APP_FILES_16,
-                   files_tint, ACT_FILES, 0, UI_NO_ASSET};
+                   files_tint, ACT_FILES, 0, UI_NO_ASSET, 0, 0};
   *h++ = (HomeApp){"3D Model", "Aurora", "@model", icon_cube_bits,
                    ASSET_ICON_CUBE_64, ASSET_ICON_CUBE_32, ASSET_ICON_CUBE_16,
-                   cube_tint, ACT_CUBE, 0, UI_NO_ASSET};
+                   cube_tint, ACT_CUBE, 0, UI_NO_ASSET, 0, 0};
   *h++ = (HomeApp){"aShop", "Aurora", "@store", icon_boot_bits,
                    ASSET_APP_STORE_64, ASSET_APP_STORE_32, ASSET_APP_STORE_16,
-                   store_tint, ACT_STORE, 0, ASSET_STORE_LOGO};
+                   store_tint, ACT_STORE, 0, ASSET_STORE_LOGO, 0, 0};
   home_count = (int)(h - home_apps);
 }
 
