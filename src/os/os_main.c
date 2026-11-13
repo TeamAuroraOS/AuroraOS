@@ -1,3 +1,4 @@
+#include "banner.h"
 #include "appicon.h"
 #include "aurora.h"
 #include "account.h"
@@ -227,6 +228,7 @@ static unsigned char app_icon[MAX_APPS][ICON_SIZE * ICON_ROW_BYTES];
 static int  app_has_icon[MAX_APPS];
 static u16 app_color_icon[MAX_APPS][1024];
 static u8 app_color_valid[MAX_APPS], app_color_anim[MAX_APPS];
+static u32 app_banner[MAX_APPS];
 static char app_kind[MAX_APPS]; /* aurora_magic_kind(): 'C' for a C app */
 static int  app_count;
 
@@ -3584,6 +3586,18 @@ static int scan_apps(void) {
   for (int i = 0; i < app_count; i++) {
     app_has_icon[i] = read_app_icon(app_path[i], app_icon[i], &app_kind[i]);
     read_color_icon(app_path[i], i);
+    {
+      int has = 0;
+      u8 anim = 0;
+      static u16 icon[1024];
+      app_banner[i] = banner_find(app_path[i], icon, &anim, &has);
+      if (has) {
+        for (int k = 0; k < 1024; k++)
+          app_color_icon[i][k] = icon[k];
+        app_color_valid[i] = 1;
+        app_color_anim[i] = anim;
+      }
+    }
   }
 
   f_mount(NULL, "", 0);
@@ -3615,19 +3629,20 @@ static void build_home(void) {
     h->tint = app_tint;
     h->action = ACT_LAUNCH;
     h->path = app_path[i];
+    h->banner = app_banner[i];
   }
   *h++ = (HomeApp){L(STR_MUSIC), "Aurora", "@music", icon_music_bits,
                    ASSET_ICON_MUSIC_64, ASSET_ICON_MUSIC_32,
-                   ASSET_ICON_MUSIC_16, music_tint, ACT_MUSIC, 0, UI_NO_ASSET, 0, 0};
+                   ASSET_ICON_MUSIC_16, music_tint, ACT_MUSIC, 0, UI_NO_ASSET, 0, 0, 0};
   *h++ = (HomeApp){"Files", L(STR_SYSTEM), "@files", icon_boot_bits,
                    ASSET_APP_FILES_64, ASSET_APP_FILES_32, ASSET_APP_FILES_16,
-                   files_tint, ACT_FILES, 0, UI_NO_ASSET, 0, 0};
+                   files_tint, ACT_FILES, 0, UI_NO_ASSET, 0, 0, 0};
   *h++ = (HomeApp){"3D Model", "Aurora", "@model", icon_cube_bits,
                    ASSET_ICON_CUBE_64, ASSET_ICON_CUBE_32, ASSET_ICON_CUBE_16,
-                   cube_tint, ACT_CUBE, 0, UI_NO_ASSET, 0, 0};
+                   cube_tint, ACT_CUBE, 0, UI_NO_ASSET, 0, 0, 0};
   *h++ = (HomeApp){"aShop", "Aurora", "@store", icon_boot_bits,
                    ASSET_APP_STORE_64, ASSET_APP_STORE_32, ASSET_APP_STORE_16,
-                   store_tint, ACT_STORE, 0, ASSET_STORE_LOGO, 0, 0};
+                   store_tint, ACT_STORE, 0, ASSET_STORE_LOGO, 0, 0, 0};
   home_count = (int)(h - home_apps);
 }
 

@@ -285,6 +285,8 @@ static void copy_run(volatile u8 *d, const u8 *s, u32 n) {
     *d++ = *s++;
 }
 
+const u8 *ui_wallpaper_top(void) { return bg_for(TOP_SCREEN_WIDTH); }
+
 void ui_wallpaper(volatile u8 *fb, int w, int h, int sh) {
   const u8 *bg = bg_for(w);
   u32 size = (u32)w * (u32)h * 3u;

@@ -17,6 +17,7 @@ typedef struct {
                        of the icon and name card, or UI_NO_ASSET */
   const u16 *color_icon;
   u32 icon_animation;
+  u32 banner;
 } HomeApp;
 
 typedef struct {

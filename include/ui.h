@@ -45,6 +45,7 @@ void ui_icon(volatile u8 *fb, int bx, int by, int box, int sh, u32 asset,
              const unsigned char *bits, Color tint);
 
 void ui_wallpaper(volatile u8 *fb, int w, int h, int sh);
+const u8 *ui_wallpaper_top(void);
 
 /* Composes the cached backgrounds. Call ui_bg_invalidate() when the accent
  * colour changes. */
