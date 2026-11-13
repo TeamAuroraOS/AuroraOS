@@ -1,3 +1,4 @@
+#include "appicon.h"
 #include "aurora.h"
 #include "account.h"
 #include "assets.h"
@@ -3507,20 +3508,30 @@ static int read_app_icon(const char *path, unsigned char *dest, char *kind) {
   return ok;
 }
 
+static int read_icon_pixels(FIL *f,int index) {
+  UINT got; u8 h[8];
+  if (f_read(f,h,8,&got)!=FR_OK || got!=8 || !appicon_header(h) ||
+      f_read(f,app_color_icon[index],2048,&got)!=FR_OK || got!=2048) return 0;
+  app_color_valid[index]=1;
+  app_color_anim[index]=h[4];
+  return 1;
+}
 static void read_color_icon(const char *path, int index) {
-  char side[300]; unsigned len = str_len(path);
-  app_color_valid[index] = app_color_anim[index] = 0;
-  if (len + 5 >= sizeof side) return;
-  for (unsigned i = 0; i <= len; i++) side[i] = path[i];
-  const char *suffix = ".rgb";
-  for (unsigned i = 0; i < 5; i++) side[len + i] = suffix[i];
-  FIL f; UINT got; u8 header[8];
-  if (f_open(&f, side, FA_READ) != FR_OK) return;
-  if (f_size(&f) == 2056 && f_read(&f, header, 8, &got) == FR_OK && got == 8 &&
-      header[0]=='A' && header[1]=='I' && header[2]=='C' && header[3]=='1' && header[4] <= 1 && !header[5] && !header[6] && !header[7] &&
-      f_read(&f, app_color_icon[index], 2048, &got) == FR_OK && got == 2048) {
-    app_color_valid[index] = 1; app_color_anim[index] = header[4];
+  app_color_valid[index]=app_color_anim[index]=0;
+  FIL f; UINT got; u8 h[36]; u32 off;
+  if (f_open(&f,path,FA_READ)==FR_OK) {
+    int ok=f_read(&f,h,sizeof h,&got)==FR_OK && got==sizeof h &&
+      appicon_offset(h,f_size(&f),&off) && f_lseek(&f,off)==FR_OK && read_icon_pixels(&f,index);
+    f_close(&f);
+    if (ok) return;
   }
+  char side[300]; unsigned len=str_len(path);
+  if (len+5>=sizeof side) return;
+  for(unsigned i=0;i<len;i++) side[i]=path[i];
+  const char *suffix=".rgb";
+  for(unsigned i=0;i<5;i++) side[len+i]=suffix[i];
+  if(f_open(&f,side,FA_READ)!=FR_OK) return;
+  if(f_size(&f)==APPICON_BYTES) read_icon_pixels(&f,index);
   f_close(&f);
 }
 
