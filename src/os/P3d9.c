@@ -353,6 +353,15 @@ void p3d_stage0(P3dList *l, int textured, int alpha) {
   p3d_write_seq(l, R_TEXENV0, env, 5);
 }
 
+void p3d_stage1_tint(P3dList *l, u32 abgr) {
+  const u32 env[5] = {0x00EF00EFu, 0, 0x00010001u, abgr, 0};
+  p3d_write_seq(l, R_TEXENV0 + 8u, env, 5);
+}
+
+void p3d_blend(P3dList *l, int additive) {
+  p3d_write(l, R_BLEND_FUNC, 0xF, additive ? 0x16160000u : 0x76760000u);
+}
+
 void p3d_fragment(P3dList *l, int depth_test, int depth_write, int alpha_ref) {
   /* Alpha test (GEQUAL against alpha_ref, or off), then depth test GREATER
    * with the colour always written and depth only when asked. */

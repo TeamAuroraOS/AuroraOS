@@ -41,6 +41,8 @@ typedef char home_song_fits[
 /* Moves take turns on voices 4 and 5, so key repeat does not cut each one
  * off. */
 #define VOICE_MOVE    4u
+#define VOICE_BANNER  6u
+#define BANNER_GAP_MS 400u
 
 enum { MENU_SELECT, MENU_BACK, MENU_MOVE, MENU_COUNT };
 
@@ -58,6 +60,10 @@ static AssetSoundStream home_stream;
 static u32 home_samples, home_rate;
 static int home_shown, home_playing;
 static u32 hold_from, hold_ticks; /* how long the startup sound still has */
+static u32 home_from, home_pos;
+static u32 home_resume;
+static u32 tail_ticks;
+static int banner_playing;
 
 void ui_sound_config(u8 off) { sound_off = off; }
 
@@ -126,7 +132,10 @@ static void home_decode(void) {
     home_state = HOME_READY;
 }
 
+static void home_tail_tick(void);
+
 void ui_sound_home_tick(void) {
+  home_tail_tick();
   if (!home_shown || home_playing || (sound_off & USER_SOUND_HOME_OFF))
     return;
   if (home_state == HOME_UNLOADED) {
@@ -139,12 +148,41 @@ void ui_sound_home_tick(void) {
         return;
       hold_ticks = 0;
     }
-    if (core_free()) {
-      audio_voice_play(VOICE_MUSIC, HOME_PCM, home_samples, home_rate,
-                       AUDIO_VOICE_LOOP | AUDIO_VOICE_VOL(HOME_VOLUME));
-      home_playing = 1;
+    if (!core_free())
+      return;
+    if (home_resume && home_resume < home_samples) {
+      u32 left = home_samples - home_resume;
+      audio_voice_play(VOICE_MUSIC, HOME_PCM + home_resume * 2u, left, home_rate,
+                       AUDIO_VOICE_VOL(HOME_VOLUME));
+      home_from = timer_ticks();
+      home_pos = home_resume;
+      tail_ticks = (u32)(((u64)left * timer_hz()) / home_rate);
+      home_resume = 0;
+      home_playing = 2;
+      return;
     }
+    home_resume = 0;
+    audio_voice_play(VOICE_MUSIC, HOME_PCM, home_samples, home_rate,
+                     AUDIO_VOICE_LOOP | AUDIO_VOICE_VOL(HOME_VOLUME));
+    home_from = timer_ticks();
+    home_pos = 0;
+    home_playing = 1;
   }
+}
+
+static void home_tail_tick(void) {
+  if (home_playing == 2 && timer_ticks() - home_from >= tail_ticks && core_free()) {
+    audio_voice_play(VOICE_MUSIC, HOME_PCM, home_samples, home_rate,
+                     AUDIO_VOICE_LOOP | AUDIO_VOICE_VOL(HOME_VOLUME));
+    home_from = timer_ticks();
+    home_pos = 0;
+    home_playing = 1;
+  }
+}
+
+static u32 home_now(void) {
+  u64 done = ((u64)(timer_ticks() - home_from) * home_rate) / timer_hz();
+  return home_samples ? (u32)((home_pos + done) % home_samples) : 0;
 }
 
 static void home_stop(void) {
@@ -154,9 +192,36 @@ static void home_stop(void) {
   }
 }
 
+void ui_sound_banner_play(u32 addr, u32 samples, u32 rate) {
+  if ((sound_off & USER_SOUND_MENU_OFF) || !samples || !rate || !core_free())
+    return;
+  if (home_playing) {
+    home_resume = home_now();
+    home_stop();
+  }
+  audio_voice_play(VOICE_BANNER, addr, samples, rate, 0);
+  banner_playing = 1;
+  hold_from = timer_ticks();
+  hold_ticks = (u32)(((u64)samples * timer_hz()) / rate) +
+               BANNER_GAP_MS * (timer_hz() / 1000u);
+}
+
+void ui_sound_banner_stop(void) {
+  if (!banner_playing)
+    return;
+  if (core_free()) {
+    audio_voices_stop_mask(1u << VOICE_BANNER);
+    banner_playing = 0;
+  }
+  hold_from = timer_ticks();
+  hold_ticks = BANNER_GAP_MS * (timer_hz() / 1000u);
+}
+
 void ui_sound_home_leave(void) {
+  ui_sound_banner_stop();
   home_shown = 0;
   hold_ticks = 0;
+  home_resume = 0;
   home_stop();
 }
 

@@ -1,6 +1,3 @@
-/* Everything that moves is fixed point (the ARM9 has no FPU): positions and
- * matrices in 16.16, unit vectors and sines in 1/16384, angles as s3d's 65,536
- * per turn. Only the matrices sent to the GPU are floats. */
 #include "banner.h"
 #include "appicon.h"
 #include "container.h"
@@ -9,13 +6,13 @@
 #include "p3d.h"
 #include "soft3d.h"
 #include "ui.h"
-#include "model_shbin.h" /* generated from model.v.pica */
+#include "model_shbin.h"
 
 extern void os_dcache_flush(void);
 
 #define AR_BASE    BANNER_ARENA_ADDR
-#define AR_SCRATCH (BANNER_ARENA_ADDR + 0x00600000u) /* 1 MB: decode rows */
-#define AR_FILE    (BANNER_ARENA_ADDR + 0x00700000u) /* 1 MB: the file */
+#define AR_SCRATCH (BANNER_ARENA_ADDR + 0x00600000u)
+#define AR_FILE    (BANNER_ARENA_ADDR + 0x00700000u)
 #define AR_END     AR_SCRATCH
 
 #define MAX_TEX   48
@@ -142,7 +139,6 @@ static u32 isqrt64(u64 v) {
   return (u32)r;
 }
 
-/* An IEEE half float as 16.16, saturated to +-32767. */
 static s32 half_q16(u16 h) {
   u32 e = (h >> 10) & 31u, m = h & 1023u;
   s64 v;
@@ -161,7 +157,6 @@ static s32 half_q16(u16 h) {
 
 static float q16f(s32 v) { return (float)v * (1.0f / 65536.0f); }
 
-/* Degrees in 16.16 to s3d's 65,536 per turn. */
 static u32 deg_angle(s64 deg) {
   const s64 full = (s64)360 << 16;
   deg %= full;
@@ -201,8 +196,6 @@ static void mcopy(void *d, const void *s, u32 n) {
     *dd++ = *ss++;
 }
 
-/* ---- textures ---- */
-
 static void px565(u32 fmt, u16 v, u8 *o) {
   if (fmt == 0) {
     u32 r = (v >> 11) & 31u, g = (v >> 5) & 63u, b = v & 31u;
@@ -230,8 +223,6 @@ static u32 tile_offset(u32 x, u32 y, u32 w) {
   return (((y >> 3) * (w >> 3) + (x >> 3)) * 64u + mo) * 4u;
 }
 
-/* The PICA's texel order: 8x8 tiles in Morton order, each texel A, B, G, R
- * (the same as Glb.c's tile()). */
 static void tile(const u8 *src, u32 w, u32 h, u8 *dst) {
   for (u32 y = 0; y < h; y++)
     for (u32 x = 0; x < w; x++) {
@@ -255,8 +246,6 @@ static void halve(const u8 *s, u32 w, u32 h, u8 *d) {
     }
 }
 
-/* Row-major RGBA8 at AR_SCRATCH, `w` x `h` powers of two, into a mipmapped,
- * tiled texture. */
 static int texture_from_rgba(u32 w, u32 h, BnTex *t) {
   u8 *lv = (u8 *)(uintptr_t)AR_SCRATCH;
   u8 *next = lv + w * h * 4u;
@@ -313,8 +302,6 @@ static u32 pot_up(u32 v) {
   return p;
 }
 
-/* A texture blob (u16 w, u16 h, u8 format, palette, pixels); a size that is
- * not a power of two is padded with clear texels (IMAG). */
 static int texture_blob(const u8 *d, u32 len, BnTex *t, u32 *iw, u32 *ih) {
   u32 w, h, fmt, pw, ph, n, pos = 5, palfmt = 0, count = 0;
   u8 pal[256][4];
@@ -386,8 +373,6 @@ static int halo_texture(BnTex *t) {
   return texture_from_rgba(HALO_SIZE, HALO_SIZE, t);
 }
 
-/* The Home Menu's wallpaper (column-major BGR, bottom row first in each
- * column) as a 512x256 texture, the screen at its top left. */
 static int wallpaper_texture(BnTex *t) {
   const u8 *bg = ui_wallpaper_top();
   u8 *dst;
@@ -415,8 +400,6 @@ static int wallpaper_texture(BnTex *t) {
   return 1;
 }
 
-/* ---- BBM geometry ---- */
-
 static u32 bits_at(const u8 *d, u32 len, u32 bit, u32 n) {
   u32 v = 0;
   for (u32 i = 0; i < n; i++, bit++) {
@@ -430,7 +413,6 @@ static u32 bits_at(const u8 *d, u32 len, u32 bit, u32 n) {
 
 static float half_float(u16 h) { return q16f(half_q16(h)); }
 
-/* The vertex block of a BBM record into `out` positions (x, y, z floats). */
 static int bbm_vertices(const u8 *d, u32 len, u32 vc, float *out) {
   if (!len)
     return 0;
@@ -483,7 +465,6 @@ static int bbm_vertices(const u8 *d, u32 len, u32 vc, float *out) {
 
 static u32 zz(u32 v) { return (v >> 1) ^ (0u - (v & 1u)); }
 
-/* The face block into 16-bit indices; the count of indices, or 0. */
 static u32 bbm_faces(const u8 *d, u32 len, u32 vc, u16 *out, u32 cap) {
   u32 n = 0;
   s32 prev = 0;
@@ -722,8 +703,6 @@ static int parse_model(const u8 *d, u32 len) {
   return 1;
 }
 
-/* ---- nodes ---- */
-
 static const u8 *halves(const u8 *p, const u8 *end, s32 *out, int n) {
   if (p + 2 * n > end)
     return 0;
@@ -904,8 +883,6 @@ static void eval_nodes(u32 ms) {
   }
 }
 
-/* ---- camera ---- */
-
 static void normalise14(const s64 v[3], s32 out[3]) {
   u32 l = isqrt64((u64)(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
   for (int k = 0; k < 3; k++)
@@ -987,8 +964,6 @@ static int parse_view(const u8 *d, u32 len) {
   p3d_ortho_tilt(&bn.ortho, 0.0f, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT, 0.0f, 1.0f, -1.0f);
   return 1;
 }
-
-/* ---- the jingle ---- */
 
 static s32 clamp16(s32 v) { return v < -32768 ? -32768 : v > 32767 ? 32767 : v; }
 
@@ -1085,8 +1060,6 @@ static int parse_jingle(const u8 *d, u32 len) {
   bn.pcm_rate = rate;
   return 1;
 }
-
-/* ---- the file ---- */
 
 static int verify(const u8 *d, u32 size, u32 *count, u32 *first) {
   static const u8 credit[12] = {'C', 'r', 'a', 'c', 'k', 'o', '2', '9', '8', 0, 0x02, 0x98};
@@ -1285,7 +1258,6 @@ static int read_at(FIL *f, u32 off, void *buf, u32 n) {
   return f_lseek(f, off) == FR_OK && f_read(f, buf, n, &got) == FR_OK && got == n;
 }
 
-/* The ICON chunk of the banner `f` holds at `base`, if it has an Aurora one. */
 static void find_icon(FIL *f, u32 base, u16 *icon, u8 *anim, int *has_icon) {
   u8 h[32], ch[9];
   u32 count, pos, size;
@@ -1391,15 +1363,13 @@ int banner_node_matrix(int i, u32 ms, s32 out[12]) {
   return 1;
 }
 
-/* ---- drawing ---- */
-
 typedef struct {
   P3dList l;
   BnVert *v;
   u16 *ix;
   u32 nv, ni;
-  int tex;   /* bound texture, -2 none yet */
-  int alpha; /* bound stage-0 alpha source */
+  int tex;
+  int alpha;
   u32 fade;
 } Draw;
 
@@ -1438,8 +1408,6 @@ static u32 rgba(u32 r, u32 g, u32 b, u32 a) {
          (a > 255u ? 255u : a) << 24;
 }
 
-/* A quad from the dynamic buffer: corners 0 top-left, 1 top-right, 2 bottom-
- * left, 3 bottom-right. */
 static int quad_start(Draw *dr, u32 *first) {
   if (dr->nv + 4u > DYN_VERTS)
     return 0;
@@ -1526,8 +1494,6 @@ static u32 node_colour(const BnNode *n, const BnMesh *m, u32 ms, u32 fade) {
   return rgba(r, g, b, fade >= 256u ? 255u : fade);
 }
 
-/* Lambert lighting into the node's own vertex copy: 0.32 ambient plus 0.68 of
- * a light from the top left, fixed to the camera. */
 static void light_node(int i) {
   const BnNode *n = &bn.node[i];
   const BnMesh *m = &bn.mesh[n->mesh];
@@ -1575,8 +1541,6 @@ static void draw_mesh(Draw *dr, int i, u32 ms, int pass) {
   p3d_draw_elements(&dr->l, m->index - bn.base, m->icount);
 }
 
-/* Sprites and glow halos, all additive: world-space quads in the dynamic
- * buffer, drawn a texture at a time. */
 typedef struct {
   u8 tex;
   u16 node;

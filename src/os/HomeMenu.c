@@ -734,7 +734,6 @@ static int top_icon_frame(void) {
   return 1;
 }
 
-/* Banner apps show their scene on the first selected frame. */
 enum { BN_IDLE, BN_WAIT, BN_SHOWN, BN_FAILED };
 static int bn_state, bn_entry = HL_NONE, bn_loaded = HL_NONE, bn_bar_valid;
 static u32 bn_t0;
@@ -744,7 +743,6 @@ static int focus_entry(void) {
   return held != HL_NONE ? held : bar < 0 ? entry_at(cur()) : HL_NONE;
 }
 
-/* Arms the banner of the entry with the focus, if it has one. */
 static void banner_focus(void) {
   int e = focus_entry();
   if (bn_state == BN_SHOWN && e == bn_entry)
@@ -760,8 +758,6 @@ static void banner_hide(void) {
   bn_state = BN_IDLE;
 }
 
-/* Before anything that leaves the Home Menu: the screen it opens, or the app
- * it starts, may use the banner's memory. */
 static void banner_leave_home(void) {
   banner_hide();
   banner_unload();
@@ -783,7 +779,6 @@ static void bar_strip(int save_it) {
   }
 }
 
-/* One banner frame on the top screen, when one is due; 1 if it drew. */
 static int banner_frame(void) {
   u32 ms;
   if (bn_state == BN_WAIT) {
@@ -861,6 +856,8 @@ static void top_update(void) {
   }
   banner_focus();
   if (banner_frame()) {
+    anim_xfade_area(ANIM_TOP, 0, 0, TOP_SCREEN_WIDTH, TSH);
+    anim_xfade_start(ANIM_TOP, 0);
     screen_present_top();
     return;
   }
@@ -887,8 +884,12 @@ void home_draw(void) {
   anim_xfade_begin(ANIM_TOP);
   top_note();
   banner_focus();
-  if (!banner_frame())
+  if (banner_frame()) {
+    anim_xfade_area(ANIM_TOP, 0, 0, TOP_SCREEN_WIDTH, TSH);
+    anim_xfade_start(ANIM_TOP, 0);
+  } else {
     top_item();
+  }
   screen_present_top();
   place(1);
   draw_bottom();

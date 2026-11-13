@@ -30,6 +30,9 @@ void ui_sound_home_lost(void);
 /* The lid closed: quiet until it opens and the menu's loop runs again. */
 void ui_sound_lid_closed(void);
 
+void ui_sound_banner_play(u32 addr, u32 samples, u32 rate);
+void ui_sound_banner_stop(void);
+
 /* Something chosen with A or a tap, a step back, the selection moving. */
 void ui_sound_select(void);
 void ui_sound_back(void);

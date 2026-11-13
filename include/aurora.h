@@ -22,7 +22,7 @@
 #define BUTTON_X            (1 << 10)
 #define BUTTON_Y            (1 << 11)
 
-#define AURORA_VERSION_NUM "0.1.7-nova6"
+#define AURORA_VERSION_NUM "0.1.7-nova7"
 #define AURORA_VERSION     "Beta 7 v" AURORA_VERSION_NUM
 /* When this version was made, YYYYMMDD; move it with the version. HTTPS
  * takes it as the earliest the date can be, whatever the clock says, and a

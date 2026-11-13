@@ -90,6 +90,8 @@ void p3d_texture_off(P3dList *l);
  * of these. */
 enum { P3D_ALPHA_ONE, P3D_ALPHA_VERTEX, P3D_ALPHA_TEXTURE };
 void p3d_stage0(P3dList *l, int textured, int alpha);
+void p3d_stage1_tint(P3dList *l, u32 abgr);
+void p3d_blend(P3dList *l, int additive);
 /* Per-material state: depth test and write, and an alpha test (-1 for none). */
 void p3d_fragment(P3dList *l, int depth_test, int depth_write, int alpha_ref);
 

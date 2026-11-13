@@ -334,7 +334,8 @@ def video_objects(work: Path, build_dir: Path, verbose: bool) -> list:
 def build(inputs: list, output: Path | None, *, icon: Path | None = None,
           build_dir: Path = DEFAULT_BUILD_DIR, cflags: list | None = None,
           opt: str = "2", magic: str = "AURC", rebuild: bool = False,
-          video: bool = False, verbose: bool = False) -> Path:
+          video: bool = False, verbose: bool = False,
+          banner: Path | None = None) -> Path:
     find_tool(CC)
     find_tool(OBJCOPY)
     sources, found_icon = collect_sources(inputs)
@@ -377,10 +378,18 @@ def build(inputs: list, output: Path | None, *, icon: Path | None = None,
     header = struct.pack(HEADER_FMT, magic.encode("ascii"), 36, len(data),
                          LOAD_ADDR, LOAD_ADDR, 0, 0, 0, 0)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(header + data)
+    image = header + data
+    if banner is not None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import appbanner
+        try:
+            image = appbanner.embed(image, Path(banner).read_bytes())
+        except ValueError as e:
+            raise BuildError(f"{banner}: {e}")
+    output.write_bytes(image)
 
     end = bss_end(elf)
-    print(f"Built {output} ({len(header) + len(data):,} bytes"
+    print(f"Built {output} ({len(image):,} bytes"
           + (f"; uses memory to {end:#010x}" if end else "") + ")")
     return output
 
@@ -455,7 +464,7 @@ def cmd_build(a) -> int:
               cflags=[f"-I{d}" for d in a.include] + [f"-D{d}" for d in a.define]
               + (a.cflags.split() if a.cflags else []),
               opt=a.opt, magic=a.magic, rebuild=a.rebuild, video=a.video,
-              verbose=a.verbose)
+              verbose=a.verbose, banner=Path(a.banner) if a.banner else None)
     except BuildError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -498,6 +507,8 @@ def main(argv=None) -> int:
     b.add_argument("-o", "--output", help="the app file (default: <name>.bin)")
     b.add_argument("--icon", help="32x32 icon: a text .icon or a .png "
                                   "(default: a folder's *.icon, else a C)")
+    b.add_argument("--banner", help="a BNR Studio .bnr banner to carry inside "
+                                    "the app, after its colour icon (one file)")
     b.add_argument("-I", dest="include", action="append", default=[],
                    help="add an include folder")
     b.add_argument("-D", dest="define", action="append", default=[],
