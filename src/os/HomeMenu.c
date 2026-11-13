@@ -1,6 +1,7 @@
 #include "appicon.h"
 #include "homemenu.h"
 #include "anim.h"
+#include "banner.h"
 #include "fileview.h"
 #include "homelayout.h"
 #include "icons.h"
@@ -733,6 +734,104 @@ static int top_icon_frame(void) {
   return 1;
 }
 
+/* Banner apps show their scene on the first selected frame. */
+enum { BN_IDLE, BN_WAIT, BN_SHOWN, BN_FAILED };
+static int bn_state, bn_entry = HL_NONE, bn_loaded = HL_NONE, bn_bar_valid;
+static u32 bn_t0;
+static u8 bn_bar[TOP_SCREEN_WIDTH * STATUS_BAR_HEIGHT * 3];
+
+static int focus_entry(void) {
+  return held != HL_NONE ? held : bar < 0 ? entry_at(cur()) : HL_NONE;
+}
+
+/* Arms the banner of the entry with the focus, if it has one. */
+static void banner_focus(void) {
+  int e = focus_entry();
+  if (bn_state == BN_SHOWN && e == bn_entry)
+    return;
+  bn_entry = e;
+  bn_state = (e >= 0 && !HL_IS_FOLDER(e) && apps[e].banner && held == HL_NONE)
+                 ? BN_WAIT : BN_IDLE;
+}
+
+static void banner_hide(void) {
+  if (bn_state == BN_SHOWN)
+    ui_sound_banner_stop();
+  bn_state = BN_IDLE;
+}
+
+/* Before anything that leaves the Home Menu: the screen it opens, or the app
+ * it starts, may use the banner's memory. */
+static void banner_leave_home(void) {
+  banner_hide();
+  banner_unload();
+  bn_loaded = bn_entry = HL_NONE;
+}
+
+static void bar_strip(int save_it) {
+  volatile u8 *fb = VRAM_TOP_LA;
+  const u32 run = STATUS_BAR_HEIGHT * 3u;
+  for (u32 x = 0; x < TOP_SCREEN_WIDTH; x++) {
+    volatile u8 *col = fb + x * TSH * 3u + (TSH - STATUS_BAR_HEIGHT) * 3u;
+    u8 *c = bn_bar + x * run;
+    for (u32 i = 0; i < run; i++) {
+      if (save_it)
+        c[i] = col[i];
+      else
+        col[i] = c[i];
+    }
+  }
+}
+
+/* One banner frame on the top screen, when one is due; 1 if it drew. */
+static int banner_frame(void) {
+  u32 ms;
+  if (bn_state == BN_WAIT) {
+    int e = focus_entry();
+    if (e != bn_entry || held != HL_NONE) {
+      bn_state = BN_IDLE;
+      return 0;
+    }
+    if (bn_loaded != e) {
+      banner_unload();
+      bn_loaded = HL_NONE;
+      if (!banner_load(apps[e].path, apps[e].banner)) {
+        bn_state = BN_FAILED;
+        return 0;
+      }
+      bn_loaded = e;
+    }
+    bn_state = BN_SHOWN;
+    bn_t0 = anim_now();
+    bn_bar_valid = 0;
+    {
+      u32 a, n, r;
+      if (banner_jingle(&a, &n, &r))
+        ui_sound_banner_play(a, n, r);
+    }
+  }
+  if (bn_state != BN_SHOWN)
+    return 0;
+  ms = (u32)anim_ms(bn_t0);
+  screen_touch(VRAM_TOP_LA);
+  if (!banner_draw(ms, 256u, (u32)VRAM_TOP_LA)) {
+    banner_hide();
+    bn_state = BN_FAILED;
+    ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
+    status_bar_draw();
+    top_item();
+    return 1;
+  }
+  if (!bn_bar_valid) {
+    status_bar_draw();
+    bar_strip(1);
+    bn_bar_valid = 1;
+  } else {
+    bar_strip(0);
+  }
+  return 1;
+}
+
 /* What the top screen showed last, so it changes only when that does. */
 static int top_view, top_held, top_bar, top_e, top_k, top_touch;
 
@@ -748,14 +847,27 @@ static void top_note(void) {
 /* Cross-fades the top screen if what it describes changed. */
 static void top_update(void) {
   int e = held != HL_NONE ? held : entry_at(cur()), dir, art_was = art_shown;
+  int was_banner = bn_state == BN_SHOWN;
   if (top_view == view && top_held == held && top_bar == bar && top_e == e &&
       top_k == cur() && top_touch == by_touch)
     return;
   dir = cur() > top_k ? 1 : cur() < top_k ? -1 : 0;
   top_note();
+  banner_hide();
   anim_xfade_begin(ANIM_TOP);
+  if (was_banner) {
+    ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
+    status_bar_draw();
+  }
+  banner_focus();
+  if (banner_frame()) {
+    screen_present_top();
+    return;
+  }
   top_item();
-  if (art_was || art_shown) {
+  if (was_banner) {
+    anim_xfade_area(ANIM_TOP, 0, 0, TOP_SCREEN_WIDTH, TSH);
+  } else if (art_was || art_shown) {
     anim_xfade_area(ANIM_TOP, PV_CARD_X, PV_BOX_Y, PV_CARD_W, PV_ALL_H);
   } else {
     anim_xfade_area(ANIM_TOP, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX);
@@ -771,8 +883,12 @@ void home_draw(void) {
   rebuild();
   ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
   status_bar_draw();
-  top_item();
+  banner_hide();
+  anim_xfade_begin(ANIM_TOP);
   top_note();
+  banner_focus();
+  if (!banner_frame())
+    top_item();
   screen_present_top();
   place(1);
   draw_bottom();
@@ -804,6 +920,8 @@ static void animate(int ms) {
     show |= ANIM_BOT;
   }
   if (anim_xfade_frame(ANIM_TOP))
+    show |= ANIM_TOP;
+  else if (banner_frame())
     show |= ANIM_TOP;
   else if (galaxy_dirty && top_icon_frame())
     show |= ANIM_TOP;
@@ -1396,6 +1514,7 @@ static void act(int item, int k) {
     }
   } else if (item == MI_DELETE_APP && e != HL_NONE && !HL_IS_FOLDER(e) &&
              hk->remove_app) {
+    banner_leave_home();
     hk->remove_app(&apps[e]);
   }
   back_home();
@@ -1437,14 +1556,17 @@ static void activate(int k) {
   if (HL_IS_FOLDER(e)) {
     open_folder(HL_FOLDER_ID(e));
   } else {
+    banner_leave_home();
     hk->open(&apps[e]);
     back_home();
   }
 }
 
 static void power_ask(void) {
-  if (fv_confirm(L(STR_POWER_ASK), "", L(STR_POWER_OFF), L(STR_CANCEL)))
+  if (fv_confirm(L(STR_POWER_ASK), "", L(STR_POWER_OFF), L(STR_CANCEL))) {
+    banner_leave_home();
     hk->power_off();
+  }
   back_home();
 }
 
@@ -1550,6 +1672,7 @@ static void button(int b) {
       go_up();
   } else {
     ui_sound_select();
+    banner_leave_home();
     hk->settings();
     back_home();
   }
@@ -1839,10 +1962,12 @@ void home_run(void) {
       nav_keys(k);
       if (k & BUTTON_START) {
         ui_sound_select();
+        banner_leave_home();
         hk->settings();
         back_home();
       } else if (k & BUTTON_X) {
         ui_sound_select();
+        banner_leave_home();
         hk->terminal();
         back_home();
       }
@@ -1857,6 +1982,7 @@ void home_run(void) {
       if (rtc_read(&now) && now.min != last_min) {
         last_min = now.min;
         status_bar_draw();
+        bn_bar_valid = 0;
         screen_present_top();
       }
     }
