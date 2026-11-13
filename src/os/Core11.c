@@ -92,7 +92,7 @@ void backlight11_set(AudioCtrl *ct, uint32_t level) {
 
 /* This core's MPCore private timer runs free from start-up. It counts at half
  * the CPU clock, so a prescaler of 134 gives a tick a microsecond at 268 MHz
- * and three at 804 MHz. Clock11.c borrows it for a moment during a switch. */
+ * and three at 804 MHz. Clock switches and RUN11 code may borrow it. */
 #define PTIMER_LOAD  0x17E00600u
 #define PTIMER_COUNT 0x17E00604u
 #define PTIMER_CNT   0x17E00608u
@@ -296,8 +296,14 @@ void audio11_main(void) {
         }
         else if (cmd == AUDIO_CMD_BRIGHTNESS)
           backlight11_set(ct, arg0);
-        else if (cmd == AUDIO_CMD_RUN11)
+        else if (cmd == AUDIO_CMD_RUN11) {
+          /* External code may change the prescaler, reload the counter or stop
+           * it altogether. Fold in OS time before handing it over, then reclaim
+           * it without treating guest ticks as elapsed OS microseconds. */
+          (void)core11_now_us();
           run11(ct, arg0, ct->arg1);
+          timebase_start(ct);
+        }
         else if (cmd == AUDIO_CMD_SMP)
           smp11_command(ct, arg0, ct->arg1);
         else if (cmd == AUDIO_CMD_PARK)
