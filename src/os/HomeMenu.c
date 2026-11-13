@@ -1,3 +1,4 @@
+#include "appicon.h"
 #include "homemenu.h"
 #include "anim.h"
 #include "fileview.h"
@@ -192,30 +193,104 @@ static void icon16(volatile u8 *fb, int x, int y, int sh, u32 asset,
 }
 
 static unsigned galaxy_phase;
-static int color_icon(volatile u8 *fb, int x, int y, int size, int sh, int e) {
-  if (e < 0 || HL_IS_FOLDER(e) || !apps[e].color_icon) return 0;
-  const HomeApp *app = &apps[e];
-  for (int yy = 0; yy < size; yy++) for (int xx = 0; xx < size; xx++) {
-    int px = x + xx, py = y + yy;
-    if (px < 0 || px >= (sh == BSH && fb == VRAM_BOT_A ? 320 : 400) || py < 0 || py >= sh) continue;
-    unsigned sx = xx * 32 / size, sy = yy * 32 / size;
-    u16 c = app->color_icon[sy * 32 + sx];
-    Color col = {(u8)((c >> 11) * 255 / 31), (u8)(((c >> 5) & 63) * 255 / 63), (u8)((c & 31) * 255 / 31)};
-    if (app->icon_animation) {
-      unsigned wave = (sx + sy + galaxy_phase) & 63;
-      if (wave > 31) wave = 63 - wave;
-      col.r = (u8)(col.r + (255 - col.r) * wave / 180);
-      col.b = (u8)(col.b + (255 - col.b) * wave / 100);
-      if (((sx * 73 + sy * 127) % 193) == 0 && ((galaxy_phase + sx) & 15) < 5)
-        col.r = col.g = col.b = 245;
+static int galaxy_dirty;
+#define ICON_CACHE_N 32
+#define ICON_SHAPE_N 24
+#define ICON_MAX 96
+static struct {
+  const u16 *source;
+  unsigned phase, age;
+  Color pixels[1024];
+} icon_cache[ICON_CACHE_N];
+static struct {
+  int size, radius;
+  unsigned age;
+  u8 scale[ICON_MAX], alpha[ICON_MAX * ICON_MAX];
+} icon_shape[ICON_SHAPE_N];
+static unsigned icon_age;
+
+static void icon_cache_reset(void) {
+  for (int i=0;i<ICON_CACHE_N;i++) icon_cache[i].source=0;
+}
+
+static const Color *icon_pixels(const HomeApp *app) {
+  unsigned phase=app->icon_animation ? (galaxy_phase & 63u)+1u : 0;
+  int slot=0,reuse=-1;
+  for (int i=0;i<ICON_CACHE_N;i++) {
+    if(icon_cache[i].source==app->color_icon)reuse=i;
+    if (icon_cache[i].source==app->color_icon && icon_cache[i].phase==phase) {
+      icon_cache[i].age=++icon_age;
+      return icon_cache[i].pixels;
     }
-    draw_pixel(fb, px, py, sh, col);
+    if (!icon_cache[i].source || icon_cache[i].age<icon_cache[slot].age) slot=i;
+  }
+  if(reuse>=0)slot=reuse;
+  for (unsigned sy=0;sy<32;sy++) for (unsigned sx=0;sx<32;sx++) {
+    u16 c=app->color_icon[sy*32+sx];
+    Color col={(u8)((c>>11)*255/31),(u8)(((c>>5)&63)*255/63),(u8)((c&31)*255/31)};
+    if (app->icon_animation) {
+      unsigned wave=(sx+sy+galaxy_phase)&63;
+      if(wave>31) wave=63-wave;
+      col.r=(u8)(col.r+(255-col.r)*wave/180);
+      col.b=(u8)(col.b+(255-col.b)*wave/100);
+      if(((sx*73+sy*127)%193)==0 && ((galaxy_phase+sx)&15)<5)
+        col.r=col.g=col.b=245;
+    }
+    icon_cache[slot].pixels[sy*32+sx]=col;
+  }
+  icon_cache[slot].source=app->color_icon;
+  icon_cache[slot].phase=phase;
+  icon_cache[slot].age=++icon_age;
+  return icon_cache[slot].pixels;
+}
+
+static int icon_mask(int size,int radius) {
+  int slot=0;
+  for(int i=0;i<ICON_SHAPE_N;i++) {
+    if(icon_shape[i].size==size && icon_shape[i].radius==radius) {
+      icon_shape[i].age=++icon_age;return i;
+    }
+    if(!icon_shape[i].size || icon_shape[i].age<icon_shape[slot].age)slot=i;
+  }
+  for(int x=0;x<size;x++) {
+    icon_shape[slot].scale[x]=(u8)(x*32/size);
+    for(int y=0;y<size;y++)icon_shape[slot].alpha[x*size+y]=(u8)appicon_alpha(x,y,size,radius);
+  }
+  icon_shape[slot].size=size;icon_shape[slot].radius=radius;
+  icon_shape[slot].age=++icon_age;return slot;
+}
+
+static int color_icon(volatile u8 *fb,int x,int y,int size,int radius,int sh,int e) {
+  if(e<0 || HL_IS_FOLDER(e) || !apps[e].color_icon || size<1 || size>ICON_MAX)return 0;
+  int width=screen_fb_width(fb),x0=x<0?-x:0,y0=y<0?-y:0;
+  int x1=x+size>width?width-x:size,y1=y+size>sh?sh-y:size;
+  if(x0>=x1 || y0>=y1)return 1;
+  const Color *pixels=icon_pixels(&apps[e]);
+  int m=icon_mask(size,radius);
+  const u8 *scale=icon_shape[m].scale,*mask=icon_shape[m].alpha;
+  screen_touch(fb);
+  for(int xx=x0;xx<x1;xx++) {
+    unsigned off=((x+xx)*sh+sh-1-y-y0)*3;
+    unsigned sx=scale[xx];
+    for(int yy=y0;yy<y1;yy++,off-=3) {
+      volatile u8 *dst=fb+off;
+      unsigned alpha=mask[xx*size+yy];
+      if(!alpha)continue;
+      Color col=pixels[scale[yy]*32+sx];
+      if(alpha==255) {dst[0]=col.b;dst[1]=col.g;dst[2]=col.r;}
+      else {
+        unsigned inv=256-alpha;
+        dst[0]=(u8)((dst[0]*inv+col.b*alpha)>>8);
+        dst[1]=(u8)((dst[1]*inv+col.g*alpha)>>8);
+        dst[2]=(u8)((dst[2]*inv+col.r*alpha)>>8);
+      }
+    }
   }
   return 1;
 }
 
 static void entry_icon16(volatile u8 *fb, int x, int y, int sh, int e) {
-  if (color_icon(fb, x, y, 16, sh, e)) return;
+  if (color_icon(fb, x, y, 16, 3, sh, e)) return;
   if (HL_IS_FOLDER(e))
     icon16(fb, x, y, sh, ASSET_ICON_FOLDER_16, icon_folder_bits,
            COLOR_HM_TEXT2);
@@ -224,7 +299,7 @@ static void entry_icon16(volatile u8 *fb, int x, int y, int sh, int e) {
 }
 
 static void entry_icon32(volatile u8 *fb, int x, int y, int sh, int e) {
-  if (color_icon(fb, x, y, 32, sh, e)) return;
+  if (color_icon(fb, x, y, 32, 6, sh, e)) return;
   if (HL_IS_FOLDER(e))
     ui_icon(fb, x, y, 32, sh, ASSET_ICON_FOLDER_32, icon_folder_bits,
             COLOR_HM_TEXT2);
@@ -237,7 +312,7 @@ static void tile(volatile u8 *fb, int e, int x, int y, int size) {
   if (!HL_IS_FOLDER(e)) {
     draw_gradient_round_rect(fb, x, y, size, size, r, BSH, COLOR_HM_SLOT_TOP,
                              COLOR_HM_SLOT_BOT);
-    if (!color_icon(fb, x, y, size, BSH, e))
+    if (!color_icon(fb, x, y, size, r, BSH, e))
       ui_icon(fb, x, y, size, BSH, apps[e].asset_sm, apps[e].icon, COLOR_WHITE);
     return;
   }
@@ -333,7 +408,52 @@ static void draw_dots(int sc) {
   }
 }
 
-static void draw_bottom(void) {
+typedef struct { int x,y,w,h; } HomeRect;
+typedef struct { int e,x,y,size; unsigned phase; } HomeTileStamp;
+static u8 bottom_base[BW*BSH*3] __attribute__((aligned(4)));
+static HomeTileStamp bottom_tiles[HOME_PER_PAGE];
+static HomeRect bottom_ring;
+static int bottom_valid,bottom_view,bottom_page,bottom_ndisp,bottom_count;
+
+static HomeRect ring_rect(void) {
+  int dx=bar<0?page*BW-anim_px(&scroll):0;
+  return (HomeRect){anim_px(&ring_x)+dx,anim_px(&ring_y),anim_px(&ring_w),anim_px(&ring_h)};
+}
+static void paint_ring(HomeRect q) {
+  int r=q.h/2;
+  if(r>10+SLOT_LIFT/2+SLOT_RING)r=10+SLOT_LIFT/2+SLOT_RING;
+  draw_round_ring(VRAM_BOT_A,q.x,q.y,q.w,q.h,r,SLOT_RING+1,BSH,g_accent);
+}
+static int rect_equal(HomeRect a,HomeRect b) {
+  return a.x==b.x && a.y==b.y && a.w==b.w && a.h==b.h;
+}
+static int rect_hits(HomeRect a,HomeRect b) {
+  return a.w>0 && a.h>0 && b.w>0 && b.h>0 && a.x<b.x+b.w && b.x<a.x+a.w && a.y<b.y+b.h && b.y<a.y+a.h;
+}
+static HomeRect rect_union(HomeRect a,HomeRect b) {
+  if(a.w<=0 || a.h<=0)return b;
+  if(b.w<=0 || b.h<=0)return a;
+  int x=a.x<b.x?a.x:b.x,y=a.y<b.y?a.y:b.y;
+  int r=a.x+a.w>b.x+b.w?a.x+a.w:b.x+b.w;
+  int d=a.y+a.h>b.y+b.h?a.y+a.h:b.y+b.h;
+  return (HomeRect){x,y,r-x,d-y};
+}
+static HomeRect stamp_rect(HomeTileStamp t) {return (HomeRect){t.x,t.y,t.size,t.size};}
+static int bottom_stamps(HomeTileStamp *out) {
+  int n=0,sc=anim_px(&scroll);
+  for(int k=0;k<ndisp;k++) {
+    int e=disp[k];if(e==GAP_ENTRY)continue;
+    int a=anim_idx(e),l=anim_px(&lift[a]),size=SLOT_SIZE+2*l;
+    int x=anim_px(&pos_x[a])-sc-l,y=anim_px(&pos_y[a])-l;
+    if(x+size<=0 || x>=BW)continue;
+    if(n==HOME_PER_PAGE)return -1;
+    unsigned phase=(HL_IS_FOLDER(e)||apps[e].icon_animation)?galaxy_phase:0;
+    out[n++]=(HomeTileStamp){e,x,y,size,phase};
+  }
+  return n;
+}
+
+static void draw_bottom_full(void) {
   volatile u8 *fb = VRAM_BOT_A;
   int sc = anim_px(&scroll), p0 = sc >= 0 ? sc / BW : -1;
 
@@ -350,6 +470,10 @@ static void draw_bottom(void) {
                                  BSH, COLOR_HM_EMPTY_TOP, COLOR_HM_EMPTY_BOT);
     }
   }
+
+  screen_touch(fb);
+  if(held==HL_NONE && into<0 && sc==page*BW)
+    for(unsigned i=0;i<sizeof bottom_base;i++)bottom_base[i]=fb[i];
 
   for (int k = 0; k < ndisp; k++) {
     int e = disp[k], a, l, x, y, size;
@@ -369,13 +493,7 @@ static void draw_bottom(void) {
   }
 
   if (held == HL_NONE) {
-    /* on a slot, the ring moves with its page as the pages slide */
-    int w = anim_px(&ring_w), h = anim_px(&ring_h), r = h / 2;
-    int dx = bar < 0 ? page * BW - sc : 0;
-    if (r > 10 + SLOT_LIFT / 2 + SLOT_RING)
-      r = 10 + SLOT_LIFT / 2 + SLOT_RING;
-    draw_round_ring(fb, anim_px(&ring_x) + dx, anim_px(&ring_y), w, h, r,
-                    SLOT_RING + 1, BSH, g_accent);
+    paint_ring(ring_rect());
   } else {
     /* over a tile it would go into, it shrinks so that tile shows round it */
     int size = SLOT_SIZE + 2 * HOLD_LIFT, x = anim_px(&held_x),
@@ -391,6 +509,47 @@ static void draw_bottom(void) {
                     g_accent);
   }
   draw_dots(sc);
+}
+
+static void draw_bottom(void) {
+  HomeTileStamp now[HOME_PER_PAGE];
+  int count=bottom_stamps(now);
+  int eligible=held==HL_NONE && into<0 && anim_px(&scroll)==page*BW && count>=0;
+  HomeRect ring=ring_rect(),damage={0,0,0,0};
+  int full=!bottom_valid || !eligible || bottom_view!=view || bottom_page!=page ||
+    bottom_ndisp!=ndisp || bottom_count!=count;
+  if(!full)for(int i=0;i<count;i++) {
+    if(now[i].e!=bottom_tiles[i].e){full=1;break;}
+    HomeRect a=stamp_rect(now[i]),b=stamp_rect(bottom_tiles[i]);
+    if(!rect_equal(a,b) || now[i].phase!=bottom_tiles[i].phase)
+      damage=rect_union(damage,rect_union(a,b));
+  }
+  if(!full && !rect_equal(ring,bottom_ring))damage=rect_union(damage,rect_union(ring,bottom_ring));
+  if(!full && damage.w) {
+    HomeRect prev;
+    do {
+      prev=damage;
+      for(int i=0;i<count;i++)if(rect_hits(damage,stamp_rect(now[i])))damage=rect_union(damage,stamp_rect(now[i]));
+      if(rect_hits(damage,ring))damage=rect_union(damage,ring);
+    }while(!rect_equal(prev,damage));
+    if(damage.y+damage.h>DOTS_Y)full=1;
+  }
+  if(full)draw_bottom_full();
+  else if(damage.w) {
+    int x0=damage.x<0?0:damage.x,y0=damage.y<0?0:damage.y;
+    int x1=damage.x+damage.w>BW?BW:damage.x+damage.w;
+    int y1=damage.y+damage.h>BSH?BSH:damage.y+damage.h;
+    volatile u8 *fb=VRAM_BOT_A;screen_touch(fb);
+    for(int x=x0;x<x1;x++) {
+      unsigned off=(x*BSH+BSH-y1)*3;
+      for(int i=0;i<(y1-y0)*3;i++)fb[off+i]=bottom_base[off+i];
+    }
+    for(int i=0;i<count;i++)if(rect_hits(damage,stamp_rect(now[i])))tile(fb,now[i].e,now[i].x,now[i].y,now[i].size);
+    if(rect_hits(damage,ring))paint_ring(ring);
+  }
+  bottom_valid=eligible;bottom_view=view;bottom_page=page;bottom_ndisp=ndisp;
+  bottom_count=count;bottom_ring=ring;
+  if(count>=0)for(int i=0;i<count;i++)bottom_tiles[i]=now[i];
 }
 
 /* Points every animation at where things belong now; `jump` goes there at
@@ -548,7 +707,7 @@ static void top_item(void) {
       entry_icon32(fb, PV_BOX_X + 10 + (i % 2) * 44,
                    PV_BOX_Y + 10 + (i / 2) * 44, TSH, hl_at(f, i));
   } else if (bits || asset != UI_NO_ASSET) {
-    if (!color_icon(fb, PV_BOX_X, PV_BOX_Y, PV_BOX, TSH, e))
+    if (!color_icon(fb, PV_BOX_X, PV_BOX_Y, PV_BOX, 16, TSH, e))
       ui_icon(fb, PV_BOX_X, PV_BOX_Y, PV_BOX, TSH, asset, bits, COLOR_WHITE);
   }
 
@@ -562,6 +721,16 @@ static void top_item(void) {
     ui_text_mid(fb, TOP_SCREEN_WIDTH / 2, PV_HINT_Y, TSH,
                 L(by_touch ? STR_MOVE_TOUCH : STR_MOVE_KEYS), COLOR_HM_TEXT2,
                 COLOR_HM_BG_BOT, &ui_small);
+}
+
+static int top_icon_frame(void) {
+  int e=held!=HL_NONE?held:bar<0?entry_at(cur()):HL_NONE;
+  if(e<0 || HL_IS_FOLDER(e) || !apps[e].icon_animation || !apps[e].color_icon || art_shown)return 0;
+  Color tint=apps[e].tint,dark={(u8)(tint.r*5/9),(u8)(tint.g*5/9),(u8)(tint.b*5/9)};
+  ui_wallpaper_rect(VRAM_TOP_LA,PV_BOX_X,PV_BOX_Y,PV_BOX,PV_BOX,TSH);
+  draw_gradient_round_rect(VRAM_TOP_LA,PV_BOX_X,PV_BOX_Y,PV_BOX,PV_BOX,16,TSH,tint,dark);
+  color_icon(VRAM_TOP_LA,PV_BOX_X,PV_BOX_Y,PV_BOX,16,TSH,e);
+  return 1;
 }
 
 /* What the top screen showed last, so it changes only when that does. */
@@ -598,6 +767,7 @@ static void top_update(void) {
 }
 
 void home_draw(void) {
+  bottom_valid=0;
   rebuild();
   ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
   status_bar_draw();
@@ -629,12 +799,15 @@ static void animate(int ms) {
     moved_any |= anim_step(&pos_y[a], ms);
     moved_any |= anim_step(&lift[a], ms);
   }
-  if (moved_any) {
+  if (moved_any || galaxy_dirty) {
     draw_bottom();
     show |= ANIM_BOT;
   }
   if (anim_xfade_frame(ANIM_TOP))
     show |= ANIM_TOP;
+  else if (galaxy_dirty && top_icon_frame())
+    show |= ANIM_TOP;
+  galaxy_dirty=0;
   anim_present(show);
 }
 
@@ -953,7 +1126,9 @@ static const StringId mi_label[MI_COUNT] = {STR_MOVE, STR_MOVE_TO,
 static void menu_card(const char *title, const char *sub) {
   static const Color scrim = {0x00, 0x00, 0x00};
   volatile u8 *fb = VRAM_BOT_A;
+  bottom_valid=0;
   draw_bottom();
+  bottom_valid=0;
   draw_filled_rect_alpha(fb, 0, 0, BW, BSH, BSH, scrim, 150);
   anim_popup_behind();
   draw_gradient_round_rect(fb, MN_X, MN_Y, MN_W, MN_H, 14, BSH,
@@ -1603,6 +1778,8 @@ static void nav_keys(u32 k) {
 
 void home_init(const HomeApp *a, int n, const HomeHooks *hooks) {
   apps = a;
+  icon_cache_reset();
+  bottom_valid=0;
   napps = n > HOME_ITEMS ? HOME_ITEMS : n;
   hk = hooks;
   for (int i = 0; i < napps; i++)
@@ -1617,6 +1794,8 @@ void home_init(const HomeApp *a, int n, const HomeHooks *hooks) {
 
 void home_reload(const HomeApp *a, int n) {
   apps = a;
+  icon_cache_reset();
+  bottom_valid=0;
   napps = n > HOME_ITEMS ? HOME_ITEMS : n;
   for (int i = 0; i < napps; i++)
     keys[i] = apps[i].key;
@@ -1686,12 +1865,11 @@ void home_run(void) {
     if (ms) {
       static unsigned elapsed;
       elapsed += (unsigned)ms;
-      int e = held != HL_NONE ? held : entry_at(cur());
+      int e = held != HL_NONE ? held : bar<0 ? entry_at(cur()) : HL_NONE;
       if (elapsed >= 100) {
         elapsed = 0; galaxy_phase++;
         if (e >= 0 && !HL_IS_FOLDER(e) && apps[e].icon_animation) {
-          dirty = 1;
-          top_item(); screen_present_top();
+          galaxy_dirty=1;
         }
       }
       animate(ms);
