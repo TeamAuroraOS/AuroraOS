@@ -181,6 +181,7 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_p3d9.o $(BUILD_DIR)/os_stereo9.o \
            $(BUILD_DIR)/os_json.o $(BUILD_DIR)/os_glb.o \
            $(BUILD_DIR)/os_homemenu.o $(BUILD_DIR)/os_homelayout.o \
+           $(BUILD_DIR)/os_banner.o \
            $(BUILD_DIR)/os_statusbar.o $(BUILD_DIR)/os_fileview.o \
            $(BUILD_DIR)/os_fileops.o $(BUILD_DIR)/os_screenshot.o \
            $(BUILD_DIR)/os_touchcal.o $(BUILD_DIR)/os_terminal.o \
@@ -323,6 +324,10 @@ $(BUILD_DIR)/os_glb.o: $(OS_DIR)/Glb.c $(wildcard $(INC_DIR)/*.h) | dirs
 $(BUILD_DIR)/os_homemenu.o: $(OS_DIR)/HomeMenu.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_banner.o: $(OS_DIR)/Banner.c $(wildcard $(INC_DIR)/*.h) $(BUILD_DIR)/model_shbin.h | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -I$(BUILD_DIR) -c $< -o $@
 
 $(BUILD_DIR)/os_homelayout.o: $(OS_DIR)/HomeLayout.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
