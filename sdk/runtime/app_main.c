@@ -10,6 +10,7 @@
 #include "timer.h"
 #include "user.h"
 #include "ff.h"
+#include "sdmmc.h"
 
 #include <stdio.h>
 #include <stdlib.h>
