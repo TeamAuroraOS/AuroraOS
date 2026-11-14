@@ -673,7 +673,7 @@ uname [-a] [-s] [-n] [-r] [-m] [-o]
 |--------|--------|
 | `-s` | `AuroraOS` (the default) |
 | `-n` | the host, `n3ds` or `o3ds` |
-| `-r` | the version, for example `Beta 7 v0.1.6` |
+| `-r` | the version, for example `Beta 8 v0.1.7-nova7` |
 | `-m` | `armv5tel`, the ARM9 |
 | `-o` | `AuroraOS` |
 | `-a` | all of the above, in that order |

@@ -112,7 +112,7 @@ change).
    the file is written.
 
 Every request is HTTP/1.0 with `Host: 3ds.aurora3ds.xyz`,
-`User-Agent: AuroraOS/0.1.6` (`AURORA_VERSION_NUM`),
+`User-Agent: AuroraOS/0.1.7-nova7` (`AURORA_VERSION_NUM`),
 `Accept: application/json` and `Connection: close`, and a form body with its
 `Content-Length`. The reply is read until the server closes or until the
 `Content-Length` after the headers is in. The status code is the three digits

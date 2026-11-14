@@ -5,7 +5,7 @@
 ![Platform](https://img.shields.io/badge/platform-Nintendo%203DS-red?logo=nintendo3ds&logoColor=white)
 ![Status](https://img.shields.io/badge/status-in%20development-yellow)
 
-Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta 7 v0.1.6.**
+Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta 8 v0.1.7-nova7.**
 
 *Built using knowledge from GodMode9 and Luma source code.*
 
