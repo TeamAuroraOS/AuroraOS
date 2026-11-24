@@ -1,8 +1,11 @@
+#include "amenu.h"
 #include "banner.h"
+#include "camera.h"
 #include "appicon.h"
 #include "aurora.h"
 #include "account.h"
 #include "assets.h"
+#include "theme.h"
 #include "ui.h"
 #include "anim.h"
 #include "model3d.h"
@@ -77,7 +80,8 @@ u32 get_keys(void) {
     aurora_lid_wait_open();
     lid_resumed = 1;
   }
-  return ~REG_HID_PAD & 0xFFF;
+  volatile AuroraSystemMenuShared *menu = aurora_system_menu_shared();
+  return (~REG_HID_PAD & 0xFFFu) | (menu->mod_keys & 0xFFFu);
 }
 
 /* Only directions repeat while held; everything else is edge-triggered, so
@@ -213,7 +217,7 @@ static const char *const br_labels[BR_LEVELS] = {"1 / 5", "2 / 5", "3 / 5",
 static UserConfig g_cfg;
 
 
-enum { ACT_LAUNCH, ACT_MUSIC, ACT_FILES, ACT_CUBE, ACT_STORE };
+enum { ACT_LAUNCH, ACT_MUSIC, ACT_FILES, ACT_CUBE, ACT_STORE, ACT_CAMERA };
 
 /* A long name is cut for display, but the path always holds all of it. C apps
  * go in their own folder (sdk/). */
@@ -233,7 +237,7 @@ static char app_kind[MAX_APPS]; /* aurora_magic_kind(): 'C' for a C app */
 static int  app_count;
 
 /* The SD apps, then the built-in screens. */
-static HomeApp home_apps[MAX_APPS + 4];
+static HomeApp home_apps[MAX_APPS + 5];
 static int home_count;
 
 /* Relocatable app hand-off + return stubs (src/os/os_launch.s), and the end of
@@ -284,194 +288,54 @@ static void notice(const char *title, const char *subtitle) {
 #define accent_names   aurora_accent_names
 #define ACCENT_COUNT   AURORA_ACCENT_COUNT
 
-#define THEME_DIR       "Aurora/themes"
-#define THEME_CONFIG    "Aurora/theme.txt"
-#define THEME_BUILTIN   "@default" /* theme.txt for the built-in wallpaper */
-#define THEME_MAX       24
-#define THEME_NAME_MAX  64
-
-static FATFS theme_fs;
-static char active_theme[THEME_NAME_MAX];
 static void settings_header(u32 asset, const unsigned char *icon,
                             const char *title, Color icon_color);
 
-static void theme_path(char *out, const char *name, const char *file) {
-  const char *p = "Aurora/themes/";
-  while (*p) *out++ = *p++;
-  if (name && name[0]) {
-    p = name;
-    while (*p) *out++ = *p++;
-    *out++ = '/';
-  }
-  p = file;
-  while (*p) *out++ = *p++;
-  *out = '\0';
-}
-
-/* Names starting with '@' are left to THEME_BUILTIN. */
-static int theme_name_valid(const char *name) {
-  if (!name || !name[0] || name[0] == '@' ||
-      (name[0] == '.' && (!name[1] || (name[1] == '.' && !name[2]))))
-    return 0;
-  for (const char *p = name; *p; p++)
-    if (*p == '/' || *p == '\\' || *p == ':' || *p < 0x20)
-      return 0;
-  return 1;
-}
-
-static int theme_name_equal(const char *a, const char *b) {
+static int theme_id_eq(const char *a, const char *b) {
   while (*a && *a == *b) { a++; b++; }
   return *a == *b;
 }
 
-/* Only the PNG header is read, so listing themes stays quick; the picture is
- * decoded (and its size checked again) by ui_theme_load(). */
-static int theme_png_fits(const char *path, int w, int h) {
-  static const u8 sig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
-  static FIL f;
-  u8 head[24];
-  UINT br = 0;
-  int iw = 0, ih = 0, ok;
-  if (f_open(&f, path, FA_READ) != FR_OK)
-    return 0;
-  ok = f_read(&f, head, sizeof(head), &br) == FR_OK && br == sizeof(head);
-  f_close(&f);
-  for (int i = 0; ok && i < 8; i++)
-    ok = head[i] == sig[i];
-  return ok && image_probe(head, br, &iw, &ih) == IMG_OK && iw == w &&
-         ih == h;
+static u32 col_rgb24(Color c) {
+  return ((u32)c.r << 16) | ((u32)c.g << 8) | c.b;
 }
 
-static int theme_compatible(const char *name) {
-  char path[128];
-  if (!theme_name_valid(name))
-    return 0;
-  theme_path(path, name, "top.png");
-  if (!theme_png_fits(path, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT))
-    return 0;
-  theme_path(path, name, "bottom.png");
-  return theme_png_fits(path, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT);
+static void theme_sync_menu_accent(void) {
+  volatile AuroraSystemMenuShared *menu = aurora_system_menu_shared();
+  menu->accent_rgb    = col_rgb24(g_accent);
+  menu->panel_top_rgb = col_rgb24(g_theme.panel_top);
+  menu->panel_bot_rgb = col_rgb24(g_theme.panel_bot);
+  menu->slot_top_rgb  = col_rgb24(g_theme.slot_top);
+  menu->slot_bot_rgb  = col_rgb24(g_theme.slot_bot);
+  menu->text_rgb      = col_rgb24(g_theme.text);
+  menu->text_dim_rgb  = col_rgb24(g_theme.text_dim);
+  os_cache_sync();
 }
 
-/* Puts a theme into the wallpaper cache and makes it the active one; the card
- * must be mounted. 0: not a compatible theme, nothing changed. -1: a picture
- * did not decode after the cache was partly overwritten, so the built-in
- * wallpaper is in use. */
-static int theme_load(const char *name) {
-  char top[128], bottom[128];
-  int i;
-  if (!theme_compatible(name))
-    return 0;
-  theme_path(top, name, "top.png");
-  theme_path(bottom, name, "bottom.png");
-  if (!ui_theme_load(top, bottom)) {
-    active_theme[0] = '\0';
-    return -1;
-  }
-  for (i = 0; i < THEME_NAME_MAX - 1 && name[i]; i++)
-    active_theme[i] = name[i];
-  active_theme[i] = '\0';
-  return 1;
-}
-
-static int theme_mount_prepare(void) {
-  if (f_mount(&theme_fs, "", 1) != FR_OK) return 0;
-  f_mkdir("Aurora");
-  f_mkdir(THEME_DIR);
-  return 1;
-}
-
-static void theme_boot_load(void) {
-  static FIL f;
-  char saved[THEME_NAME_MAX];
-  UINT br = 0;
-  active_theme[0] = '\0';
-  if (!theme_mount_prepare())
-    return;
-  if (f_open(&f, THEME_CONFIG, FA_READ) == FR_OK) {
-    if (f_read(&f, saved, sizeof(saved) - 1, &br) != FR_OK)
-      br = 0;
-    f_close(&f);
-  }
-  saved[br] = '\0';
-  while (br && (saved[br - 1] == '\r' || saved[br - 1] == '\n'))
-    saved[--br] = '\0';
-  theme_load(saved);
-  f_mount(NULL, "", 0);
-}
-
-/* Applies `name` ("" for the built-in wallpaper) and remembers it in
- * theme.txt. Returns 0 when it could not be applied; the wallpaper shown
- * before stays. A theme.txt that cannot be written only means the choice
- * lasts until the next boot. */
-static int theme_select(const char *name) {
-  static FIL f;
-  char saved[THEME_NAME_MAX + 1];
-  const char *keep = name[0] ? name : THEME_BUILTIN;
-  UINT len = 0, bw;
-  int r = 1;
-  if (!theme_mount_prepare())
-    return 0;
-  if (!name[0]) {
-    if (active_theme[0])
-      ui_theme_clear(); /* the next paint composes the built-in one */
-    active_theme[0] = '\0';
-  } else {
-    char before[THEME_NAME_MAX];
-    int i;
-    for (i = 0; active_theme[i]; i++)
-      before[i] = active_theme[i];
-    before[i] = '\0';
-    r = theme_load(name);
-    if (r < 0 && before[0])
-      theme_load(before);
-  }
-  if (r > 0) {
-    while (keep[len] && len < THEME_NAME_MAX - 1) {
-      saved[len] = keep[len];
-      len++;
-    }
-    saved[len++] = '\n';
-    if (f_open(&f, THEME_CONFIG, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK) {
-      f_write(&f, saved, len, &bw);
-      f_close(&f);
+static void theme_caps_text(char *out, u32 caps) {
+  char *p = out;
+  const char *tags[5] = {"TOP", "BOT", "BGM", "SFX", "COL"};
+  u32 bits[5] = {THEME_CAP_TOP_IMG, THEME_CAP_BOT_IMG, THEME_CAP_BGM,
+                 THEME_CAP_SFX, THEME_CAP_COLORS};
+  int first = 1;
+  for (int i = 0; i < 5; i++) {
+    if (caps & bits[i]) {
+      if (!first) *p++ = ' ';
+      first = 0;
+      const char *t = tags[i];
+      while (*t) *p++ = *t++;
     }
   }
-  f_mount(NULL, "", 0);
-  return r > 0;
-}
-
-static int theme_scan(char names[THEME_MAX][THEME_NAME_MAX]) {
-  DIR dir;
-  FILINFO info;
-  int n = 1;
-  names[0][0] = '\0'; /* built-in Aurora theme */
-  if (!theme_mount_prepare()) return n;
-  if (f_opendir(&dir, THEME_DIR) == FR_OK) {
-    while (n < THEME_MAX && f_readdir(&dir, &info) == FR_OK && info.fname[0]) {
-      int len = 0;
-      if (!(info.fattrib & AM_DIR) || !theme_name_valid(info.fname)) continue;
-      while (info.fname[len] && len < THEME_NAME_MAX - 1) len++;
-      if (!len || info.fname[len]) continue;
-      char name[THEME_NAME_MAX];
-      for (int i = 0; i <= len; i++) name[i] = info.fname[i];
-      if (!theme_compatible(name)) continue;
-      for (int i = 0; i <= len; i++) names[n][i] = name[i];
-      n++;
-    }
-    f_closedir(&dir);
-  }
-  f_mount(NULL, "", 0);
-  return n;
+  *p = '\0';
 }
 
 static void theme_screen(void) {
-  static char names[THEME_MAX][THEME_NAME_MAX];
-  int count = theme_scan(names);
+  static ThemeEntry entries[THEME_MAX];
+  int count = theme_scan_entries(entries, THEME_MAX);
   int sel = 0, dirty = 1;
   for (int i = 0; i < count; i++) {
-    if ((!active_theme[0] && !names[i][0]) ||
-        (active_theme[0] && theme_name_equal(active_theme, names[i]))) {
+    if ((!g_theme.id[0] && !entries[i].id[0]) ||
+        (g_theme.id[0] && theme_id_eq(g_theme.id, entries[i].id))) {
       sel = i;
       break;
     }
@@ -479,7 +343,7 @@ static void theme_screen(void) {
   settings_header(ASSET_ICON_DISPLAY_64, icon_brightness_bits, L(STR_THEME), g_accent);
   while (1) {
     u32 k = get_keys_down();
-    int tx, ty, activate = 0, top = sel >= 5 ? sel - 4 : 0;
+    int tx, ty, activate = 0, top = sel >= 4 ? sel - 3 : 0;
     if (dirty) {
       dirty = 0;
       ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
@@ -489,14 +353,25 @@ static void theme_screen(void) {
                     L(STR_NO_THEMES), COLOR_HM_TEXT2, COLOR_HM_BG_BOT,
                     &ui_font);
       } else {
-        for (int r = 0; r < 5 && top + r < count; r++) {
-          int i = top + r, y = 12 + r * 37;
+        for (int r = 0; r < 4 && top + r < count; r++) {
+          int i = top + r, y = 10 + r * 48;
           Color bg = i == sel ? g_accent : COLOR_PANEL_BOT;
-          draw_filled_round_rect(VRAM_BOT_A, 10, y, BOT_SCREEN_WIDTH - 20, 31,
+          Color sub = i == sel ? COLOR_WHITE : COLOR_HM_TEXT2;
+          char meta[64];
+          draw_filled_round_rect(VRAM_BOT_A, 10, y, BOT_SCREEN_WIDTH - 20, 42,
                                  7, BOT_SCREEN_HEIGHT, bg);
-          ui_text_fit(VRAM_BOT_A, 20, y + 8, BOT_SCREEN_HEIGHT,
-                      names[i][0] ? names[i] : "Aurora",
-                      BOT_SCREEN_WIDTH - 40, COLOR_WHITE, bg, &ui_font);
+          ui_text_fit(VRAM_BOT_A, 20, y + 6, BOT_SCREEN_HEIGHT,
+                      entries[i].title, BOT_SCREEN_WIDTH - 40,
+                      COLOR_WHITE, bg, &ui_bold);
+          theme_caps_text(meta, entries[i].caps);
+          if (!meta[0]) {
+            const char *a = entries[i].author[0] ? entries[i].author : "Default";
+            int n = 0;
+            while (a[n] && n < 63) { meta[n] = a[n]; n++; }
+            meta[n] = '\0';
+          }
+          ui_text_fit(VRAM_BOT_A, 20, y + 24, BOT_SCREEN_HEIGHT,
+                      meta, BOT_SCREEN_WIDTH - 40, sub, bg, &ui_small);
         }
       }
       ui_text_mid(VRAM_BOT_A, BOT_SCREEN_WIDTH / 2, BOT_SCREEN_HEIGHT - 21,
@@ -515,8 +390,8 @@ static void theme_screen(void) {
       ui_sound_move();
     }
     if (touch_tap(&tx, &ty) && count > 1) {
-      int row = (ty - 12) / 37;
-      if (ty >= 12 && row >= 0 && row < 5 && top + row < count) {
+      int row = (ty - 10) / 48;
+      if (ty >= 10 && row >= 0 && row < 4 && top + row < count) {
         sel = top + row;
         activate = 1;
         dirty = 1;
@@ -524,9 +399,11 @@ static void theme_screen(void) {
     }
     if ((k & BUTTON_A) || activate) {
       ui_sound_select();
-      if (theme_select(names[sel]))
+      if (theme_select(entries[sel].id, aurora_accent_presets[g_cfg.accent])) {
+        theme_sync_menu_accent();
         return;
-      notice(L(STR_THEME_FAILED), names[sel][0] ? names[sel] : "Aurora");
+      }
+      notice(L(STR_THEME_FAILED), entries[sel].title);
       dirty = 1;
     }
     if (k & BUTTON_B) {
@@ -555,6 +432,8 @@ typedef enum {
   SET_CLOCK,
   SET_BRIGHTNESS,
   SET_FULL_POWER,
+  SET_CAMERA,
+  SET_AUTOBOOT,
   SET_STARTUP_SOUND,
   SET_HOME_MUSIC,
   SET_SHOP_MUSIC,
@@ -562,6 +441,8 @@ typedef enum {
   SET_TOUCHCAL,
   SET_WIFITEST,
   SET_GPUTEST,
+  SET_MODELTEST,
+  SET_CLEAR_CACHE,
   SET_ABOUT,
   SET_CRASH,
   SET_RESET,
@@ -610,8 +491,8 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
     case SET_THEME:
       *asset = ASSET_ICON_DISPLAY_32;
       *icon = icon_brightness_bits; *name = L(STR_THEME);
-      if (active_theme[0]) {
-        ui_fit(ssid, sizeof(ssid), &ui_font, active_theme, ROW_W - 155);
+      if (g_theme.id[0]) {
+        ui_fit(ssid, sizeof(ssid), &ui_font, g_theme.title, ROW_W - 155);
         *value = ssid;
       } else {
         *value = "Aurora";
@@ -635,6 +516,16 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
       *asset = ASSET_ICON_CPU_32;
       *icon = icon_boot_bits; *name = L(STR_FULL_POWER);
       *value = !aurora_is_new3ds() ? "---" : L(g_cfg.power_off ? STR_OFF : STR_ON);
+      break;
+    case SET_CAMERA:
+      *asset = ASSET_APP_CAMERA_32;
+      *icon = icon_camera_bits; *name = "Camera";
+      *value = L(g_cfg.camera_on ? STR_ON : STR_OFF);
+      break;
+    case SET_AUTOBOOT:
+      *asset = ASSET_ICON_FILE_AURORA_32;
+      *icon = icon_boot_bits; *name = "Autoboot";
+      *value = L(g_cfg.autoboot ? STR_ON : STR_OFF);
       break;
     case SET_STARTUP_SOUND: {
       int off = g_cfg.sound_off & USER_SOUND_STARTUP_OFF;
@@ -669,6 +560,14 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
       *asset = ASSET_ICON_MONITOR_32;
       *icon = icon_boot_bits; *name = L(STR_GPU_TEST);
       *value = gpu_alive() ? "Ready" : "---"; break;
+    case SET_MODELTEST:
+      *asset = ASSET_ICON_CUBE_32;
+      *icon = icon_cube_bits; *name = "3D Model Test";
+      *value = ""; break;
+    case SET_CLEAR_CACHE:
+      *asset = ASSET_ICON_SETTINGS_32;
+      *icon = icon_settings_bits; *name = "Clear Cache";
+      *value = ""; break;
     case SET_ABOUT:
       *asset = ASSET_ICON_INFO_32;
       *icon = icon_settings_bits; *name = L(STR_ABOUT); *value = AURORA_VERSION; break;
@@ -1036,6 +935,23 @@ static void full_power_toggle(void) {
   ui_sound_select();
   user_config_save(&g_cfg);
   settings_draw(SET_FULL_POWER);
+}
+
+/* Permission allowing C SDK apps to access the camera (default OFF). */
+static void camera_perm_toggle(void) {
+  g_cfg.camera_on ^= 1u;
+  cam_shared()->app_allowed = g_cfg.camera_on ? 1u : 0u;
+  os_cache_sync();
+  ui_sound_select();
+  user_config_save(&g_cfg);
+  settings_draw(SET_CAMERA);
+}
+
+static void autoboot_toggle(void) {
+  g_cfg.autoboot ^= 1u;
+  ui_sound_select();
+  user_config_save(&g_cfg);
+  settings_draw(SET_AUTOBOOT);
 }
 
 #define SW_SIZE 40
@@ -1791,34 +1707,45 @@ static int wifi_kv(const char *line, const char *key, char *out, int size) {
   return 1;
 }
 
-static void wifi_saved_load(void) {
-  static FIL f;
-  static char buf[256];
-  UINT br = 0;
-  wifi_saved_ssid[0] = '\0';
-  wifi_saved_pass[0] = '\0';
-  if (f_mount(&wifi_fs, "", 1) == FR_OK &&
-      f_open(&f, WIFI_NET_FILE, FA_READ) == FR_OK) {
-    if (f_read(&f, buf, sizeof(buf) - 1, &br) != FR_OK)
-      br = 0;
-    f_close(&f);
-  }
-  f_mount(NULL, "", 0);
-  buf[br] = '\0';
-  for (char *l = buf; *l;) {
-    char *e = l;
-    while (*e && *e != '\r' && *e != '\n')
-      e++;
-    int more = *e != '\0';
-    *e = '\0';
-    if (!wifi_kv(l, "ssid=", wifi_saved_ssid, sizeof(wifi_saved_ssid)))
-      wifi_kv(l, "password=", wifi_saved_pass, sizeof(wifi_saved_pass));
-    l = more ? e + 1 : e;
-  }
-  wifi_wipe(buf, sizeof(buf));
+#define WIFI_SAVED_MAX 8
+
+typedef struct {
+  char ssid[33];
+  char pass[WIFI_PASS_MAX];
+} WifiProfile;
+
+static WifiProfile wifi_profiles[WIFI_SAVED_MAX];
+static int wifi_profile_count;
+
+static int wifi_profile_find(const char *ssid) {
+  for (int i = 0; i < wifi_profile_count; i++)
+    if (wifi_streq(wifi_profiles[i].ssid, ssid))
+      return i;
+  return -1;
 }
 
-static int wifi_saved_store(const char *ssid, const char *pass) {
+static int wifi_profiles_write_fs(void) {
+  static FIL f;
+  static char buf[WIFI_SAVED_MAX * 112 + 16];
+  char *p = buf;
+  for (int i = 0; i < wifi_profile_count; i++) {
+    p = snd_cpy(p, "ssid=");
+    p = snd_cpy(p, wifi_profiles[i].ssid);
+    p = snd_cpy(p, "\r\npassword=");
+    p = snd_cpy(p, wifi_profiles[i].pass);
+    p = snd_cpy(p, "\r\n");
+  }
+  UINT n = (UINT)(p - buf), bw = 0;
+  int ok = 0;
+  if (f_open(&f, WIFI_NETS_FILE, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK) {
+    ok = (n == 0) || (f_write(&f, buf, n, &bw) == FR_OK && bw == n);
+    ok = f_close(&f) == FR_OK && ok;
+  }
+  wifi_wipe(buf, sizeof(buf));
+  return ok;
+}
+
+static int wifi_active_write_fs(const char *ssid, const char *pass) {
   static FIL f;
   static char buf[160];
   char *p = snd_cpy(buf, "ssid=");
@@ -1828,16 +1755,113 @@ static int wifi_saved_store(const char *ssid, const char *pass) {
   p = snd_cpy(p, "\r\n");
   UINT n = (UINT)(p - buf), bw = 0;
   int ok = 0;
+  if (f_open(&f, WIFI_NET_FILE, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK) {
+    ok = f_write(&f, buf, n, &bw) == FR_OK && bw == n;
+    ok = f_close(&f) == FR_OK && ok;
+  }
+  wifi_wipe(buf, sizeof(buf));
+  return ok;
+}
+
+static void wifi_saved_load(void) {
+  static FIL f;
+  static char buf[WIFI_SAVED_MAX * 112 + 64];
+  UINT br = 0;
+  wifi_saved_ssid[0] = '\0';
+  wifi_saved_pass[0] = '\0';
+  wifi_profile_count = 0;
   if (f_mount(&wifi_fs, "", 1) == FR_OK) {
-    f_mkdir("Aurora");
-    f_mkdir("Aurora/wifi");
-    if (f_open(&f, WIFI_NET_FILE, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK) {
-      ok = f_write(&f, buf, n, &bw) == FR_OK && bw == n;
-      ok = f_close(&f) == FR_OK && ok;
+    /* 1. Active network (WIFI_NET_FILE, also read by C SDK apps) */
+    if (f_open(&f, WIFI_NET_FILE, FA_READ) == FR_OK) {
+      if (f_read(&f, buf, 255, &br) != FR_OK)
+        br = 0;
+      f_close(&f);
+      buf[br] = '\0';
+      for (char *l = buf; *l;) {
+        char *e = l;
+        while (*e && *e != '\r' && *e != '\n')
+          e++;
+        int more = *e != '\0';
+        *e = '\0';
+        if (!wifi_kv(l, "ssid=", wifi_saved_ssid, sizeof(wifi_saved_ssid)))
+          wifi_kv(l, "password=", wifi_saved_pass, sizeof(wifi_saved_pass));
+        l = more ? e + 1 : e;
+      }
+      wifi_wipe(buf, 256);
+    }
+    /* 2. Multi-network list (WIFI_NETS_FILE) */
+    if (f_open(&f, WIFI_NETS_FILE, FA_READ) == FR_OK) {
+      if (f_read(&f, buf, sizeof(buf) - 1, &br) != FR_OK)
+        br = 0;
+      f_close(&f);
+      buf[br] = '\0';
+      char cur_ssid[33], cur_pass[WIFI_PASS_MAX];
+      cur_ssid[0] = '\0';
+      cur_pass[0] = '\0';
+      for (char *l = buf; *l;) {
+        char *e = l;
+        while (*e && *e != '\r' && *e != '\n')
+          e++;
+        int more = *e != '\0';
+        *e = '\0';
+        char tmp_ssid[33];
+        if (wifi_kv(l, "ssid=", tmp_ssid, sizeof(tmp_ssid))) {
+          if (cur_ssid[0] && wifi_profile_find(cur_ssid) < 0 &&
+              wifi_profile_count < WIFI_SAVED_MAX) {
+            hm_str_copy(wifi_profiles[wifi_profile_count].ssid, cur_ssid);
+            hm_str_copy(wifi_profiles[wifi_profile_count].pass, cur_pass);
+            wifi_profile_count++;
+          }
+          hm_str_copy(cur_ssid, tmp_ssid);
+          cur_pass[0] = '\0';
+        } else {
+          wifi_kv(l, "password=", cur_pass, sizeof(cur_pass));
+        }
+        l = more ? e + 1 : e;
+      }
+      if (cur_ssid[0] && wifi_profile_find(cur_ssid) < 0 &&
+          wifi_profile_count < WIFI_SAVED_MAX) {
+        hm_str_copy(wifi_profiles[wifi_profile_count].ssid, cur_ssid);
+        hm_str_copy(wifi_profiles[wifi_profile_count].pass, cur_pass);
+        wifi_profile_count++;
+      }
+      wifi_wipe(cur_pass, sizeof(cur_pass));
+      wifi_wipe(buf, sizeof(buf));
     }
   }
   f_mount(NULL, "", 0);
-  wifi_wipe(buf, sizeof(buf));
+  /* Ensure legacy single saved network is always present in the list. */
+  if (wifi_saved_ssid[0] && wifi_profile_find(wifi_saved_ssid) < 0 &&
+      wifi_profile_count < WIFI_SAVED_MAX) {
+    hm_str_copy(wifi_profiles[wifi_profile_count].ssid, wifi_saved_ssid);
+    hm_str_copy(wifi_profiles[wifi_profile_count].pass, wifi_saved_pass);
+    wifi_profile_count++;
+  }
+}
+
+static int wifi_saved_store(const char *ssid, const char *pass) {
+  int idx = wifi_profile_find(ssid);
+  if (idx >= 0) {
+    /* Move existing network to slot 0 (most recently used) and update pass */
+    for (int i = idx; i > 0; i--)
+      wifi_profiles[i] = wifi_profiles[i - 1];
+  } else {
+    if (wifi_profile_count < WIFI_SAVED_MAX)
+      wifi_profile_count++;
+    for (int i = wifi_profile_count - 1; i > 0; i--)
+      wifi_profiles[i] = wifi_profiles[i - 1];
+  }
+  wifi_kv(ssid, "", wifi_profiles[0].ssid, sizeof(wifi_profiles[0].ssid));
+  wifi_kv(pass, "", wifi_profiles[0].pass, sizeof(wifi_profiles[0].pass));
+
+  int ok = 0;
+  if (f_mount(&wifi_fs, "", 1) == FR_OK) {
+    f_mkdir("Aurora");
+    f_mkdir("Aurora/wifi");
+    ok = wifi_active_write_fs(ssid, pass);
+    wifi_profiles_write_fs();
+  }
+  f_mount(NULL, "", 0);
   if (ok) {
     wifi_kv(ssid, "", wifi_saved_ssid, sizeof(wifi_saved_ssid));
     wifi_kv(pass, "", wifi_saved_pass, sizeof(wifi_saved_pass));
@@ -1845,16 +1869,39 @@ static int wifi_saved_store(const char *ssid, const char *pass) {
   return ok;
 }
 
-static int wifi_saved_forget(void) {
+static int wifi_saved_forget_one(const char *ssid) {
+  int idx = wifi_profile_find(ssid);
+  if (idx >= 0) {
+    wifi_wipe(wifi_profiles[idx].pass, sizeof(wifi_profiles[idx].pass));
+    for (int i = idx; i + 1 < wifi_profile_count; i++)
+      wifi_profiles[i] = wifi_profiles[i + 1];
+    wifi_profile_count--;
+  }
+  int was_active = wifi_saved_ssid[0] && wifi_streq(ssid, wifi_saved_ssid);
   int ok = 0;
   if (f_mount(&wifi_fs, "", 1) == FR_OK) {
-    FRESULT fr = f_unlink(WIFI_NET_FILE);
-    ok = fr == FR_OK || fr == FR_NO_FILE;
+    f_mkdir("Aurora");
+    f_mkdir("Aurora/wifi");
+    ok = wifi_profiles_write_fs();
+    if (was_active) {
+      if (wifi_profile_count > 0) {
+        ok = wifi_active_write_fs(wifi_profiles[0].ssid,
+                                  wifi_profiles[0].pass) && ok;
+      } else {
+        FRESULT fr = f_unlink(WIFI_NET_FILE);
+        ok = (fr == FR_OK || fr == FR_NO_FILE) && ok;
+      }
+    }
   }
   f_mount(NULL, "", 0);
-  if (ok) {
-    wifi_wipe(wifi_saved_ssid, sizeof(wifi_saved_ssid));
-    wifi_wipe(wifi_saved_pass, sizeof(wifi_saved_pass));
+  if (was_active) {
+    if (wifi_profile_count > 0) {
+      hm_str_copy(wifi_saved_ssid, wifi_profiles[0].ssid);
+      hm_str_copy(wifi_saved_pass, wifi_profiles[0].pass);
+    } else {
+      wifi_wipe(wifi_saved_ssid, sizeof(wifi_saved_ssid));
+      wifi_wipe(wifi_saved_pass, sizeof(wifi_saved_pass));
+    }
   }
   return ok;
 }
@@ -1862,11 +1909,11 @@ static int wifi_saved_forget(void) {
 typedef struct {
   char ssid[33];
   int rssi;    /* dBm; 0 when the last search did not see it */
-  int secured; /* privacy bit; for the saved network unseen, a password kept */
+  int secured; /* privacy bit; for a saved network unseen, a password kept */
   int sec;     /* WIFI_SEC_*: the best any of its access points offers */
 } WifiNet;
 
-static WifiNet wn[WIFI_BSS_MAX + 1];
+static WifiNet wn[WIFI_BSS_MAX + WIFI_SAVED_MAX];
 static int wn_count, wn_searched;
 static AnimList wn_list = {.count = 1, .visible = SET_VISIBLE,
                            .step = ROW_STEP};
@@ -1878,15 +1925,17 @@ static int wn_find(const char *ssid) {
   return -1;
 }
 
-/* The saved network is listed whether the last search saw it or not. */
+/* All saved networks are listed whether the last search saw them or not. */
 static void wn_add_saved(void) {
-  if (wifi_saved_ssid[0] && wn_find(wifi_saved_ssid) < 0 &&
-      wn_count < WIFI_BSS_MAX + 1) {
-    WifiNet *n = &wn[wn_count++];
-    hm_str_copy(n->ssid, wifi_saved_ssid);
-    n->rssi = 0;
-    n->secured = wifi_saved_pass[0] != '\0';
-    n->sec = n->secured ? WIFI_SEC_WPA2 : WIFI_SEC_OPEN;
+  for (int i = 0; i < wifi_profile_count; i++) {
+    if (wifi_profiles[i].ssid[0] && wn_find(wifi_profiles[i].ssid) < 0 &&
+        wn_count < WIFI_BSS_MAX + WIFI_SAVED_MAX) {
+      WifiNet *n = &wn[wn_count++];
+      hm_str_copy(n->ssid, wifi_profiles[i].ssid);
+      n->rssi = 0;
+      n->secured = wifi_profiles[i].pass[0] != '\0';
+      n->sec = n->secured ? WIFI_SEC_WPA2 : WIFI_SEC_OPEN;
+    }
   }
   wn_list.count = 1 + wn_count;
 }
@@ -2029,10 +2078,16 @@ static void wifi_row(int y, int i) {
             BOT_SCREEN_HEIGHT, tag, COLOR_HM_TEXT2, COLOR_HM_SLOT, &ui_small);
     right -= tw + 8;
   } else if (wifi_saved_ssid[0] && wifi_streq(n->ssid, wifi_saved_ssid)) {
+    const char *lbl = "Active";
+    int tw = ui_tw(&ui_small, lbl);
+    ui_text(VRAM_BOT_A, right - tw, y + (ROW_H - ui_th(&ui_small)) / 2,
+            BOT_SCREEN_HEIGHT, lbl, g_accent, COLOR_HM_SLOT, &ui_small);
+    right -= tw + 8;
+  } else if (wifi_profile_find(n->ssid) >= 0) {
     int tw = ui_tw(&ui_small, L(STR_WF_SAVED_TAG));
     ui_text(VRAM_BOT_A, right - tw, y + (ROW_H - ui_th(&ui_small)) / 2,
-            BOT_SCREEN_HEIGHT, L(STR_WF_SAVED_TAG), g_accent, COLOR_HM_SLOT,
-            &ui_small);
+            BOT_SCREEN_HEIGHT, L(STR_WF_SAVED_TAG), COLOR_HM_TEXT2,
+            COLOR_HM_SLOT, &ui_small);
     right -= tw + 8;
   }
   ui_text_fit(VRAM_BOT_A, ROW_X + 12, ty, BOT_SCREEN_HEIGHT, n->ssid,
@@ -2324,8 +2379,9 @@ static int wifi_password(WifiShared *w, const char *ssid) {
   static char pass[WIFI_PASS_MAX];
   int r = 1;
   pass[0] = '\0';
-  if (wifi_streq(ssid, wifi_saved_ssid))
-    hm_str_copy(pass, wifi_saved_pass);
+  int pidx = wifi_profile_find(ssid);
+  if (pidx >= 0)
+    hm_str_copy(pass, wifi_profiles[pidx].pass);
   wifi_say(COLOR_WHITE, L(STR_WF_PASS_FOR), ssid, L(STR_WF_CAPS), "");
   wifi_top_hint = L(STR_WF_KB_HINT);
   anim_transition(ANIM_PUSH, ANIM_BOTH);
@@ -2349,14 +2405,25 @@ static int wifi_password(WifiShared *w, const char *ssid) {
   return r;
 }
 
-/* 0 when B left a command still running. */
-static int wifi_do_pick(WifiShared *w, int i) {
+/* 0 when B left a command still running. force_edit=1 opens the keyboard even
+ * for a saved secured network (X button) so its password can be updated. */
+static int wifi_do_pick(WifiShared *w, int i, int force_edit) {
   static char ssid[33];
   hm_str_copy(ssid, wn[i].ssid);
   if (wn[i].secured && wifi_sec_tag(wn[i].sec)) {
     wifi_say(COLOR_ORANGE, L(STR_WF_CANNOT), ssid,
              wifi_sec_text((u32)wn[i].sec), L(STR_WF_JOINS));
     return 1;
+  }
+  int pidx = wifi_profile_find(ssid);
+  if (!force_edit && pidx >= 0) {
+    /* Already saved: switch active network and connect immediately. */
+    static char pass[WIFI_PASS_MAX];
+    hm_str_copy(pass, wifi_profiles[pidx].pass);
+    int r = wifi_connect(w, ssid, pass, wifi_saved_store(ssid, pass));
+    wifi_wipe(pass, sizeof(pass));
+    wn_add_saved();
+    return r;
   }
   if (wn[i].secured)
     return wifi_password(w, ssid);
@@ -2472,19 +2539,27 @@ static void wifi_screen(void) {
     int redraw = 0;
     if ((k & BUTTON_A) || activate) {
       ui_sound_select();
-      if (!(sel == 0 ? wifi_do_search(&w) : wifi_do_pick(&w, sel - 1))) {
+      if (!(sel == 0 ? wifi_do_search(&w) : wifi_do_pick(&w, sel - 1, 0))) {
         wifi_direct_off(); /* stays direct while the core is busy */
         return;
       }
       redraw = 1;
     }
-    if ((k & BUTTON_Y) && sel > 0 && wifi_saved_ssid[0] &&
-        wifi_streq(wn[sel - 1].ssid, wifi_saved_ssid)) {
+    if ((k & BUTTON_X) && sel > 0 && wn[sel - 1].secured) {
+      ui_sound_select();
+      if (!wifi_do_pick(&w, sel - 1, 1)) {
+        wifi_direct_off();
+        return;
+      }
+      redraw = 1;
+    }
+    if ((k & BUTTON_Y) && sel > 0 && wifi_profile_find(wn[sel - 1].ssid) >= 0) {
       static char was[33];
       ui_sound_select();
-      hm_str_copy(was, wifi_saved_ssid);
-      if (wifi_saved_forget()) {
+      hm_str_copy(was, wn[sel - 1].ssid);
+      if (wifi_saved_forget_one(was)) {
         wn_drop_unseen();
+        wn_add_saved();
         wifi_say(COLOR_WHITE, L(STR_WF_FORGOT), was, "", "");
       } else {
         wifi_say(COLOR_RED, L(STR_WF_SD_FAIL), 0, "", "");
@@ -3393,6 +3468,10 @@ static void settings_open(void) {
       sound_toggle(sel);
     if (sel == SET_FULL_POWER && (k & (BUTTON_DLEFT | BUTTON_DRIGHT)))
       full_power_toggle();
+    if (sel == SET_CAMERA && (k & (BUTTON_DLEFT | BUTTON_DRIGHT)))
+      camera_perm_toggle();
+    if (sel == SET_AUTOBOOT && (k & (BUTTON_DLEFT | BUTTON_DRIGHT)))
+      autoboot_toggle();
     if ((k & BUTTON_A) || activate) {
       void (*sub)(void) = 0;
       switch (sel) {
@@ -3403,6 +3482,8 @@ static void settings_open(void) {
         case SET_CLOCK:    sub = clock_screen; break;
         case SET_BRIGHTNESS: sub = brightness_screen; break;
         case SET_FULL_POWER: full_power_toggle(); break;
+        case SET_CAMERA:     camera_perm_toggle(); break;
+        case SET_AUTOBOOT:   autoboot_toggle(); break;
         case SET_STARTUP_SOUND:
         case SET_HOME_MUSIC:
         case SET_SHOP_MUSIC:
@@ -3410,6 +3491,35 @@ static void settings_open(void) {
         case SET_TOUCHCAL: sub = touch_cal_screen; break;
         case SET_WIFITEST: sub = wifi_test_screen; break;
         case SET_GPUTEST:  sub = gpu_test_screen; break;
+        case SET_MODELTEST:
+          ui_sound_select();
+          open_screen(model_screen);
+          ui_sound_home_lost();
+          settings_header(ASSET_ICON_SETTINGS_64, icon_settings_bits,
+                          L(STR_SETTINGS), COLOR_WHITE);
+          settings_draw(sel);
+          break;
+        case SET_CLEAR_CACHE:
+          ui_sound_select();
+          if (fv_confirm("Clear Cache?", "Remove all cached banners from SD.",
+                         "Clear", L(STR_CANCEL))) {
+            u32 n = banner_cache_clear();
+            char msg[48];
+            if (n == 0) {
+              hm_str_copy(msg, "Cache was already empty.");
+            } else {
+              char *p = hm_str_copy(msg, "Removed ");
+              char num[12];
+              int len = 0;
+              u32 v = n;
+              do { num[len++] = (char)('0' + (v % 10u)); v /= 10u; } while (v);
+              while (len--) *p++ = num[len];
+              hm_str_copy(p, n == 1 ? " cached file." : " cached files.");
+            }
+            fv_confirm("Cache Cleared", msg, "OK", "Close");
+          }
+          settings_draw(sel);
+          break;
         case SET_ABOUT:    sub = about_screen; break;
         case SET_CRASH:    crash_force(); break;
         case SET_RESET:    sub = reset_screen; break;
@@ -3485,6 +3595,9 @@ static int read_app_icon(const char *path, unsigned char *dest, char *kind) {
 
   aos_header_t hdr;
   if (aurora_parse_header(&f, &hdr) != AURORA_OK) {
+    if (hdr.magic[0] == 'A' && hdr.magic[1] == 'M' &&
+        hdr.magic[2] == 'N' && hdr.magic[3] == 'U')
+      *kind = 'M';
     f_close(&f);
     return 0;
   }
@@ -3560,6 +3673,14 @@ static void scan_folder(const char *folder) {
   f_closedir(&dir);
 }
 
+static const char *path_basename(const char *path) {
+  const char *last = path;
+  for (const char *p = path; *p; p++)
+    if (*p == '/' || *p == '\\')
+      last = p + 1;
+  return last;
+}
+
 static int scan_apps(void) {
   static FATFS scan_fs;
   app_count = 0;
@@ -3583,22 +3704,41 @@ static int scan_apps(void) {
     hm_str_copy(app_path[j + 1], tp);
   }
 
+  int kept = 0;
   for (int i = 0; i < app_count; i++) {
-    app_has_icon[i] = read_app_icon(app_path[i], app_icon[i], &app_kind[i]);
-    read_color_icon(app_path[i], i);
+    char kind = 0;
+    int has_ic = read_app_icon(app_path[i], app_icon[kept], &kind);
+    if (kind == 'M') {
+      /* AMNU sidebar mod found in /Aurora/Apps*: move to /Aurora/amenu/ and
+       * do not show it as a Home Menu app. */
+      amenu_migrate_file_mounted(app_path[i], path_basename(app_path[i]));
+      continue;
+    }
+    if (kept != i) {
+      hm_str_copy(app_name[kept], app_name[i]);
+      hm_str_copy(app_path[kept], app_path[i]);
+    }
+    app_has_icon[kept] = has_ic;
+    app_kind[kept] = kind;
+    read_color_icon(app_path[kept], kept);
     {
       int has = 0;
       u8 anim = 0;
       static u16 icon[1024];
-      app_banner[i] = banner_find(app_path[i], icon, &anim, &has);
+      app_banner[kept] = banner_find(app_path[kept], icon, &anim, &has);
       if (has) {
         for (int k = 0; k < 1024; k++)
-          app_color_icon[i][k] = icon[k];
-        app_color_valid[i] = 1;
-        app_color_anim[i] = anim;
+          app_color_icon[kept][k] = icon[k];
+        app_color_valid[kept] = 1;
+        app_color_anim[kept] = anim;
       }
     }
+    kept++;
   }
+  app_count = kept;
+
+  /* Load /Aurora/amenu plugins using the same mount (zero extra SD mounts). */
+  amenu_load_mounted();
 
   f_mount(NULL, "", 0);
   return app_count;
@@ -3606,10 +3746,6 @@ static int scan_apps(void) {
 
 static void build_home(void) {
   static const Color app_tint = {0x2C, 0x50, 0x74};
-  static const Color music_tint = {0x2C, 0x5C, 0x40};
-  static const Color files_tint = {0x74, 0x52, 0x1C};
-  static const Color cube_tint = {0x3C, 0x4C, 0x8C};
-  static const Color store_tint = {0x1E, 0x8C, 0x60};
   HomeApp *h = home_apps;
 
   for (int i = 0; i < app_count; i++, h++) {
@@ -3631,18 +3767,6 @@ static void build_home(void) {
     h->path = app_path[i];
     h->banner = app_banner[i];
   }
-  *h++ = (HomeApp){L(STR_MUSIC), "Aurora", "@music", icon_music_bits,
-                   ASSET_ICON_MUSIC_64, ASSET_ICON_MUSIC_32,
-                   ASSET_ICON_MUSIC_16, music_tint, ACT_MUSIC, 0, UI_NO_ASSET, 0, 0, 0};
-  *h++ = (HomeApp){"Files", L(STR_SYSTEM), "@files", icon_boot_bits,
-                   ASSET_APP_FILES_64, ASSET_APP_FILES_32, ASSET_APP_FILES_16,
-                   files_tint, ACT_FILES, 0, UI_NO_ASSET, 0, 0, 0};
-  *h++ = (HomeApp){"3D Model", "Aurora", "@model", icon_cube_bits,
-                   ASSET_ICON_CUBE_64, ASSET_ICON_CUBE_32, ASSET_ICON_CUBE_16,
-                   cube_tint, ACT_CUBE, 0, UI_NO_ASSET, 0, 0, 0};
-  *h++ = (HomeApp){"aShop", "Aurora", "@store", icon_boot_bits,
-                   ASSET_APP_STORE_64, ASSET_APP_STORE_32, ASSET_APP_STORE_16,
-                   store_tint, ACT_STORE, 0, ASSET_STORE_LOGO, 0, 0, 0};
   home_count = (int)(h - home_apps);
 }
 
@@ -3680,6 +3804,9 @@ static void os_install_return(void) {
   menu->action = AURORA_SYSTEM_MENU_NONE;
   menu->menu_open = 0;
   menu->app_caps = 0;
+  menu->mod_keys = 0;
+  menu->accent_rgb = ((u32)g_accent.r << 16) | ((u32)g_accent.g << 8) | g_accent.b;
+  menu->brightness = g_brightness;
   menu->app_active = 1;
 
   volatile u8 *rs = (volatile u8 *)AURORA_RETURN_STUB_ADDR;
@@ -3705,6 +3832,12 @@ static void os_launch_info(const char *path) {
   for (u32 i = 0; i <= n; i++)
     dst[i] = path[i];
   info[0] = AURORA_LAUNCH_MAGIC;
+
+  volatile AuroraSystemMenuShared *menu = aurora_system_menu_shared();
+  u32 m = n < AURORA_SYSTEM_MENU_PATH_MAX - 1u ? n : AURORA_SYSTEM_MENU_PATH_MAX - 1u;
+  for (u32 i = 0; i < m; i++)
+    menu->app_path[i] = path[i];
+  menu->app_path[m] = '\0';
 }
 
 /* Runs the hand-off stub from scratch memory, clear of both the staged
@@ -4082,6 +4215,8 @@ static void home_open(const HomeApp *app) {
     scan_apps();
     build_home();
     home_reload(home_apps, home_count);
+  } else if (app->action == ACT_CAMERA) {
+    open_screen(camera_app_run);
   }
   ui_sound_home_enter();
 }
@@ -4190,6 +4325,34 @@ static void home_terminal(void) {
   ui_sound_home_enter();
 }
 
+static void home_files(void) {
+  ui_sound_home_leave();
+  files_screen(os_launch_app);
+  ui_sound_home_enter();
+}
+
+static void home_camera(void) {
+  ui_sound_home_leave();
+  open_screen(camera_app_run);
+  ui_sound_home_enter();
+}
+
+static void home_music(void) {
+  ui_sound_home_leave();
+  open_screen(music_player_screen);
+  ui_sound_home_enter();
+}
+
+static void home_shop(void) {
+  ui_sound_home_leave();
+  if (store_screen(g_cfg.name) > 0) {
+    scan_apps();
+    build_home();
+    home_reload(home_apps, home_count);
+  }
+  ui_sound_home_enter();
+}
+
 static void os_gpu_late(void);
 
 static void home_tick(void) {
@@ -4199,7 +4362,8 @@ static void home_tick(void) {
 
 static const HomeHooks home_hooks = {home_open, home_settings, home_terminal,
                                      power_off_now, home_tick,
-                                     home_remove_app};
+                                     home_remove_app, home_files, home_camera,
+                                     home_music, home_shop};
 
 /* How long the boot waits for a freshly loaded core to take requests. A slower
  * core gets the GPU later, from the Home Menu loop. */
@@ -4240,6 +4404,8 @@ void os_main(void) {
   menu->app_caps = 0;
   menu->menu_open = 0;
   menu->action = AURORA_SYSTEM_MENU_NONE;
+  menu->mod_keys = 0;
+  menu->os_ready = 0;
   os_cache_sync();
 
   /* Protection unit and caches first; the firm leaves them off. Holding SELECT
@@ -4278,6 +4444,11 @@ void os_main(void) {
    * freshly woken core sets up the codec and touchscreen. */
   ui_init();
   int assets_failed = !ui_assets;
+  menu->font_small_addr = (uint32_t)ui_small.head;
+  menu->font_reg_addr   = (uint32_t)ui_font.head;
+  menu->font_bold_addr  = (uint32_t)ui_bold.head;
+  menu->font_title_addr = (uint32_t)ui_title.head;
+  os_cache_sync();
   boot_mark(BT_UI);
 
   if (audio_wait_ready(CORE_WAIT_MS))
@@ -4307,12 +4478,17 @@ void os_main(void) {
   /* An app that crashed or left without stopping its video may have left cores
    * running in memory that is the OS's again. */
   audio_smp_end();
+  cam_shared()->app_allowed = g_cfg.camera_on ? 1u : 0u;
+  I2C_writeReg(I2C_DEV_MCU, 0x2Bu, 0u); /* ensure Camera LED is off at Home */
+  os_cache_sync();
   /* Not with SELECT held: the same fallback as the caches above. */
   if (mpu_on && !g_cfg.power_off && aurora_is_new3ds())
     aurora_n3ds_hardware();
   if (g_cfg.touch_set && !touch_cal_set(&g_cfg.touch))
     g_cfg.touch_set = 0; /* unusable values: keep the default */
-  theme_boot_load();
+  theme_boot_load(aurora_accent_presets[g_cfg.accent]);
+  theme_sync_menu_accent();
+  menu->brightness = g_brightness;
   boot_mark(BT_CONFIG);
 
   /* Now that the accent is known. */
@@ -4327,6 +4503,18 @@ void os_main(void) {
   boot_mark(BT_APPS);
 
   home_init(home_apps, home_count, &home_hooks);
+  /* If the user picked a pinned app from the in-app Aurora Menu Dock,
+   * immediately switch straight into that app! */
+  os_cache_sync();
+  if (menu->dock_launch_idx < menu->dock_count &&
+      menu->dock_launch_idx < AURORA_DOCK_MAX &&
+      menu->dock[menu->dock_launch_idx].path[0]) {
+    u32 idx = menu->dock_launch_idx;
+    menu->dock_launch_idx = AURORA_DOCK_LAUNCH_NONE;
+    os_cache_sync();
+    os_launch_app((const char *)menu->dock[idx].path);
+  }
+  menu->dock_launch_idx = AURORA_DOCK_LAUNCH_NONE;
   anim_transition(ANIM_FADE, ANIM_BOTH); /* from the boot or the setup wizard */
   home_draw();
   boot_mark(BT_MENU);
@@ -4343,5 +4531,7 @@ void os_main(void) {
     home_draw();
   }
 
+  menu->os_ready = 1;
+  os_cache_sync();
   home_run();
 }

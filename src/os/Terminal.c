@@ -284,11 +284,28 @@ static void t_cell(volatile u8 *fb, int row, int col, char c, Color fg) {
               TOP_SCREEN_HEIGHT, c, fg, t_bg);
 }
 
+static void t_draw_run(volatile u8 *fb, int *px, int y, const char *s, int n,
+                       Color fg) {
+  if (n <= 0)
+    return;
+  char tmp[T_COLS + 1];
+  if (n > T_COLS) n = T_COLS;
+  for (int i = 0; i < n; i++)
+    tmp[i] = s[i] ? s[i] : ' ';
+  tmp[n] = '\0';
+  ui_text(fb, *px, y, TOP_SCREEN_HEIGHT, tmp, fg, t_bg, &ui_small);
+  *px += ui_tw(&ui_small, tmp);
+}
+
 /* The scrollback, then the prompt and command line (or a job's status), the
- * newest rows at the bottom unless scrolled back. */
+ * newest rows at the bottom unless scrolled back. Uses the anti-aliased
+ * Figtree ui_small font when assets.pak is loaded, falling back to 8x8. */
 static void t_render(void) {
   volatile u8 *fb = VRAM_TOP_LA;
   const int sh = TOP_SCREEN_HEIGHT;
+  const int nice = ui_have(&ui_small);
+  const int lh = nice ? 12 : T_LH;
+  const int vis_rows = nice ? 19 : T_ROWS;
   u32 keep = t_done < T_KEEP - 1 ? t_done : T_KEEP - 1;
   u32 lo = t_done - keep, total, first;
   int partial = t_x > 0, cur = -1, rows = 0, most;
@@ -310,36 +327,74 @@ static void t_render(void) {
   }
 
   total = keep + (u32)partial + (u32)rows;
-  most = total > T_ROWS ? (int)(total - T_ROWS) : 0;
+  most = total > (u32)vis_rows ? (int)(total - (u32)vis_rows) : 0;
   if (t_scroll > most)
     t_scroll = most;
   first = (u32)(most - t_scroll);
 
   clear_screen(fb, TOP_FB_SIZE, t_bg);
-  for (int r = 0; r < T_ROWS && first + (u32)r < total; r++) {
+  for (int r = 0; r < vis_rows && first + (u32)r < total; r++) {
     u32 v = first + (u32)r;
+    int y = T_Y0 + r * lh;
     if (v < keep + (u32)partial) {
       const TLine *l = &t_buf[(lo + v) % T_KEEP];
-      for (int c = 0; c < T_COLS; c++)
-        t_cell(fb, r, c, l->ch[c], t_rgb(l->co[c]));
+      if (nice) {
+        int len = T_COLS;
+        while (len > 0 && (!l->ch[len - 1] || l->ch[len - 1] == ' '))
+          len--;
+        int x = T_X0, c = 0;
+        while (c < len) {
+          u8 col = l->co[c];
+          int start = c;
+          while (c < len && l->co[c] == col)
+            c++;
+          t_draw_run(fb, &x, y, l->ch + start, c - start, t_rgb(col));
+        }
+      } else {
+        for (int c = 0; c < T_COLS; c++)
+          t_cell(fb, r, c, l->ch[c], t_rgb(l->co[c]));
+      }
       continue;
     }
     int k = (int)(v - keep - (u32)partial) * T_COLS;
-    for (int c = 0; c < T_COLS; c++) {
-      int i = k + c;
-      if (i == cur && t_cursor_on) {
-        int x = T_X0 + c * FONT_WIDTH, y = T_Y0 + r * T_LH;
-        draw_filled_rect(fb, x, y, FONT_WIDTH, T_LH, sh, t_pal[TC_TEXT]);
-        if (i < lv_n && lv_ch[i] != ' ')
-          draw_char(fb, x, y + 1, sh, lv_ch[i], t_bg, t_pal[TC_TEXT]);
-      } else if (i < lv_n) {
-        t_cell(fb, r, c, lv_ch[i], t_rgb(lv_co[i]));
+    if (nice) {
+      int x = T_X0;
+      for (int c = 0; c < T_COLS; c++) {
+        int i = k + c;
+        if (i == cur && t_cursor_on) {
+          char ch_s[2] = { (i < lv_n && lv_ch[i]) ? lv_ch[i] : ' ', '\0' };
+          int cw = ui_tw(&ui_small, ch_s);
+          if (cw < 6) cw = 6;
+          draw_filled_rect(fb, x, y, cw, lh, sh, t_pal[TC_TEXT]);
+          if (i < lv_n && lv_ch[i] && lv_ch[i] != ' ')
+            ui_text(fb, x, y, sh, ch_s, t_bg, t_pal[TC_TEXT], &ui_small);
+          x += cw;
+        } else if (i < lv_n) {
+          u8 col = lv_co[i];
+          int start = i;
+          while (c + 1 < T_COLS && (k + c + 1) < lv_n &&
+                 (k + c + 1) != cur && lv_co[k + c + 1] == col)
+            c++;
+          t_draw_run(fb, &x, y, lv_ch + start, (k + c) - start + 1, t_rgb(col));
+        }
+      }
+    } else {
+      for (int c = 0; c < T_COLS; c++) {
+        int i = k + c;
+        if (i == cur && t_cursor_on) {
+          int x = T_X0 + c * FONT_WIDTH;
+          draw_filled_rect(fb, x, y, FONT_WIDTH, T_LH, sh, t_pal[TC_TEXT]);
+          if (i < lv_n && lv_ch[i] != ' ')
+            draw_char(fb, x, y + 1, sh, lv_ch[i], t_bg, t_pal[TC_TEXT]);
+        } else if (i < lv_n) {
+          t_cell(fb, r, c, lv_ch[i], t_rgb(lv_co[i]));
+        }
       }
     }
   }
 
   if (t_scroll) {
-    int th = (int)((u32)T_ROWS * (u32)sh / total);
+    int th = (int)((u32)vis_rows * (u32)sh / total);
     if (th < 8)
       th = 8;
     draw_filled_rect(fb, TOP_SCREEN_WIDTH - 3,

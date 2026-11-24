@@ -17,6 +17,7 @@ u32 banner_find(const char *app_path, u16 *icon, u8 *anim, int *has_icon);
 int banner_load(const char *app_path, u32 where);
 int banner_parse(const u8 *data, u32 size);
 void banner_unload(void);
+u32 banner_cache_clear(void);
 int banner_ready(void);
 const char *banner_error(void);
 

@@ -106,14 +106,28 @@ static bool i2cStartTransfer(I2cDevice devId, uint8_t regAddr, bool read,
 }
 
 bool I2C_writeReg(I2cDevice devId, uint8_t regAddr, uint8_t data) {
-    if ((unsigned)devId >= sizeof(i2cDevTable) / sizeof(i2cDevTable[0]))
-        return false;
-    I2cRegs *const regs = i2cGetBusRegsBase(i2cDevTable[devId].busId);
+    return I2C_writeRegBuf(devId, regAddr, &data, 1);
+}
 
+bool I2C_writeRegBuf(I2cDevice devId, uint8_t regAddr, const uint8_t *data,
+                     uint32_t size) {
+    if ((unsigned)devId >= sizeof(i2cDevTable) / sizeof(i2cDevTable[0]) ||
+        (size && !data))
+        return false;
+    if (size == 0)
+        return true;
+
+    I2cRegs *const regs = i2cGetBusRegsBase(i2cDevTable[devId].busId);
     if (!i2cStartTransfer(devId, regAddr, false, regs))
         return false;
 
-    regs->REG_I2C_DATA = data;
+    while (--size) {
+        regs->REG_I2C_DATA = *data++;
+        regs->REG_I2C_CNT  = I2C_ENABLE | I2C_IRQ_ENABLE | I2C_DIRE_WRITE;
+        if (!i2cWaitBusy(regs) || !I2C_GET_ACK(regs->REG_I2C_CNT))
+            return false;
+    }
+    regs->REG_I2C_DATA = *data;
     regs->REG_I2C_CNT  = I2C_ENABLE | I2C_IRQ_ENABLE | I2C_DIRE_WRITE | I2C_STOP;
     if (!i2cWaitBusy(regs))
         return false;

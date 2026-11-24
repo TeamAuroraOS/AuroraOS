@@ -1,5 +1,6 @@
 /* Without the asset pack it falls back to the 8x8 font and drawn indicators. */
 #include "statusbar.h"
+#include "theme.h"
 #include "ui.h"
 #include "power.h"
 #include "model.h"
@@ -94,31 +95,35 @@ void status_bar_draw(void) {
 
   clock_text(tbuf, dbuf);
 
-  draw_filled_rect(fb, 0, 0, TOP_SCREEN_WIDTH, BAR, SH, COLOR_HM_BAR);
-  ui_text(fb, EDGE, ty, SH, tbuf, COLOR_WHITE, COLOR_HM_BAR, &ui_bold);
-  ui_text(fb, EDGE + ui_tw(&ui_bold, tbuf) + 8, sy, SH, dbuf, COLOR_HM_TEXT2,
-          COLOR_HM_BAR, &ui_small);
+  Color bar_bg = g_theme.status_bar;
+  Color bar_fg = g_theme.text;
+  Color bar_dim = g_theme.text_dim;
+
+  draw_filled_rect(fb, 0, 0, TOP_SCREEN_WIDTH, BAR, SH, bar_bg);
+  ui_text(fb, EDGE, ty, SH, tbuf, bar_fg, bar_bg, &ui_bold);
+  ui_text(fb, EDGE + ui_tw(&ui_bold, tbuf) + 8, sy, SH, dbuf, bar_dim,
+          bar_bg, &ui_small);
 
   /* Right to left: battery, charge, indicators, model tag. */
   x = TOP_SCREEN_WIDTH - EDGE - 23;
-  battery(x, (BAR - 11) / 2, pct, chg, COLOR_HM_BAR, g_accent);
+  battery(x, (BAR - 11) / 2, pct, chg, bar_bg, g_accent);
   x -= 6;
 
   pct_text(pbuf, pct);
   if (pbuf[0]) {
     x -= ui_tw(&ui_small, pbuf);
-    ui_text(fb, x, sy, SH, pbuf, COLOR_HM_TEXT2, COLOR_HM_BAR, &ui_small);
+    ui_text(fb, x, sy, SH, pbuf, bar_dim, bar_bg, &ui_small);
     x -= 10;
   }
 
   x -= 16;
   if (pack)
-    ui_icon(fb, x, iy, 16, SH, ASSET_ICON_APPS_16, 0, COLOR_HM_TEXT2);
+    ui_icon(fb, x, iy, 16, SH, ASSET_ICON_APPS_16, 0, bar_dim);
   else
     grid(x + 3, 6);
 
   x -= 6 + 16;
-  Color wc = wifi_online() ? COLOR_WHITE : COLOR_HM_TEXT2;
+  Color wc = wifi_online() ? bar_fg : bar_dim;
   if (pack)
     ui_icon(fb, x, iy, 16, SH, ASSET_ICON_WIFI_16, 0, wc);
   else
@@ -126,7 +131,7 @@ void status_bar_draw(void) {
 
   if (aurora_is_new3ds()) {
     x -= 8 + ui_tw(&ui_bold, aurora_model_tag());
-    ui_text(fb, x, ty, SH, aurora_model_tag(), COLOR_WHITE, COLOR_HM_BAR,
+    ui_text(fb, x, ty, SH, aurora_model_tag(), bar_fg, bar_bg,
             &ui_bold);
   }
 }

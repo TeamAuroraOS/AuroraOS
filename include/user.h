@@ -37,6 +37,13 @@
  * here, which is on. */
 #define USER_DAT_POWER 53
 
+/* Offset of the Camera permission for C SDK apps (1 = allowed, 0 = off/default).
+ * Built-in Camera app does not apply to this setting. */
+#define USER_DAT_CAMERA 54
+
+/* Offset of the bootloader autoboot switch (1 = autoboot AuroraOS, 0 = boot menu). */
+#define USER_DAT_AUTOBOOT 55
+
 enum {
   LANG_ENGLISH = 0,
   LANG_ESPANOL = 1,
@@ -62,6 +69,8 @@ typedef struct {
   u8   brightness;    /* 0..4, applied by the ARM11 LCD driver */
   u8   sound_off;     /* USER_SOUND_* */
   u8   power_off;     /* the New 3DS stays at 268 MHz, without its L2 cache */
+  u8   camera_on;     /* 1 = allow C SDK apps to use the camera (default 0) */
+  u8   autoboot;      /* 1 = bootloader skips menu and boots AuroraOS directly */
 } UserConfig;
 
 void user_config_defaults(UserConfig *cfg);

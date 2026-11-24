@@ -419,6 +419,26 @@ def main():
         if a.verbose:
             print('  font  %-24s %2dpx atlas %dx%d' % (fn, sz, aw, ah))
 
+    # Appended after FONTS so older 185-asset packs keep matching IDs 0..184.
+    # camera.png is a white-on-alpha mask, so T_ALPHA8 lets it tint to
+    # COLOR_HM_TEXT2 on the topbar and g_accent/COLOR_WHITE elsewhere.
+    w, h, px = png_read.read(os.path.join(a.icons, 'camera.png'))
+    for sz in (64, 32, 16):
+        entries.append(('APP_CAMERA_%d' % sz, T_ALPHA8, sz, sz,
+                        area_alpha(w, h, px, sz, sz)))
+
+    # Topbar Files shortcut icon from icons/Folder.png (IDs 188, 189).
+    w, h, px = png_read.read(os.path.join(a.icons, 'Folder.png'))
+    for sz in (16, 64):
+        entries.append(('ICON_FOLDER_BAR_%d' % sz, T_ALPHA8, sz, sz,
+                        area_alpha(w, h, px, sz, sz)))
+
+    # Topbar Shop shortcut icon from icons/shop.png (IDs 190, 191).
+    w, h, px = png_read.read(os.path.join(a.icons, 'shop.png'))
+    for sz in (16, 64):
+        entries.append(('ICON_SHOP_BAR_%d' % sz, T_ALPHA8, sz, sz,
+                        area_alpha(w, h, px, sz, sz)))
+
     ids = [e[0] for e in entries]
     hdr = struct.calcsize('<8I')
     esz = struct.calcsize('<IHHHHIII')

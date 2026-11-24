@@ -13,6 +13,12 @@
 /* The USER_SOUND_* bits of the sounds turned off. */
 void ui_sound_config(u8 off);
 
+/* Configure optional custom theme audio paths (WAV files; "" = built-in). */
+void ui_sound_set_theme(const char *bgm_path, const char *select_path,
+                        const char *back_path, const char *move_path);
+/* Reload theme BGM and menu SFX immediately after switching themes. */
+void ui_sound_reload_theme(void);
+
 /* Loads the menu sounds and, when `startup` is set, plays the startup sound.
  * Mounts the card itself. The Home Menu's song follows, from
  * ui_sound_home_tick(). */

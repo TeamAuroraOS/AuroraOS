@@ -1,14 +1,23 @@
+#include "amenu.h"
 #include "appicon.h"
+#include "audio.h"
+#include "font.h"
 #include "homemenu.h"
 #include "anim.h"
 #include "banner.h"
+#include "ff.h"
 #include "fileview.h"
+#include "gpu.h"
 #include "homelayout.h"
+#include "i2c.h"
 #include "icons.h"
 #include "keyboard.h"
 #include "lang.h"
 #include "power.h"
 #include "statusbar.h"
+#include "system_menu.h"
+#include "theme.h"
+#include "timer.h"
 #include "touch.h"
 #include "ui.h"
 #include "uisound.h"
@@ -32,13 +41,13 @@
 #define BAR_Y 8
 #define BAR_W (BW - 16)
 #define BAR_H 30
-enum { BTN_POWER, BTN_BACK, BTN_SETTINGS };
+enum { BTN_POWER, BTN_BACK, BTN_SHOP, BTN_FILES, BTN_MUSIC, BTN_CAMERA, BTN_SETTINGS };
 
 /* Touch, in ms and pixels. */
-#define HOLD_MS   450 /* a press this long picks the tile up */
-#define SPRING_MS 700 /* held over a folder this long, it opens */
-#define EDGE_MS   550 /* held at a side of the screen this long, the page turns */
-#define BACK_MS   600 /* held over the back button this long, it goes up */
+#define HOLD_MS   220 /* a press this long picks the tile up */
+#define SPRING_MS 450 /* held over a folder this long, it opens */
+#define EDGE_MS   450 /* held at a side of the screen this long, the page turns */
+#define BACK_MS   350 /* held over the top bar this long, it goes up */
 #define SLOP      8   /* how far a press may wander and still be a tap */
 #define SWIPE     40  /* how far a swipe goes to turn the page */
 
@@ -81,8 +90,7 @@ static u32 t_t0;
 static int hov_kind, hov_arg;
 static u32 hov_t0;
 
-static const Color folder_top = {0x40, 0x41, 0x4A},
-                   folder_bot = {0x26, 0x27, 0x2E},
+static const Color folder_bot = {0x26, 0x27, 0x2E},
                    folder_tint = {0x3E, 0x4A, 0x60},
                    settings_tint = {0x4A, 0x4C, 0x58};
 
@@ -311,14 +319,14 @@ static void entry_icon32(volatile u8 *fb, int x, int y, int sh, int e) {
 static void tile(volatile u8 *fb, int e, int x, int y, int size) {
   int r = 10 + (size - SLOT_SIZE) / 4;
   if (!HL_IS_FOLDER(e)) {
-    draw_gradient_round_rect(fb, x, y, size, size, r, BSH, COLOR_HM_SLOT_TOP,
-                             COLOR_HM_SLOT_BOT);
+    draw_gradient_round_rect(fb, x, y, size, size, r, BSH, g_theme.slot_top,
+                             g_theme.slot_bot);
     if (!color_icon(fb, x, y, size, r, BSH, e))
       ui_icon(fb, x, y, size, BSH, apps[e].asset_sm, apps[e].icon, COLOR_WHITE);
     return;
   }
-  draw_gradient_round_rect(fb, x, y, size, size, r, BSH, folder_top,
-                           folder_bot);
+  draw_gradient_round_rect(fb, x, y, size, size, r, BSH, g_theme.folder_top,
+                           g_theme.folder_bot);
   {
     int f = HL_FOLDER_ID(e), n = hl_count(f);
     int ox = x + (size - 36) / 2, oy = y + (size - 36) / 2;
@@ -334,7 +342,7 @@ static int has_btn(int b) { return b != BTN_BACK || view != HOME_ROOT; }
 
 static int back_w(void) {
   int w = 22 + ui_tw(&ui_bold, hl_name(view));
-  return w > BW - 130 ? BW - 130 : w;
+  return w > BW - 216 ? BW - 216 : w;
 }
 
 static void btn_rect(int b, int *x, int *y, int *w, int *h) {
@@ -346,9 +354,21 @@ static void btn_rect(int b, int *x, int *y, int *w, int *h) {
   } else if (b == BTN_BACK) {
     *x = BAR_X + 37;
     *w = back_w();
+  } else if (b == BTN_SHOP) {
+    *x = BW - 160;
+    *w = 26;
+  } else if (b == BTN_FILES) {
+    *x = BW - 130;
+    *w = 26;
+  } else if (b == BTN_MUSIC) {
+    *x = BW - 100;
+    *w = 26;
+  } else if (b == BTN_CAMERA) {
+    *x = BW - 70;
+    *w = 26;
   } else {
-    *x = BW - 42;
-    *w = 32;
+    *x = BW - 40;
+    *w = 28;
   }
 }
 
@@ -362,6 +382,15 @@ static void chevron(volatile u8 *fb, int x, int cy, Color c) {
 static void draw_bar(void) {
   volatile u8 *fb = VRAM_BOT_A;
   int x, y, w, h;
+  if (held != HL_NONE && view != HOME_ROOT) {
+    Color bg = hov_kind == 1 ? g_accent : COLOR_HM_BAR;
+    draw_filled_round_rect(fb, BAR_X, BAR_Y, BAR_W, BAR_H, 10, BSH, bg);
+    ui_text_mid(fb, BW / 2, BAR_Y + (BAR_H - ui_th(&ui_bold)) / 2, BSH,
+                hov_kind == 1 ? "Release to move out of folder"
+                              : "Drag here to move out of folder",
+                hov_kind == 1 ? COLOR_WHITE : g_theme.text, bg, &ui_bold);
+    return;
+  }
   draw_filled_round_rect(fb, BAR_X, BAR_Y, BAR_W, BAR_H, 10, BSH,
                          COLOR_HM_BAR);
 
@@ -376,12 +405,23 @@ static void draw_bar(void) {
                 hl_name(view), w - 20, COLOR_WHITE, COLOR_HM_BAR, &ui_bold);
   }
 
-  {
-    int sx = BW - 62, sy = 16;
-    draw_filled_round_rect(fb, sx, sy, 11, 11, 5, BSH, COLOR_HM_TEXT2);
-    draw_filled_round_rect(fb, sx + 2, sy + 2, 7, 7, 3, BSH, COLOR_HM_BAR);
-    draw_filled_rect(fb, sx + 10, sy + 10, 4, 2, BSH, COLOR_HM_TEXT2);
-  }
+  /* Shop (shop.png), Files (Folder.png), Music, Camera (camera.png), Settings */
+  btn_rect(BTN_SHOP, &x, &y, &w, &h);
+  icon16(fb, x + (w - 16) / 2, y + (h - 16) / 2, BSH, ASSET_ICON_SHOP_BAR_16,
+         icon_boot_bits, COLOR_HM_TEXT2);
+
+  btn_rect(BTN_FILES, &x, &y, &w, &h);
+  icon16(fb, x + (w - 16) / 2, y + (h - 16) / 2, BSH, ASSET_ICON_FOLDER_BAR_16,
+         icon_folder_bits, COLOR_HM_TEXT2);
+
+  btn_rect(BTN_MUSIC, &x, &y, &w, &h);
+  icon16(fb, x + (w - 16) / 2, y + (h - 16) / 2, BSH, ASSET_ICON_MUSIC_16,
+         icon_music_bits, COLOR_HM_TEXT2);
+
+  btn_rect(BTN_CAMERA, &x, &y, &w, &h);
+  icon16(fb, x + (w - 16) / 2, y + (h - 16) / 2, BSH, ASSET_APP_CAMERA_16,
+         icon_camera_bits, COLOR_HM_TEXT2);
+
   {
     int gx = BW - 34, gy = 18;
     draw_filled_round_rect(fb, gx, gy, 16, 4, 2, BSH, COLOR_HM_TEXT2);
@@ -468,7 +508,8 @@ static void draw_bottom_full(void) {
       int k = p * HOME_PER_PAGE + s, x = slot_cx(k) - sc;
       if (x > -SLOT_SIZE && x < BW)
         draw_gradient_round_rect(fb, x, slot_cy(k), SLOT_SIZE, SLOT_SIZE, 10,
-                                 BSH, COLOR_HM_EMPTY_TOP, COLOR_HM_EMPTY_BOT);
+                                 BSH, g_theme.slot_empty_top,
+                                 g_theme.slot_empty_bot);
     }
   }
 
@@ -662,6 +703,30 @@ static void top_item(void) {
     asset = ASSET_ICON_POWER_64;
     bits = icon_power_bits;
     tint = COLOR_DARK_RED;
+  } else if (held == HL_NONE && bar == BTN_SHOP) {
+    name = "aShop";
+    dev = "Aurora";
+    asset = ASSET_ICON_SHOP_BAR_64;
+    bits = icon_boot_bits;
+    tint = (Color){0x1E, 0x8C, 0x60};
+  } else if (held == HL_NONE && bar == BTN_FILES) {
+    name = "Files";
+    dev = L(STR_SYSTEM);
+    asset = ASSET_ICON_FOLDER_BAR_64;
+    bits = icon_folder_bits;
+    tint = (Color){0x2D, 0x5E, 0x7A};
+  } else if (held == HL_NONE && bar == BTN_CAMERA) {
+    name = "Camera";
+    dev = "Aurora";
+    asset = ASSET_APP_CAMERA_64;
+    bits = icon_camera_bits;
+    tint = (Color){0x2A, 0x62, 0x7A};
+  } else if (held == HL_NONE && bar == BTN_MUSIC) {
+    name = L(STR_MUSIC);
+    dev = "Aurora";
+    asset = ASSET_ICON_MUSIC_64;
+    bits = icon_music_bits;
+    tint = (Color){0x4E, 0x3A, 0x78};
   } else if (held == HL_NONE && bar == BTN_SETTINGS) {
     name = L(STR_SETTINGS);
     dev = L(STR_SYSTEM);
@@ -713,11 +778,11 @@ static void top_item(void) {
   }
 
   draw_gradient_round_rect(fb, PV_CARD_X, PV_CARD_Y, PV_CARD_W, PV_CARD_H, 11,
-                           TSH, COLOR_PANEL_TOP, COLOR_PANEL_BOT);
+                           TSH, g_theme.panel_top, g_theme.panel_bot);
   ui_text_mid_fit(fb, TOP_SCREEN_WIDTH / 2, PV_CARD_Y + 7, TSH, name,
-                  PV_CARD_W - 24, COLOR_WHITE, COLOR_PANEL_TOP, &ui_title);
+                  PV_CARD_W - 24, g_theme.text, g_theme.panel_top, &ui_title);
   ui_text_mid_fit(fb, TOP_SCREEN_WIDTH / 2, PV_CARD_Y + 31, TSH, dev,
-                  PV_CARD_W - 24, COLOR_HM_TEXT2, COLOR_PANEL_BOT, &ui_font);
+                  PV_CARD_W - 24, g_theme.text_dim, g_theme.panel_bot, &ui_font);
   if (held != HL_NONE)
     ui_text_mid(fb, TOP_SCREEN_WIDTH / 2, PV_HINT_Y, TSH,
                 L(by_touch ? STR_MOVE_TOUCH : STR_MOVE_KEYS), COLOR_HM_TEXT2,
@@ -736,8 +801,12 @@ static int top_icon_frame(void) {
 
 enum { BN_IDLE, BN_WAIT, BN_SHOWN, BN_FAILED };
 static int bn_state, bn_entry = HL_NONE, bn_loaded = HL_NONE, bn_bar_valid;
-static u32 bn_t0;
+static int bn_on_screen;
+static u32 bn_t0, bn_wait_t0;
 static u8 bn_bar[TOP_SCREEN_WIDTH * STATUS_BAR_HEIGHT * 3];
+#define BN_DEBOUNCE_MS 160u
+
+static void dock_capture_thumb(const char *app_path);
 
 static int focus_entry(void) {
   return held != HL_NONE ? held : bar < 0 ? entry_at(cur()) : HL_NONE;
@@ -747,7 +816,10 @@ static void banner_focus(void) {
   int e = focus_entry();
   if (bn_state == BN_SHOWN && e == bn_entry)
     return;
+  if (bn_state == BN_WAIT && e == bn_entry)
+    return;
   bn_entry = e;
+  bn_wait_t0 = anim_now();
   bn_state = (e >= 0 && !HL_IS_FOLDER(e) && apps[e].banner && held == HL_NONE)
                  ? BN_WAIT : BN_IDLE;
 }
@@ -788,11 +860,18 @@ static int banner_frame(void) {
       return 0;
     }
     if (bn_loaded != e) {
+      /* Short debounce so scrolling quickly across icons never hitches. */
+      if ((u32)anim_ms(bn_wait_t0) < BN_DEBOUNCE_MS)
+        return 0;
       banner_unload();
       bn_loaded = HL_NONE;
       if (!banner_load(apps[e].path, apps[e].banner)) {
         bn_state = BN_FAILED;
-        return 0;
+        ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
+        status_bar_draw();
+        bn_on_screen = 0;
+        top_item();
+        return 1;
       }
       bn_loaded = e;
     }
@@ -814,10 +893,14 @@ static int banner_frame(void) {
     bn_state = BN_FAILED;
     ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
     status_bar_draw();
+    bn_on_screen = 0;
     top_item();
     return 1;
   }
+  bn_on_screen = 1;
   if (!bn_bar_valid) {
+    if (bn_entry >= 0 && !HL_IS_FOLDER(bn_entry) && apps[bn_entry].path)
+      dock_capture_thumb(apps[bn_entry].path);
     status_bar_draw();
     bar_strip(1);
     bn_bar_valid = 1;
@@ -842,18 +925,31 @@ static void top_note(void) {
 /* Cross-fades the top screen if what it describes changed. */
 static void top_update(void) {
   int e = held != HL_NONE ? held : entry_at(cur()), dir, art_was = art_shown;
-  int was_banner = bn_state == BN_SHOWN;
+  int was_banner = (bn_state == BN_SHOWN) || bn_on_screen;
+  int has_bn = (e >= 0 && !HL_IS_FOLDER(e) && apps[e].banner &&
+                held == HL_NONE && bar < 0);
   if (top_view == view && top_held == held && top_bar == bar && top_e == e &&
       top_k == cur() && top_touch == by_touch)
     return;
   dir = cur() > top_k ? 1 : cur() < top_k ? -1 : 0;
   top_note();
   banner_hide();
-  anim_xfade_begin(ANIM_TOP);
-  if (was_banner) {
+  if (was_banner || has_bn) {
+    /* Flush any in-flight top crossfade and wipe the full top screen immediately
+     * so no still banner frame ever lingers behind the next slot, and nothing
+     * is shown on a banner icon until its banner finishes loading. */
+    anim_flush();
     ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
     status_bar_draw();
+    bn_on_screen = 0;
+    art_shown = 0;
+    if (!has_bn)
+      top_item();
+    screen_present_top();
+    banner_focus();
+    return;
   }
+  anim_xfade_begin(ANIM_TOP);
   banner_focus();
   if (banner_frame()) {
     anim_xfade_area(ANIM_TOP, 0, 0, TOP_SCREEN_WIDTH, TSH);
@@ -862,9 +958,7 @@ static void top_update(void) {
     return;
   }
   top_item();
-  if (was_banner) {
-    anim_xfade_area(ANIM_TOP, 0, 0, TOP_SCREEN_WIDTH, TSH);
-  } else if (art_was || art_shown) {
+  if (art_was || art_shown) {
     anim_xfade_area(ANIM_TOP, PV_CARD_X, PV_BOX_Y, PV_CARD_W, PV_ALL_H);
   } else {
     anim_xfade_area(ANIM_TOP, PV_BOX_X, PV_BOX_Y, PV_BOX, PV_BOX);
@@ -880,6 +974,7 @@ void home_draw(void) {
   rebuild();
   ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
   status_bar_draw();
+  bn_on_screen = 0;
   banner_hide();
   anim_xfade_begin(ANIM_TOP);
   top_note();
@@ -887,7 +982,7 @@ void home_draw(void) {
   if (banner_frame()) {
     anim_xfade_area(ANIM_TOP, 0, 0, TOP_SCREEN_WIDTH, TSH);
     anim_xfade_start(ANIM_TOP, 0);
-  } else {
+  } else if (bn_state != BN_WAIT) {
     top_item();
   }
   screen_present_top();
@@ -1072,6 +1167,28 @@ static void cancel_carry(void) {
 
 static void drop(void) {
   int e = held, r, shown_e = e;
+  if (hov_kind == 1 && view != HOME_ROOT) {
+    /* Dropped directly on the top bar inside a folder: move out to parent! */
+    int p = hl_parent(view);
+    int at = hl_index(p, HL_FOLDER(view));
+    r = hl_put(p, at >= 0 ? at + 1 : hl_count(p), e);
+    if (r >= 0) {
+      save();
+      held = HL_NONE;
+      gap = into = -1;
+      hov_kind = 0;
+      ui_sound_back();
+      view = p;
+      bar = -1;
+      rebuild();
+      int k = hl_index(view, e);
+      if (k >= 0)
+        select_k(k);
+      anim_transition(ANIM_POP, ANIM_BOTH);
+      home_draw();
+      return;
+    }
+  }
   if (into >= 0) {
     int t = disp[into];
     if (HL_IS_FOLDER(t)) {
@@ -1122,9 +1239,9 @@ static void target_at(int x, int y) {
   if (k >= ndisp) {
     ngap = n;
   } else if (disp[k] != GAP_ENTRY) {
-    const int third = SLOT_SIZE * 3 / 10;
+    const int margin = SLOT_SIZE / 5;
     int li = list_index(k);
-    if (lx > third && lx < SLOT_SIZE - third && can_go_into(k))
+    if (lx > margin && lx < SLOT_SIZE - margin && can_go_into(k))
       ninto = k;
     else
       ngap = lx < SLOT_SIZE / 2 ? li : li + 1;
@@ -1141,7 +1258,7 @@ static void target_at(int x, int y) {
 }
 
 static void drag_to(int x, int y) {
-  int kind = 0, arg = 0, bx, by, bw, bh;
+  int kind = 0, arg = 0;
 
   anim_jump(&held_x, x - grab_dx);
   anim_jump(&held_y, y - grab_dy);
@@ -1151,9 +1268,8 @@ static void drag_to(int x, int y) {
   if (!moved)
     return;
 
-  btn_rect(BTN_BACK, &bx, &by, &bw, &bh);
-  if (y < BAR_Y + BAR_H + 4) {
-    if (view != HOME_ROOT && x < bx + bw + 20)
+  if (y < BAR_Y + BAR_H + 8) {
+    if (view != HOME_ROOT)
       kind = 1;
   } else if (x < 14) {
     kind = 2;
@@ -1226,21 +1342,222 @@ static void carry_keys(u32 k) {
   }
 }
 
+/* ---- Pinned Apps Dock (up to 3 apps, saved in SD:/Aurora/pinned.txt) ---- */
+#define DOCK_FILE "Aurora/pinned.txt"
+
+static int dock_streq(const char *a, const char *b) {
+  while (*a && *a == *b) { a++; b++; }
+  return *a == *b;
+}
+
+static void dock_cpy(char *dst, const char *src, int max) {
+  int i = 0;
+  while (src[i] && i + 1 < max) { dst[i] = src[i]; i++; }
+  dst[i] = '\0';
+}
+
+static int dock_find(const char *path) {
+  if (!path || !path[0])
+    return -1;
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  u32 n = s->dock_count;
+  if (n > AURORA_DOCK_MAX) n = AURORA_DOCK_MAX;
+  for (u32 i = 0; i < n; i++)
+    if (dock_streq((const char *)s->dock[i].path, path))
+      return (int)i;
+  return -1;
+}
+
+extern void os_cache_sync(void);
+
+static void dock_save(void) {
+  static FATFS fs;
+  static FIL f;
+  static char buf[AURORA_DOCK_MAX * 168 + 16];
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  u32 n = s->dock_count;
+  if (n > AURORA_DOCK_MAX) n = AURORA_DOCK_MAX;
+  char *p = buf;
+  for (u32 i = 0; i < n; i++) {
+    const char *nm = (const char *)s->dock[i].name;
+    const char *pt = (const char *)s->dock[i].path;
+    while (*nm) *p++ = *nm++;
+    *p++ = '|';
+    while (*pt) *p++ = *pt++;
+    *p++ = '\r';
+    *p++ = '\n';
+  }
+  UINT len = (UINT)(p - buf), bw = 0;
+  if (f_mount(&fs, "", 1) == FR_OK) {
+    f_mkdir("Aurora");
+    if (f_open(&f, DOCK_FILE, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK) {
+      if (len) f_write(&f, buf, len, &bw);
+      f_close(&f);
+    }
+    f_mount(NULL, "", 0);
+  }
+  os_cache_sync();
+}
+
+static void dock_fill_slot(volatile AuroraDockApp *d, const HomeApp *app) {
+  d->tint_rgb = ((u32)app->tint.r << 16) | ((u32)app->tint.g << 8) | app->tint.b;
+  d->has_banner = app->banner ? 1u : 0u;
+  if (app->color_icon) {
+    for (u32 i = 0; i < AURORA_DOCK_ICON_W * AURORA_DOCK_ICON_H; i++)
+      d->icon[i] = app->color_icon[i];
+    d->has_icon = 1u;
+  } else if (app->icon) {
+    /* Rasterize legacy 1-bit 32x32 .icon bitmap into RGB565 for the dock. */
+    Color bg_top = g_theme.slot_top;
+    Color bg_bot = g_theme.slot_bot;
+    for (u32 y = 0; y < AURORA_DOCK_ICON_H; y++) {
+      u32 r = bg_top.r + ((int)(bg_bot.r - bg_top.r) * (int)y) / 31;
+      u32 g = bg_top.g + ((int)(bg_bot.g - bg_top.g) * (int)y) / 31;
+      u32 b = bg_top.b + ((int)(bg_bot.b - bg_top.b) * (int)y) / 31;
+      uint16_t bg565 = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+      const u8 *row = app->icon + y * 4u;
+      for (u32 x = 0; x < AURORA_DOCK_ICON_W; x++) {
+        int bit = (row[x >> 3] & (u8)(0x80u >> (x & 7u))) != 0;
+        d->icon[y * AURORA_DOCK_ICON_W + x] = bit ? 0xFFFFu : bg565;
+      }
+    }
+    d->has_icon = 1u;
+  } else {
+    d->has_icon = 0u;
+  }
+}
+
+static void dock_sync_meta(void) {
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  u32 n = s->dock_count;
+  if (n > AURORA_DOCK_MAX) n = AURORA_DOCK_MAX;
+  for (u32 i = 0; i < n; i++) {
+    const char *p = (const char *)s->dock[i].path;
+    for (int a = 0; a < napps; a++) {
+      if (apps[a].path && dock_streq(apps[a].path, p)) {
+        dock_fill_slot(&s->dock[i], &apps[a]);
+        break;
+      }
+    }
+  }
+  os_cache_sync();
+}
+
+static void dock_capture_thumb(const char *app_path) {
+  int idx = dock_find(app_path);
+  if (idx < 0)
+    return;
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  volatile u8 *fb = VRAM_TOP_LA;
+  volatile uint16_t *dst = s->dock[idx].thumb;
+  for (u32 ty = 0; ty < AURORA_DOCK_THUMB_H; ty++) {
+    u32 sy = ty * (TOP_SCREEN_HEIGHT / AURORA_DOCK_THUMB_H) + 5u;
+    if (sy >= TOP_SCREEN_HEIGHT) sy = TOP_SCREEN_HEIGHT - 1u;
+    u32 row_off = (TOP_SCREEN_HEIGHT - 1u - sy) * 3u;
+    for (u32 tx = 0; tx < AURORA_DOCK_THUMB_W; tx++) {
+      u32 sx = tx * (TOP_SCREEN_WIDTH / AURORA_DOCK_THUMB_W) + 5u;
+      if (sx >= TOP_SCREEN_WIDTH) sx = TOP_SCREEN_WIDTH - 1u;
+      const volatile u8 *p = fb + sx * TSH * 3u + row_off;
+      u32 b = p[0], g = p[1], r = p[2];
+      dst[ty * AURORA_DOCK_THUMB_W + tx] =
+          (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    }
+  }
+  s->dock[idx].has_thumb = 1u;
+  os_cache_sync();
+}
+
+static void dock_load(void) {
+  static FATFS fs;
+  static FIL f;
+  static char buf[AURORA_DOCK_MAX * 168 + 32];
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  UINT br = 0;
+  s->dock_count = 0;
+  for (u32 i = 0; i < AURORA_DOCK_MAX; i++) {
+    s->dock[i].name[0] = '\0';
+    s->dock[i].path[0] = '\0';
+    s->dock[i].has_icon = 0u;
+    s->dock[i].has_banner = 0u;
+    s->dock[i].has_thumb = 0u;
+    s->dock[i].tint_rgb = 0u;
+  }
+  if (f_mount(&fs, "", 1) == FR_OK) {
+    if (f_open(&f, DOCK_FILE, FA_READ) == FR_OK) {
+      if (f_read(&f, buf, sizeof(buf) - 1, &br) != FR_OK)
+        br = 0;
+      f_close(&f);
+    }
+    f_mount(NULL, "", 0);
+  }
+  buf[br] = '\0';
+  for (char *l = buf; *l && s->dock_count < AURORA_DOCK_MAX;) {
+    char *e = l;
+    while (*e && *e != '\r' && *e != '\n')
+      e++;
+    int more = *e != '\0';
+    *e = '\0';
+    char *sep = l;
+    while (*sep && *sep != '|')
+      sep++;
+    if (*sep == '|' && sep > l && sep[1]) {
+      *sep = '\0';
+      u32 idx = s->dock_count;
+      dock_cpy((char *)s->dock[idx].name, l, (int)sizeof(s->dock[idx].name));
+      dock_cpy((char *)s->dock[idx].path, sep + 1, (int)sizeof(s->dock[idx].path));
+      s->dock_count = idx + 1u;
+    }
+    l = more ? e + 1 : e;
+  }
+  dock_sync_meta();
+}
+
+static void dock_toggle(const HomeApp *app) {
+  if (!app || !app->path || !app->path[0])
+    return;
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  int idx = dock_find(app->path);
+  if (idx >= 0) {
+    u32 n = s->dock_count;
+    if (n > AURORA_DOCK_MAX) n = AURORA_DOCK_MAX;
+    for (u32 i = (u32)idx; i + 1u < n; i++)
+      s->dock[i] = s->dock[i + 1u];
+    if (n > 0) {
+      s->dock[n - 1u].name[0] = '\0';
+      s->dock[n - 1u].path[0] = '\0';
+      s->dock[n - 1u].has_icon = 0u;
+      s->dock[n - 1u].has_banner = 0u;
+      s->dock[n - 1u].has_thumb = 0u;
+      s->dock_count = n - 1u;
+    }
+    dock_save();
+  } else if (s->dock_count < AURORA_DOCK_MAX) {
+    u32 n = s->dock_count;
+    dock_cpy((char *)s->dock[n].name, app->name ? app->name : "App",
+             (int)sizeof(s->dock[n].name));
+    dock_cpy((char *)s->dock[n].path, app->path, (int)sizeof(s->dock[n].path));
+    s->dock[n].has_thumb = 0u;
+    dock_fill_slot(&s->dock[n], app);
+    s->dock_count = n + 1u;
+    dock_save();
+  }
+}
+
 enum { MI_MOVE, MI_MOVE_TO, MI_NEW, MI_RENAME, MI_REMOVE, MI_DELETE_APP,
-       MI_COUNT };
+       MI_PIN, MI_COUNT };
 static const StringId mi_label[MI_COUNT] = {STR_MOVE, STR_MOVE_TO,
                                             STR_NEW_FOLDER, STR_RENAME,
                                             STR_REMOVE_FOLDER,
-                                            STR_DELETE_APP};
+                                            STR_DELETE_APP, STR_MOVE};
 
 #define MN_X     12
 #define MN_Y     10
 #define MN_W     (BW - 24)
 #define MN_H     (BSH - 20)
 #define MN_BW    132
-#define MN_BH    42
+#define MN_BH    34
 #define MN_BX(i) (MN_X + 12 + ((i) % 2) * (MN_BW + 8))
-#define MN_BY(i) (MN_Y + 62 + ((i) / 2) * (MN_BH + 10))
+#define MN_BY(i) (MN_Y + 56 + ((i) / 2) * (MN_BH + 6))
 
 static void menu_card(const char *title, const char *sub) {
   static const Color scrim = {0x00, 0x00, 0x00};
@@ -1273,8 +1590,21 @@ static void menu_draw(int e, int item, const u8 *on) {
     else
       draw_gradient_round_rect(fb, x, y, MN_BW, MN_BH, 10, BSH,
                                COLOR_HM_EMPTY_TOP, COLOR_HM_EMPTY_BOT);
+    const char *lbl = L(mi_label[i]);
+    if (i == MI_PIN) {
+      if (e != HL_NONE && !HL_IS_FOLDER(e) && apps[e].path) {
+        if (dock_find(apps[e].path) >= 0)
+          lbl = "Unpin";
+        else if (aurora_system_menu_shared()->dock_count >= AURORA_DOCK_MAX)
+          lbl = "Dock Full (3/3)";
+        else
+          lbl = "Pin to Dock";
+      } else {
+        lbl = "Pin to Dock";
+      }
+    }
     ui_text_mid_fit(fb, x + MN_BW / 2, y + (MN_BH - ui_th(&ui_bold)) / 2, BSH,
-                    L(mi_label[i]), MN_BW - 12,
+                    lbl, MN_BW - 12,
                     on[i] ? COLOR_WHITE : COLOR_HM_TEXT2, COLOR_HM_SLOT,
                     &ui_bold);
   }
@@ -1322,6 +1652,13 @@ static int menu_run(int e) {
   on[MI_RENAME] = on[MI_REMOVE] = (u8)HL_IS_FOLDER(e);
   on[MI_DELETE_APP] = (u8)(e != HL_NONE && !HL_IS_FOLDER(e) &&
                             apps[e].path != 0 && hk->remove_app != 0);
+  if (e != HL_NONE && !HL_IS_FOLDER(e) && apps[e].path != 0) {
+    int pinned = dock_find(apps[e].path) >= 0;
+    on[MI_PIN] = (u8)(pinned ||
+                      aurora_system_menu_shared()->dock_count < AURORA_DOCK_MAX);
+  } else {
+    on[MI_PIN] = 0;
+  }
   item = 0;
   while (item < MI_COUNT && !on[item])
     item++;
@@ -1517,6 +1854,9 @@ static void act(int item, int k) {
              hk->remove_app) {
     banner_leave_home();
     hk->remove_app(&apps[e]);
+  } else if (item == MI_PIN && e != HL_NONE && !HL_IS_FOLDER(e) &&
+             apps[e].path) {
+    dock_toggle(&apps[e]);
   }
   back_home();
   if (r < 0) {
@@ -1571,7 +1911,18 @@ static void power_ask(void) {
   back_home();
 }
 
-enum { SYS_HOME, SYS_POWER_OFF, SYS_CANCEL, SYS_COUNT };
+enum {
+  SM_PLUGIN = 0,
+  SM_HOME,
+  SM_BRIGHTNESS,
+  SM_RELOAD_PLUGINS,
+  SM_POWER_OFF,
+};
+
+typedef struct {
+  int kind;
+  int slot_idx;
+} SmItem;
 
 static int navigation_requested;
 static int home_started;
@@ -1580,86 +1931,791 @@ int home_navigation_requested(void) { return navigation_requested; }
 
 void home_navigation_clear(void) { navigation_requested = 0; }
 
-static void system_menu_draw(const int *rows, int n, int selected) {
-  volatile u8 *fb = VRAM_BOT_A;
-  static const Color black = {0x00, 0x00, 0x00};
-  static const Color cyan = {0x64, 0xE8, 0xC8};
-  static const StringId labels[SYS_COUNT] = {
-      STR_RETURN_HOME, STR_POWER_OFF, STR_CANCEL};
-  const char *title = "Aurora Tools";
+#define SM_SIDEBAR_W   AMENU_SIDEBAR_W
+#define SM_HEADER_H    38
+#define SM_LIST_Y      44
+#define SM_ROW_H       22
+#define SM_VISIBLE     7
+#define SM_FOOTER_Y    208
 
-  clear_screen(fb, BOT_FB_SIZE, black);
-  ui_text(fb, 8, 8, BSH, title, cyan, black, &ui_small);
-  for (int i = 0; i < n; i++) {
-    int y = 32 + i * 16;
-    if (i == selected)
-      ui_text(fb, 8, y, BSH, ">", cyan, black, &ui_small);
-    ui_text(fb, 28, y, BSH, L(labels[rows[i]]), COLOR_WHITE, black,
-            &ui_small);
+static u32 sm_saved_bottom[BOT_FB_SIZE / 4];
+static int sm_slide_x;
+static int sm_close_req;
+
+static Color sm_rgb(uint32_t rgb) {
+  Color c;
+  c.r = (u8)((rgb >> 16) & 0xFFu);
+  c.g = (u8)((rgb >> 8) & 0xFFu);
+  c.b = (u8)(rgb & 0xFFu);
+  return c;
+}
+
+static uint32_t sm_accent_rgb(void) {
+  return ((uint32_t)g_accent.r << 16) | ((uint32_t)g_accent.g << 8) | g_accent.b;
+}
+
+static Color sm_darken(Color c, int num, int den) {
+  Color o;
+  o.r = (u8)((int)c.r * num / den);
+  o.g = (u8)((int)c.g * num / den);
+  o.b = (u8)((int)c.b * num / den);
+  return o;
+}
+
+static void sm_sidebar_clear(void) {
+  volatile u8 *dst = VRAM_BOT_A;
+  const u8 *src = (const u8 *)sm_saved_bottom;
+  int sx = sm_slide_x;
+  int right_edge = sx + SM_SIDEBAR_W;
+  int vis = right_edge > 0 ? (right_edge * 256) / SM_SIDEBAR_W : 0;
+  if (vis > 256) vis = 256;
+  u32 dim = (u32)(256 - (124 * vis) / 256);
+
+  Color pt = sm_darken(g_theme.panel_top, 7, 10);
+  Color pb = sm_darken(g_theme.panel_bot, 6, 10);
+
+  screen_touch(dst);
+  for (int x = 0; x < BW; x++) {
+    u32 col_off = (u32)x * BSH * 3u;
+    for (int i = 0; i < BSH * 3; i++)
+      dst[col_off + i] = (u8)((src[col_off + i] * dim) >> 8);
   }
-  ui_text(fb, 8, BSH - 16, BSH, "A: Select   B: Close", cyan, black,
-          &ui_small);
+  if (right_edge > 0) {
+    draw_gradient_round_rect(dst, sx + 6, 8, SM_SIDEBAR_W - 10, BSH - 16,
+                             10, BSH, pt, pb);
+  }
+}
+
+static void sm_sidebar_header(const char *title, const char *subtitle) {
+  volatile u8 *fb = VRAM_BOT_A;
+  int sx = sm_slide_x;
+  Color bg = sm_darken(g_theme.panel_top, 7, 10);
+  int ty = 10 + (26 - ui_th(&ui_bold)) / 2;
+  ui_text_fit(fb, sx + 16, ty, BSH, title, SM_SIDEBAR_W - 76,
+              g_theme.text, bg, &ui_bold);
+  if (subtitle && subtitle[0]) {
+    int sw = ui_tw(&ui_small, subtitle);
+    int sy = 10 + (26 - ui_th(&ui_small)) / 2 + 1;
+    ui_text(fb, sx + SM_SIDEBAR_W - 14 - sw, sy, BSH, subtitle,
+            g_theme.text_dim, bg, &ui_small);
+  }
+  draw_filled_rect(fb, sx + 14, SM_HEADER_H - 1, SM_SIDEBAR_W - 26, 1,
+                   BSH, g_theme.panel_top);
+}
+
+static void sm_sidebar_item(int row, const char *label, const char *value,
+                            int selected) {
+  if (row < 0 || row >= SM_VISIBLE) return;
+  volatile u8 *fb = VRAM_BOT_A;
+  int sx = sm_slide_x;
+  int y = SM_LIST_Y + row * SM_ROW_H;
+  Color bg = selected ? g_accent : g_theme.slot_top;
+
+  if (selected) {
+    draw_gradient_round_rect(fb, sx + 12, y, SM_SIDEBAR_W - 22, SM_ROW_H - 3,
+                             7, BSH, g_accent, sm_darken(g_accent, 7, 10));
+  } else {
+    draw_gradient_round_rect(fb, sx + 12, y, SM_SIDEBAR_W - 22, SM_ROW_H - 3,
+                             7, BSH, g_theme.slot_top, g_theme.slot_bot);
+  }
+  int vw = (value && value[0]) ? ui_tw(&ui_small, value) : 0;
+  int max_lbl = SM_SIDEBAR_W - 36 - (vw ? vw + 8 : 0);
+  if (max_lbl < 32) max_lbl = 32;
+  int ly = y + (SM_ROW_H - 3 - ui_th(&ui_font)) / 2;
+  ui_text_fit(fb, sx + 18, ly, BSH, label, max_lbl,
+              selected ? COLOR_WHITE : g_theme.text, bg, &ui_font);
+  if (vw > 0) {
+    int vx = sx + SM_SIDEBAR_W - 16 - vw;
+    int vy = y + (SM_ROW_H - 3 - ui_th(&ui_small)) / 2;
+    Color vc = selected ? COLOR_WHITE : g_theme.text_dim;
+    if (!selected && value[0] == 'O' && value[1] == 'N' && value[2] == '\0')
+      vc = sm_rgb(0x4CD964u);
+    else if (!selected && value[0] == 'O' && value[1] == 'F' && value[2] == 'F')
+      vc = sm_rgb(0xFF5A52u);
+    ui_text(fb, vx, vy, BSH, value, vc, bg, &ui_small);
+  }
+}
+
+static void sm_sidebar_separator(int row, const char *label) {
+  if (row < 0 || row >= SM_VISIBLE) return;
+  volatile u8 *fb = VRAM_BOT_A;
+  int sx = sm_slide_x;
+  int y = SM_LIST_Y + row * SM_ROW_H;
+  draw_filled_rect(fb, sx + 14, y + SM_ROW_H / 2, SM_SIDEBAR_W - 26, 1,
+                   BSH, sm_rgb(0x1D212Cu));
+  if (label && label[0])
+    ui_text_fit(fb, sx + 16, y + 4, BSH, label, SM_SIDEBAR_W - 30,
+                sm_rgb(0x6C7382u), sm_rgb(0x0E1015u), &ui_small);
+}
+
+static void sm_sidebar_footer(const char *hint) {
+  volatile u8 *fb = VRAM_BOT_A;
+  int sx = sm_slide_x;
+  draw_filled_rect(fb, sx + 14, SM_FOOTER_Y, SM_SIDEBAR_W - 26, 1,
+                   BSH, sm_rgb(0x1D212Cu));
+  int fy = SM_FOOTER_Y + (BSH - 8 - SM_FOOTER_Y - ui_th(&ui_small)) / 2;
+  ui_text_fit(fb, sx + 14, fy, BSH, hint, SM_SIDEBAR_W - 26,
+              sm_rgb(0x6C7382u), sm_rgb(0x0E1015u), &ui_small);
+}
+
+static void sm_draw_pixel(int x, int y, uint32_t rgb) {
+  draw_pixel(VRAM_BOT_A, x + sm_slide_x, y, BSH, sm_rgb(rgb));
+}
+static void sm_draw_rect(int x, int y, int w, int h, uint32_t rgb) {
+  draw_filled_rect(VRAM_BOT_A, x + sm_slide_x, y, w, h, BSH, sm_rgb(rgb));
+}
+static void sm_draw_rect_alpha(int x, int y, int w, int h, uint32_t rgb, int a) {
+  draw_filled_rect_alpha(VRAM_BOT_A, x + sm_slide_x, y, w, h, BSH, sm_rgb(rgb), a);
+}
+static void sm_draw_text_api(int x, int y, const char *s, uint32_t rgb) {
+  ui_text(VRAM_BOT_A, x + sm_slide_x, y, BSH, s, sm_rgb(rgb),
+          sm_rgb(0x0E1015u), &ui_font);
+}
+static void sm_hud_rect(int screen, int x, int y, int w, int h, uint32_t rgb, int a) {
+  if (screen == 0)
+    draw_filled_rect_alpha(VRAM_TOP_LA, x, y, w, h, TSH, sm_rgb(rgb), a);
+  else
+    draw_filled_rect_alpha(VRAM_BOT_A, x, y, w, h, BSH, sm_rgb(rgb), a);
+}
+static void sm_hud_text(int screen, int x, int y, const char *s, uint32_t rgb) {
+  if (screen == 0)
+    ui_text(VRAM_TOP_LA, x, y, TSH, s, sm_rgb(rgb), COLOR_BLACK, &ui_small);
+  else
+    ui_text(VRAM_BOT_A, x, y, BSH, s, sm_rgb(rgb), COLOR_BLACK, &ui_small);
+}
+static uint32_t sm_now_us(void) { return timer_ticks() * 15u; }
+static uint32_t sm_keys_held(void) { return get_keys(); }
+static int sm_get_brightness(void) {
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  return s->brightness <= 4u ? (int)s->brightness : 3;
+}
+static void sm_set_brightness(int level) {
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  if (level < 0) level = 0;
+  if (level > 4) level = 4;
+  s->brightness = (uint32_t)level;
+  audio_set_brightness((uint32_t)level);
+}
+static void sm_request_home(void) {
+  navigation_requested = 1;
+  sm_close_req = 1;
+}
+
+static int sm_app_active(void) { return 0; }
+static int sm_app_modding(void) { return 1; }
+static const char *sm_app_path(void) { return "/AURORAOS.BIN"; }
+
+static int sm_addr_valid(uint32_t addr, uint32_t len) {
+  if (len == 0u || addr + len < addr) return 0;
+  if (addr >= 0x22000000u && addr + len <= 0x23000000u) return 1;
+  if (addr >= 0x24000000u && addr + len <= 0x26000000u) return 1;
+  return 0;
+}
+
+static int sm_mem_read(uint32_t addr, void *dst, uint32_t len) {
+  if (!dst || !sm_addr_valid(addr, len)) return 0;
+  const volatile uint8_t *src = (const volatile uint8_t *)addr;
+  uint8_t *out = (uint8_t *)dst;
+  for (uint32_t i = 0; i < len; i++)
+    out[i] = src[i];
+  return 1;
+}
+
+static int sm_mem_write(uint32_t addr, const void *src, uint32_t len) {
+  if (!src || !sm_addr_valid(addr, len)) return 0;
+  volatile uint8_t *dst = (volatile uint8_t *)addr;
+  const uint8_t *in = (const uint8_t *)src;
+  for (uint32_t i = 0; i < len; i++)
+    dst[i] = in[i];
+  os_cache_sync();
+  return 1;
+}
+
+static uint32_t sm_mem_find(uint32_t start, uint32_t len, const void *pat,
+                            uint32_t pat_len) {
+  if (!pat || pat_len == 0u || pat_len > len || !sm_addr_valid(start, len))
+    return 0u;
+  const volatile uint8_t *mem = (const volatile uint8_t *)start;
+  const uint8_t *p = (const uint8_t *)pat;
+  uint32_t limit = len - pat_len;
+  for (uint32_t i = 0; i <= limit; i++) {
+    uint32_t j = 0;
+    while (j < pat_len && mem[i + j] == p[j]) j++;
+    if (j == pat_len) return start + i;
+  }
+  return 0u;
+}
+
+static int sm_set_mod_keys(uint32_t k) {
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  s->mod_keys = k & 0xFFFu;
+  os_cache_sync();
+  return 1;
+}
+
+static void sm_set_accent(uint32_t rgb) {
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  g_accent = sm_rgb(rgb);
+  s->accent_rgb = rgb & 0xFFFFFFu;
+  ui_bg_invalidate();
+  os_cache_sync();
+}
+
+static void sm_set_led_color(uint8_t r, uint8_t g, uint8_t b) {
+  power_set_led(r, g, b);
+}
+
+static void sm_play_tone(uint32_t freq_hz) {
+  if (freq_hz)
+    audio_play_tone(freq_hz);
+  else
+    audio_stop();
+}
+
+static int sm_get_battery(int *charging, int *mv, int *temp_c) {
+  if (charging) *charging = battery_charging();
+  if (mv)       *mv = battery_millivolts();
+  if (temp_c)   *temp_c = battery_temperature();
+  return battery_percent();
+}
+
+static void sm_get_sys_info(uint32_t *cpu_mhz, uint32_t *is_n3ds,
+                            uint32_t *core_ver, uint32_t *gpu_ops) {
+  const AudioCtrl *ct = (const AudioCtrl *)AUDIO_CTRL_ADDR;
+  const GpuShared *g  = (const GpuShared *)GPU_SHARED_ADDR;
+  uint32_t div = ct->clock_div ? ct->clock_div : 1u;
+  if (cpu_mhz)  *cpu_mhz  = div * 268u;
+  if (is_n3ds)  *is_n3ds  = (ct->socinfo & (1u << 2)) ? 1u : 0u;
+  if (core_ver) *core_ver = ct->version;
+  if (gpu_ops)  *gpu_ops  = g->ops;
+}
+
+static void sm_reboot(void) { power_reboot(); }
+
+static const AmenuApi g_api9 = {
+  AMENU_ABI_VERSION,
+  SM_SIDEBAR_W, BW, BSH,
+  sm_sidebar_clear, sm_sidebar_header, sm_sidebar_item,
+  sm_sidebar_separator, sm_sidebar_footer,
+  sm_draw_pixel, sm_draw_rect, sm_draw_rect_alpha, sm_draw_text_api,
+  sm_hud_rect, sm_hud_text,
+  sm_accent_rgb, sm_now_us, sm_keys_held,
+  sm_get_brightness, sm_set_brightness, sm_request_home,
+  sm_app_active, sm_app_modding, sm_app_path,
+  sm_mem_read, sm_mem_write, sm_mem_find, sm_set_mod_keys,
+  sm_set_accent, sm_set_led_color, sm_play_tone,
+  sm_get_battery, sm_get_sys_info, sm_reboot,
+};
+
+static const AmenuPlugin *sm_plugin_get(AmenuSlot *slot) {
+  if (!slot || !slot->loaded || !slot->entry_addr) return 0;
+  if (!slot->initialized) {
+    AmenuEntryFn entry = (AmenuEntryFn)slot->entry_addr;
+    const AmenuPlugin *p = entry(&g_api9);
+    slot->initialized = 1;
+    if (p && p->abi_version == AMENU_ABI_VERSION) {
+      slot->plugin_ptr = (uint32_t)p;
+      if (p->on_load) p->on_load(&g_api9);
+    } else {
+      slot->plugin_ptr = 0;
+    }
+  }
+  return (const AmenuPlugin *)slot->plugin_ptr;
+}
+
+static int sm_build_items(SmItem *items) {
+  int n = 0;
+  AmenuTable *tbl = amenu_table();
+  if (tbl->magic == AMENU_TABLE_MAGIC && tbl->version == AMENU_ABI_VERSION) {
+    uint32_t cnt = tbl->count > AMENU_MAX_PLUGINS ? AMENU_MAX_PLUGINS : tbl->count;
+    for (uint32_t i = 0; i < cnt; i++) {
+      if (tbl->slots[i].loaded && sm_plugin_get(&tbl->slots[i])) {
+        items[n].kind = SM_PLUGIN;
+        items[n].slot_idx = (int)i;
+        n++;
+      }
+    }
+  }
+  if (home_started) {
+    items[n].kind = SM_HOME; items[n].slot_idx = -1; n++;
+  }
+  items[n].kind = SM_BRIGHTNESS;     items[n].slot_idx = -1; n++;
+  items[n].kind = SM_RELOAD_PLUGINS; items[n].slot_idx = -1; n++;
+  items[n].kind = SM_POWER_OFF;      items[n].slot_idx = -1; n++;
+  return n;
+}
+
+static int sm_in_rrect(int lx, int ly, int w, int h, int r) {
+  int cx = (lx < r) ? r - 1 - lx : (lx >= w - r) ? lx - (w - r) : 0;
+  int cy = (ly < r) ? r - 1 - ly : (ly >= h - r) ? ly - (h - r) : 0;
+  return cx * cx + cy * cy <= r * r;
+}
+
+static void sm_draw_dock_thumb(volatile u8 *fb, int x, int y, int w, int h,
+                               int r, const volatile uint16_t *thumb, int sel) {
+  for (int ly = 0; ly < h; ly++) {
+    int py = y + ly;
+    if (py < 0 || py >= BSH) continue;
+    int ty = (ly * (int)AURORA_DOCK_THUMB_H) / h;
+    u32 yoff = (u32)(BSH - 1 - py) * 3u;
+    for (int lx = 0; lx < w; lx++) {
+      int px = x + lx;
+      if (px < 0 || px >= BW) continue;
+      if (!sm_in_rrect(lx, ly, w, h, r)) continue;
+      u32 off = (u32)px * BSH * 3u + yoff;
+      int border = sel && (lx < 2 || lx >= w - 2 || ly < 2 || ly >= h - 2 ||
+                           !sm_in_rrect(lx, ly, w, h, r + 2));
+      if (border) {
+        fb[off]     = g_accent.b;
+        fb[off + 1] = g_accent.g;
+        fb[off + 2] = g_accent.r;
+        continue;
+      }
+      int tx = (lx * (int)AURORA_DOCK_THUMB_W) / w;
+      uint16_t c565 = thumb[ty * (int)AURORA_DOCK_THUMB_W + tx];
+      u32 cr = ((c565 >> 11) & 31u) * 255u / 31u;
+      u32 cg = ((c565 >> 5) & 63u) * 255u / 63u;
+      u32 cb = (c565 & 31u) * 255u / 31u;
+      if (sel) {
+        cr = (cr * 170u + (u32)g_accent.r * 85u) >> 8;
+        cg = (cg * 170u + (u32)g_accent.g * 85u) >> 8;
+        cb = (cb * 170u + (u32)g_accent.b * 85u) >> 8;
+      } else {
+        cr = (cr * 140u) >> 8;
+        cg = (cg * 140u) >> 8;
+        cb = (cb * 140u) >> 8;
+      }
+      fb[off]     = (u8)cb;
+      fb[off + 1] = (u8)cg;
+      fb[off + 2] = (u8)cr;
+    }
+  }
+}
+
+static void sm_draw_dock_icon(volatile u8 *fb, int x, int y,
+                              const volatile uint16_t *icon) {
+  for (int ly = 0; ly < (int)AURORA_DOCK_ICON_H; ly++) {
+    int py = y + ly;
+    if (py < 0 || py >= BSH) continue;
+    u32 yoff = (u32)(BSH - 1 - py) * 3u;
+    for (int lx = 0; lx < (int)AURORA_DOCK_ICON_W; lx++) {
+      int px = x + lx;
+      if (px < 0 || px >= BW) continue;
+      if (!sm_in_rrect(lx, ly, (int)AURORA_DOCK_ICON_W, (int)AURORA_DOCK_ICON_H, 6))
+        continue;
+      uint16_t c565 = icon[ly * (int)AURORA_DOCK_ICON_W + lx];
+      u32 off = (u32)px * BSH * 3u + yoff;
+      fb[off]     = (u8)((c565 & 31u) * 255u / 31u);
+      fb[off + 1] = (u8)(((c565 >> 5) & 63u) * 255u / 63u);
+      fb[off + 2] = (u8)(((c565 >> 11) & 31u) * 255u / 31u);
+    }
+  }
+}
+
+static void sm_draw_dock(int dock_focus, int dock_sel) {
+  volatile u8 *fb = VRAM_BOT_A;
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  int slide_r = (-sm_slide_x * 124) / SM_SIDEBAR_W;
+  int dx = SM_SIDEBAR_W + 4 + slide_r;
+  int dy = 8, dw = BW - SM_SIDEBAR_W - 10, dh = BSH - 16;
+  if (dx >= BW)
+    return;
+
+  Color pt = { (u8)(g_theme.panel_top.r * 7 / 10),
+               (u8)(g_theme.panel_top.g * 7 / 10),
+               (u8)(g_theme.panel_top.b * 7 / 10) };
+  Color pb = { (u8)(g_theme.panel_bot.r * 6 / 10),
+               (u8)(g_theme.panel_bot.g * 6 / 10),
+               (u8)(g_theme.panel_bot.b * 6 / 10) };
+  Color acc_bot = { (u8)(g_accent.r * 7 / 10),
+                    (u8)(g_accent.g * 7 / 10),
+                    (u8)(g_accent.b * 7 / 10) };
+
+  draw_gradient_round_rect(fb, dx, dy, dw, dh, 10, BSH, pt, pb);
+  ui_text(fb, dx + 10, dy + 8, BSH, "Dock", g_accent, pt, &ui_bold);
+
+  u32 dcnt = s->dock_count;
+  if (dcnt > AURORA_DOCK_MAX) dcnt = AURORA_DOCK_MAX;
+  for (u32 i = 0; i < AURORA_DOCK_MAX; i++) {
+    int sy = dy + 32 + (int)i * 60;
+    int sh = 52;
+    int cx = dx + 6, cw = dw - 12;
+    int sel = dock_focus && (int)i == dock_sel && i < dcnt;
+    if (i < dcnt && s->dock[i].has_thumb) {
+      sm_draw_dock_thumb(fb, cx, sy, cw, sh, 8, s->dock[i].thumb, sel);
+    } else if (sel) {
+      draw_gradient_round_rect(fb, cx, sy, cw, sh, 8, BSH,
+                               g_accent, acc_bot);
+    } else {
+      draw_gradient_round_rect(fb, cx, sy, cw, sh, 8, BSH,
+                               g_theme.slot_top, g_theme.slot_bot);
+    }
+    if (i < dcnt && s->dock[i].name[0]) {
+      if (s->dock[i].has_icon) {
+        sm_draw_dock_icon(fb, cx + 6, sy + 10, s->dock[i].icon);
+      } else {
+        Color tc = s->dock[i].tint_rgb ? sm_rgb(s->dock[i].tint_rgb) : g_accent;
+        char init[2] = { s->dock[i].name[0], '\0' };
+        draw_gradient_round_rect(fb, cx + 6, sy + 10, 32, 32, 6, BSH,
+                                 tc, sm_darken(tc, 7, 10));
+        ui_text_mid(fb, cx + 22, sy + 10 + (32 - ui_th(&ui_bold)) / 2, BSH,
+                    init, COLOR_WHITE, tc, &ui_bold);
+      }
+      ui_text_fit(fb, cx + 44, sy + (sh - ui_th(&ui_font)) / 2, BSH,
+                  (const char *)s->dock[i].name, cw - 48,
+                  (sel || s->dock[i].has_thumb) ? COLOR_WHITE : g_theme.text,
+                  sel ? g_accent : g_theme.slot_top, &ui_font);
+    } else {
+      ui_text_mid(fb, cx + cw / 2, sy + (sh - ui_th(&ui_small)) / 2, BSH,
+                  "Empty", g_theme.text_dim, g_theme.slot_top, &ui_small);
+    }
+  }
+}
+
+static void sm_draw_root(const SmItem *items, int count, int selected,
+                         int scroll, int dock_focus, int dock_sel) {
+  AmenuTable *tbl = amenu_table();
+  char br_buf[8];
+  int br = sm_get_brightness();
+  if (!dock_focus && selected >= 0 && selected < count &&
+      items[selected].kind == SM_BRIGHTNESS) {
+    br_buf[0] = '<'; br_buf[1] = ' ';
+    br_buf[2] = (char)('1' + br);
+    br_buf[3] = '/'; br_buf[4] = '5';
+    br_buf[5] = ' '; br_buf[6] = '>'; br_buf[7] = '\0';
+  } else {
+    br_buf[0] = (char)('1' + br);
+    br_buf[1] = '/'; br_buf[2] = '5'; br_buf[3] = '\0';
+  }
+
+  sm_sidebar_clear();
+  sm_sidebar_header("Aurora", "MOD: ON");
+  for (int r = 0; r < SM_VISIBLE && scroll + r < count; r++) {
+    int idx = scroll + r;
+    int sel = (!dock_focus) && (idx == selected);
+    const SmItem *it = &items[idx];
+    if (it->kind == SM_PLUGIN) {
+      AmenuSlot *slot = &tbl->slots[it->slot_idx];
+      const AmenuPlugin *p = (const AmenuPlugin *)slot->plugin_ptr;
+      const char *name = (p && p->name[0]) ? p->name : slot->filename;
+      const char *val = ">";
+      if (p && !(p->flags & AMENU_FLAG_HAS_MENU) && (p->flags & AMENU_FLAG_HAS_HUD))
+        val = slot->hud_enabled ? "ON" : "OFF";
+      else if (p && (p->flags & AMENU_FLAG_HAS_HUD) && slot->hud_enabled)
+        val = "HUD";
+      sm_sidebar_item(r, name, val, sel);
+    } else if (it->kind == SM_HOME) {
+      sm_sidebar_item(r, "Home", "", sel);
+    } else if (it->kind == SM_BRIGHTNESS) {
+      sm_sidebar_item(r, "Brightness", br_buf, sel);
+    } else if (it->kind == SM_RELOAD_PLUGINS) {
+      sm_sidebar_item(r, "Reload /amenu", "", sel);
+    } else if (it->kind == SM_POWER_OFF) {
+      sm_sidebar_item(r, L(STR_POWER_OFF), "", sel);
+    }
+  }
+  if (dock_focus)
+    sm_sidebar_footer("A: Launch  <: Menu  B: Close");
+  else if (selected >= 0 && selected < count && items[selected].kind == SM_BRIGHTNESS)
+    sm_sidebar_footer("</>: Adjust  B: Close");
+  else if (selected >= 0 && selected < count && items[selected].kind == SM_PLUGIN)
+    sm_sidebar_footer("A: Open  X: HUD  >: Dock");
+  else
+    sm_sidebar_footer("A: Select  >: Dock  B: Close");
+  sm_draw_dock(dock_focus, dock_sel);
   screen_present_bottom();
 }
 
-void home_system_menu(void) {
-  static const int all_rows[SYS_COUNT] = {SYS_HOME, SYS_POWER_OFF,
-                                          SYS_CANCEL};
-  /* Before home_run (the setup wizard, the boot warning) there is no Home
-   * Menu to return to, and nothing would clear the request. */
-  const int *rows = home_started ? all_rows : all_rows + 1;
-  int n = home_started ? SYS_COUNT : SYS_COUNT - 1;
-  int selected = 0;
-  static u32 saved_bottom[BOT_FB_SIZE / 4];
-  volatile u32 *bottom = (volatile u32 *)VRAM_BOT_A;
-
-  /* A transition armed by the screen underneath would take the menu's
-   * present as its new frame. */
-  anim_flush();
-  for (u32 i = 0; i < BOT_FB_SIZE / 4; i++)
-    saved_bottom[i] = bottom[i];
-
-  system_menu_draw(rows, n, selected);
-  for (;;) {
-    u32 k = get_keys_down();
-    int tx, ty, next = selected, chosen = -1;
-    if (k & BUTTON_DUP)
-      next = selected > 0 ? selected - 1 : n - 1;
-    if (k & BUTTON_DDOWN)
-      next = selected + 1 < n ? selected + 1 : 0;
-    if (touch_tap(&tx, &ty)) {
-      for (int i = 0; i < n; i++)
-        if (touch_in(tx, ty, 20, 28 + i * 16, BW - 40, 16))
-          chosen = rows[i];
-    }
-    if (k & BUTTON_A)
-      chosen = rows[selected];
-    if (k & BUTTON_B)
-      break;
-    if (chosen == SYS_HOME) {
-      navigation_requested = 1;
-      break;
-    }
-    if (chosen == SYS_POWER_OFF) {
-      if (fv_confirm(L(STR_POWER_ASK), "", L(STR_POWER_OFF), L(STR_CANCEL)))
-        power_shutdown();
-      else {
-        system_menu_draw(rows, n, selected);
-        continue;
-      }
-      break;
-    }
-    if (chosen == SYS_CANCEL)
-      break;
-    if (next != selected) {
-      selected = next;
-      system_menu_draw(rows, n, selected);
-    }
+static void sm_run_plugin(AmenuSlot *slot) {
+  const AmenuPlugin *p = sm_plugin_get(slot);
+  if (!p || !p->on_menu_frame) return;
+  if (p->on_menu_open) p->on_menu_open(&g_api9);
+  while (!sm_close_req) {
+    u32 down = get_keys_down();
+    u32 held = get_keys();
+    int keep = p->on_menu_frame(&g_api9, held, down);
+    screen_present_bottom();
+    if (!keep) break;
     ui_idle();
   }
-  if (!navigation_requested) {
+}
+
+void home_system_menu(void) {
+  volatile u32 *bottom = (volatile u32 *)VRAM_BOT_A;
+  SmItem items[AMENU_MAX_PLUGINS + 5];
+  int count, selected = 0, scroll = 0;
+  int dock_focus = 0, dock_sel = 0, launch_dock = -1;
+  int dock_bn_idx = -1, dock_bn_ok = 0, dock_top_dirty = 0;
+  u32 dock_bn_t0 = 0;
+
+  anim_flush();
+  for (u32 i = 0; i < BOT_FB_SIZE / 4; i++)
+    sm_saved_bottom[i] = bottom[i];
+
+  sm_close_req = 0;
+  count = sm_build_items(items);
+
+  /* Smooth cubic ease-out slide-in */
+  for (int step = 1; step <= 8; step++) {
+    int inv = 8 - step;
+    sm_slide_x = -(SM_SIDEBAR_W * inv * inv * inv) / 512;
+    sm_draw_root(items, count, selected, scroll, dock_focus, dock_sel);
+    ui_idle();
+  }
+  sm_slide_x = 0;
+
+  while (!sm_close_req) {
+    u32 k = get_keys_down();
+    int tx, ty, redraw = 0, activate = 0;
+    u32 dcnt = aurora_system_menu_shared()->dock_count;
+    if (dcnt > AURORA_DOCK_MAX) dcnt = AURORA_DOCK_MAX;
+
+    if (k & BUTTON_B) {
+      ui_sound_back();
+      break;
+    }
+
+    if (dock_focus) {
+      if (k & BUTTON_DLEFT) {
+        dock_focus = 0;
+        ui_sound_move();
+        redraw = 1;
+      } else if (k & BUTTON_DUP) {
+        if (dcnt > 0)
+          dock_sel = dock_sel > 0 ? dock_sel - 1 : (int)dcnt - 1;
+        ui_sound_move();
+        redraw = 1;
+      } else if (k & BUTTON_DDOWN) {
+        if (dcnt > 0)
+          dock_sel = dock_sel + 1 < (int)dcnt ? dock_sel + 1 : 0;
+        ui_sound_move();
+        redraw = 1;
+      } else if ((k & BUTTON_A) && (u32)dock_sel < dcnt) {
+        ui_sound_select();
+        launch_dock = dock_sel;
+        break;
+      }
+    } else {
+      if (k & BUTTON_DUP) {
+        selected = selected > 0 ? selected - 1 : count - 1;
+        ui_sound_move();
+        redraw = 1;
+      }
+      if (k & BUTTON_DDOWN) {
+        selected = selected + 1 < count ? selected + 1 : 0;
+        ui_sound_move();
+        redraw = 1;
+      }
+      if (selected < scroll) scroll = selected;
+      if (selected >= scroll + SM_VISIBLE) scroll = selected - SM_VISIBLE + 1;
+
+      if (items[selected].kind == SM_BRIGHTNESS) {
+        if (k & BUTTON_DLEFT) {
+          sm_set_brightness(sm_get_brightness() - 1);
+          ui_sound_move();
+          redraw = 1;
+        } else if (k & BUTTON_DRIGHT) {
+          sm_set_brightness(sm_get_brightness() + 1);
+          ui_sound_move();
+          redraw = 1;
+        }
+      } else if ((k & BUTTON_DRIGHT) && dcnt > 0) {
+        dock_focus = 1;
+        if ((u32)dock_sel >= dcnt) dock_sel = 0;
+        ui_sound_move();
+        redraw = 1;
+      }
+
+      if ((k & BUTTON_X) && items[selected].kind == SM_PLUGIN) {
+        AmenuTable *tbl = amenu_table();
+        int sidx = items[selected].slot_idx;
+        AmenuSlot *slot = &tbl->slots[sidx];
+        const AmenuPlugin *p = (const AmenuPlugin *)slot->plugin_ptr;
+        if (p && (p->flags & AMENU_FLAG_HAS_HUD)) {
+          slot->hud_enabled = !slot->hud_enabled;
+          if (slot->hud_enabled) tbl->hud_mask |= (1u << sidx);
+          else                   tbl->hud_mask &= ~(1u << sidx);
+          os_cache_sync();
+          if (p->on_toggle) p->on_toggle(&g_api9, (int)slot->hud_enabled);
+          ui_sound_select();
+          redraw = 1;
+        }
+      }
+    }
+
+    if (touch_tap(&tx, &ty)) {
+      int dx = SM_SIDEBAR_W + 4, dw = BW - SM_SIDEBAR_W - 10;
+      if (tx >= dx && tx < dx + dw) {
+        int hit_dock = 0;
+        for (u32 i = 0; i < dcnt; i++) {
+          int sy = 8 + 32 + (int)i * 60;
+          if (touch_in(tx, ty, dx + 6, sy, dw - 12, 52)) {
+            ui_sound_select();
+            launch_dock = (int)i;
+            hit_dock = 1;
+            break;
+          }
+        }
+        if (hit_dock)
+          break;
+      } else if (tx >= SM_SIDEBAR_W) {
+        ui_sound_back();
+        break;
+      } else {
+        int r = (ty - SM_LIST_Y) / SM_ROW_H;
+        if (ty >= SM_LIST_Y && r >= 0 && r < SM_VISIBLE && scroll + r < count) {
+          dock_focus = 0;
+          selected = scroll + r;
+          activate = 1;
+        }
+      }
+    }
+
+    if (!dock_focus && ((k & BUTTON_A) || activate)) {
+      int kind = items[selected].kind;
+      if (kind == SM_PLUGIN) {
+        AmenuTable *tbl = amenu_table();
+        int sidx = items[selected].slot_idx;
+        AmenuSlot *slot = &tbl->slots[sidx];
+        const AmenuPlugin *p = (const AmenuPlugin *)slot->plugin_ptr;
+        ui_sound_select();
+        if (p && p->on_menu_frame) {
+          sm_run_plugin(slot);
+          if (p->flags & AMENU_FLAG_HAS_HUD) {
+            slot->hud_enabled = 1;
+            tbl->hud_mask |= (1u << sidx);
+            os_cache_sync();
+          }
+          redraw = 1;
+        } else if (p && (p->flags & AMENU_FLAG_HAS_HUD)) {
+          slot->hud_enabled = !slot->hud_enabled;
+          if (slot->hud_enabled) tbl->hud_mask |= (1u << sidx);
+          else                   tbl->hud_mask &= ~(1u << sidx);
+          os_cache_sync();
+          if (p->on_toggle) p->on_toggle(&g_api9, (int)slot->hud_enabled);
+          redraw = 1;
+        }
+      } else if (kind == SM_HOME) {
+        ui_sound_select();
+        navigation_requested = 1;
+        break;
+      } else if (kind == SM_RELOAD_PLUGINS) {
+        ui_sound_select();
+        amenu_load_plugins();
+        count = sm_build_items(items);
+        if (selected >= count) selected = 0;
+        scroll = 0;
+        redraw = 1;
+      } else if (kind == SM_POWER_OFF) {
+        ui_sound_select();
+        if (fv_confirm(L(STR_POWER_ASK), "", L(STR_POWER_OFF), L(STR_CANCEL)))
+          power_shutdown();
+        redraw = 1;
+      }
+    }
+
+    /* Live top-screen banner preview while focused on a pinned dock app */
+    if (!dock_focus && dock_bn_idx >= 0) {
+      /* Left the dock: stop and clear the dock banner immediately. */
+      ui_sound_banner_stop();
+      dock_bn_idx = -1;
+      dock_bn_ok = 0;
+      ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
+      status_bar_draw();
+      top_item();
+      screen_present_top();
+    } else if (dock_focus && (u32)dock_sel < dcnt) {
+      if (dock_bn_idx != dock_sel) {
+        ui_sound_banner_stop();
+        dock_bn_idx = dock_sel;
+        dock_bn_ok = 0;
+        dock_top_dirty = 1;
+        /* Clear previous banner immediately before loading the new selection. */
+        ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
+        status_bar_draw();
+        screen_present_top();
+        volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+        const char *dp = (const char *)s->dock[dock_sel].path;
+        for (int a = 0; a < napps; a++) {
+          if (apps[a].path && dock_streq(apps[a].path, dp)) {
+            if (apps[a].banner) {
+              if (bn_loaded != a) {
+                banner_unload();
+                bn_loaded = HL_NONE;
+                if (banner_load(apps[a].path, apps[a].banner))
+                  bn_loaded = a;
+              }
+              if (bn_loaded == a) {
+                dock_bn_ok = 1;
+                dock_bn_t0 = anim_now();
+              }
+            }
+            if (!dock_bn_ok) {
+              ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
+              status_bar_draw();
+              ui_text_mid(VRAM_TOP_LA, TOP_SCREEN_WIDTH / 2, 110, TSH,
+                          apps[a].name ? apps[a].name : "App",
+                          COLOR_WHITE, COLOR_HM_BG, &ui_title);
+              screen_present_top();
+            }
+            break;
+          }
+        }
+      }
+      if (dock_bn_ok) {
+        screen_touch(VRAM_TOP_LA);
+        if (banner_draw((u32)anim_ms(dock_bn_t0), 256u, (u32)VRAM_TOP_LA)) {
+          bn_on_screen = 1;
+          volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+          if (!s->dock[dock_sel].has_thumb) {
+            dock_capture_thumb((const char *)s->dock[dock_sel].path);
+            redraw = 1;
+          }
+          status_bar_draw();
+          screen_present_top();
+        }
+      }
+    }
+
+    if (redraw && !sm_close_req)
+      sm_draw_root(items, count, selected, scroll, dock_focus, dock_sel);
+    ui_idle();
+  }
+
+  if (!navigation_requested && launch_dock < 0) {
+    /* Smooth cubic ease-in slide-out */
+    for (int step = 1; step <= 8; step++) {
+      sm_slide_x = -(SM_SIDEBAR_W * step * step * step) / 512;
+      sm_draw_root(items, count, selected, scroll, dock_focus, dock_sel);
+      ui_idle();
+    }
+    sm_slide_x = 0;
     for (u32 i = 0; i < BOT_FB_SIZE / 4; i++)
-      bottom[i] = saved_bottom[i];
+      bottom[i] = sm_saved_bottom[i];
+    screen_present_bottom();
+    if (dock_top_dirty) {
+      ui_sound_banner_stop();
+      ui_wallpaper(VRAM_TOP_LA, TOP_SCREEN_WIDTH, TSH, TSH);
+      status_bar_draw();
+      top_e = HL_NONE - 1;
+      bn_state = BN_IDLE;
+      banner_focus();
+      top_update();
+    }
+  } else if (launch_dock >= 0) {
+    sm_slide_x = 0;
+    volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+    const char *path = (const char *)s->dock[launch_dock].path;
+    for (int i = 0; i < napps; i++) {
+      if (apps[i].path && dock_streq(apps[i].path, path)) {
+        banner_leave_home();
+        hk->open(&apps[i]);
+        back_home();
+        return;
+      }
+    }
+    for (u32 i = 0; i < BOT_FB_SIZE / 4; i++)
+      bottom[i] = sm_saved_bottom[i];
     screen_present_bottom();
   }
 }
@@ -1671,6 +2727,26 @@ static void button(int b) {
   } else if (b == BTN_BACK) {
     if (view != HOME_ROOT)
       go_up();
+  } else if (b == BTN_SHOP) {
+    ui_sound_select();
+    banner_leave_home();
+    if (hk->shop) hk->shop();
+    back_home();
+  } else if (b == BTN_FILES) {
+    ui_sound_select();
+    banner_leave_home();
+    if (hk->files) hk->files();
+    back_home();
+  } else if (b == BTN_CAMERA) {
+    ui_sound_select();
+    banner_leave_home();
+    if (hk->camera) hk->camera();
+    back_home();
+  } else if (b == BTN_MUSIC) {
+    ui_sound_select();
+    banner_leave_home();
+    if (hk->music) hk->music();
+    back_home();
   } else {
     ui_sound_select();
     banner_leave_home();
@@ -1686,7 +2762,7 @@ static int hit(int x, int y) {
       if (!has_btn(b))
         continue;
       btn_rect(b, &bx, &by, &bw, &bh);
-      if (touch_in(x, y, bx - 4, 0, bw + 8, BAR_Y + BAR_H + 2))
+      if (touch_in(x, y, bx - 1, 0, bw + 2, BAR_Y + BAR_H + 2))
         return HIT_BTN + b;
     }
     return HIT_NONE;
@@ -1767,7 +2843,23 @@ static void touch_step(void) {
       break;
     }
     if (iabs(x - t_x0) > SLOP || iabs(y - t_y0) > SLOP) {
-      tstate = (t_hit >= HIT_BTN && t_hit < HIT_DOT) ? T_WAIT : T_SWIPE;
+      int dx = iabs(x - t_x0), dy = iabs(y - t_y0);
+      int on_tile = t_hit >= 0 && t_hit < HOME_PER_PAGE &&
+                    entry_at(cur()) != HL_NONE;
+      int fast_h_swipe = pages() > 1 && dx > dy * 2 && anim_ms(t_t0) < 160;
+      if (t_hit >= HIT_BTN && t_hit < HIT_DOT) {
+        tstate = T_WAIT;
+      } else if (on_tile && !fast_h_swipe) {
+        int a = anim_idx(entry_at(cur()));
+        grab_dx = t_x0 - (anim_px(&pos_x[a]) - anim_px(&scroll)) + HOLD_LIFT;
+        grab_dy = t_y0 - anim_px(&pos_y[a]) + HOLD_LIFT;
+        start_carry(cur(), 1);
+        moved = 1;
+        tstate = T_DRAG;
+        drag_to(x, y);
+      } else {
+        tstate = T_SWIPE;
+      }
       break;
     }
     if (t_hit >= 0 && t_hit < HOME_PER_PAGE &&
@@ -1878,9 +2970,7 @@ static void nav_keys(u32 k) {
       if (row > 0) {
         s -= HOME_COLS;
       } else {
-        bar = col == 0 ? BTN_POWER
-              : col <= 2 ? (has_btn(BTN_BACK) ? BTN_BACK : BTN_POWER)
-                         : BTN_SETTINGS;
+        bar = BTN_SETTINGS;
       }
     }
     if (p != page || s != sel || bar >= 0) {
@@ -1909,11 +2999,13 @@ void home_init(const HomeApp *a, int n, const HomeHooks *hooks) {
   for (int i = 0; i < napps; i++)
     keys[i] = apps[i].key;
   hl_load(keys, napps);
+  dock_load();
   view = HOME_ROOT;
   page = sel = 0;
   bar = -1;
   held = HL_NONE;
   rebuild();
+  dock_sync_meta();
 }
 
 void home_reload(const HomeApp *a, int n) {
@@ -1927,13 +3019,22 @@ void home_reload(const HomeApp *a, int n) {
   bar = -1;
   held = HL_NONE;
   rebuild();
+  dock_sync_meta();
+}
+
+static int mcu_power_pressed(void) {
+  u8 irq[4];
+  return I2C_readRegBuf(I2C_DEV_MCU, 0x10, irq, sizeof(irq)) &&
+         (irq[0] & 0x01u) != 0;
 }
 
 void home_run(void) {
-  int clock_tick = 0, last_min = -1;
+  int clock_tick = 0, pwr_tick = 0, last_min = -1;
   u32 frame_at = 0;
 
   home_started = 1;
+  /* Clear any stale MCU power-button IRQ from boot. */
+  (void)mcu_power_pressed();
   for (;;) {
     u32 k;
     int ms;
@@ -1975,6 +3076,29 @@ void home_run(void) {
     }
     touch_step();
 
+    /* Physical Power button: single click = Power-Off popup, double click = Aurora Menu. */
+    if (++pwr_tick >= 16) {
+      pwr_tick = 0;
+      if (mcu_power_pressed()) {
+        int dbl = 0;
+        u32 t0 = anim_now();
+        while (anim_ms(t0) < 300) {
+          ui_idle();
+          if (anim_ms(t0) >= 35 && mcu_power_pressed()) {
+            dbl = 1;
+            break;
+          }
+        }
+        if (dbl) {
+          ui_sound_select();
+          home_system_menu();
+        } else {
+          ui_sound_select();
+          power_ask();
+        }
+      }
+    }
+
     /* The MCU is on a slow I2C bus: sample it every 96 passes and repaint only
      * when the minute changes. */
     if (++clock_tick >= 96) {
@@ -1992,12 +3116,36 @@ void home_run(void) {
     if (ms) {
       static unsigned elapsed;
       elapsed += (unsigned)ms;
-      int e = held != HL_NONE ? held : bar<0 ? entry_at(cur()) : HL_NONE;
       if (elapsed >= 100) {
-        elapsed = 0; galaxy_phase++;
-        if (e >= 0 && !HL_IS_FOLDER(e) && apps[e].icon_animation) {
-          galaxy_dirty=1;
+        elapsed = 0;
+        galaxy_phase++;
+        /* Animate all visible animated app icons (and folders containing them)
+         * even when the cursor is not moving or resting on them. */
+        int any_anim = (held >= 0 && !HL_IS_FOLDER(held) && apps[held].icon_animation);
+        int start = page * HOME_PER_PAGE;
+        int end = start + HOME_PER_PAGE;
+        if (end > ndisp) end = ndisp;
+        for (int k = start; k < end && !any_anim; k++) {
+          int it = disp[k];
+          if (it == GAP_ENTRY || it < 0)
+            continue;
+          if (HL_IS_FOLDER(it)) {
+            int f = HL_FOLDER_ID(it);
+            int fn = hl_count(f);
+            if (fn > 4) fn = 4;
+            for (int j = 0; j < fn; j++) {
+              int c = hl_at(f, j);
+              if (c >= 0 && !HL_IS_FOLDER(c) && apps[c].icon_animation) {
+                any_anim = 1;
+                break;
+              }
+            }
+          } else if (apps[it].icon_animation) {
+            any_anim = 1;
+          }
         }
+        if (any_anim)
+          galaxy_dirty = 1;
       }
       animate(ms);
     }

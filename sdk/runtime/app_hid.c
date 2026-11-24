@@ -8,6 +8,8 @@
 #include <stdlib.h>
 
 extern void os_dcache_clean_range(const void *addr, u32 len);
+extern void os_dcache_clean(void);
+extern void os_cache_sync(void);
 
 /* Raw ADC units from the rest point: the dead zone and a full push, as the
  * 3D Model screen uses them. */
@@ -21,31 +23,54 @@ static int g_tx = -1, g_ty = -1, g_cx, g_cy;
 static int g_touch;            /* 0 not set up yet, 1 usable, -1 not */
 static bool g_touch_ignore = true; /* a touch from before the app started */
 static bool g_lid_resumed;
+static u32 g_last_mod_flush;
+
+bool app_modding_allowed(void) { return true; }
 
 static u32 pad(void) {
+  u32 mod_keys = 0;
   if (app_lid_wait())
     g_lid_resumed = true;
   if (app_from_home()) {
     volatile AuroraSystemMenuShared *menu = aurora_system_menu_shared();
+    bool was_open = false;
     for (;;) {
       __asm__ volatile("mcr p15, 0, %0, c7, c6, 1"
                        : : "r"(&menu->menu_open) : "memory");
       if (!menu->menu_open)
         break;
+      if (!was_open) {
+        /* Flush dirty ARM9 data to FCRAM so ARM11 mods read up-to-date RAM. */
+        os_dcache_clean();
+        was_open = true;
+      }
       app_sock_tick();
       delay(60000);
     }
+    if (was_open) {
+      /* Pick up any memory/code modifications made while the sidebar was open. */
+      os_cache_sync();
+    }
+    __asm__ volatile("mcr p15, 0, %0, c7, c6, 1"
+                     : : "r"(&menu->mod_flush_seq) : "memory");
+    u32 seq = menu->mod_flush_seq;
+    if (seq != g_last_mod_flush) {
+      g_last_mod_flush = seq;
+      os_cache_sync();
+    }
+    mod_keys = menu->mod_keys & 0xFFFu;
   }
-  return ~REG_HID_PAD & 0xFFFu;
+  return (~REG_HID_PAD & 0xFFFu) | mod_keys;
 }
 
 /* Whatever is held as the app starts (the A that launched it) is not a new
- * press. Also tells the core's system menu that Return to Home works here. */
+ * press. Also tells the core's system menu what capabilities this app has. */
 void app_hid_init(void) {
   g_held = pad();
   if (app_from_home()) {
     volatile AuroraSystemMenuShared *menu = aurora_system_menu_shared();
-    menu->app_caps = AURORA_SYSTEM_MENU_CAP_HOME;
+    g_last_mod_flush = menu->mod_flush_seq;
+    menu->app_caps = AURORA_SYSTEM_MENU_CAP_HOME | AURORA_SYSTEM_MENU_CAP_MODDING;
     os_dcache_clean_range((const void *)&menu->app_caps,
                           sizeof(menu->app_caps));
   }

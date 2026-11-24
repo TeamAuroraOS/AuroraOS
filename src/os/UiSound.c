@@ -5,6 +5,7 @@
 #include "glb.h"
 #include "timer.h"
 #include "user.h"
+#include "wav.h"
 #include "wifi.h"
 
 /* 256 KB (4 s) for each short sound and for the three menu sounds together,
@@ -65,7 +66,57 @@ static u32 home_resume;
 static u32 tail_ticks;
 static int banner_playing;
 
+static char theme_bgm[128];
+static char theme_sfx[MENU_COUNT][128];
+
+static void copy_path(char *dst, const char *src, unsigned max) {
+  unsigned i = 0;
+  if (!src) {
+    dst[0] = '\0';
+    return;
+  }
+  while (src[i] && i + 1 < max) {
+    dst[i] = src[i];
+    i++;
+  }
+  dst[i] = '\0';
+}
+
 void ui_sound_config(u8 off) { sound_off = off; }
+
+void ui_sound_set_theme(const char *bgm_path, const char *select_path,
+                        const char *back_path, const char *move_path) {
+  copy_path(theme_bgm, bgm_path, sizeof(theme_bgm));
+  copy_path(theme_sfx[MENU_SELECT], select_path, sizeof(theme_sfx[MENU_SELECT]));
+  copy_path(theme_sfx[MENU_BACK], back_path, sizeof(theme_sfx[MENU_BACK]));
+  copy_path(theme_sfx[MENU_MOVE], move_path, sizeof(theme_sfx[MENU_MOVE]));
+}
+
+/* Loads a custom WAV as signed 16-bit mono into [addr, end); returns sample count
+ * or 0 on failure. 8-bit WAVs are expanded to 16-bit in place. */
+static u32 load_wav_16(const char *path, u32 addr, u32 end, u32 *rate) {
+  WavInfo wi;
+  u32 max_bytes = end > addr ? (end - addr) : 0;
+  if (!path || !path[0] || max_bytes < 4u)
+    return 0;
+  /* Reserve half when depth might be 8-bit? No, load up to max_bytes/2 if 8-bit
+   * by checking after load: wav_load caps at `max`, so we pass max_bytes and
+   * clamp samples to max_bytes/2 before expanding 8->16. */
+  if (wav_load(path, (u8 *)addr, max_bytes, 1, &wi) != WAV_OK || !wi.samples)
+    return 0;
+  if (wi.depth == 8u) {
+    u32 n = wi.samples;
+    if (n > max_bytes / 2u)
+      n = max_bytes / 2u;
+    const s8 *src = (const s8 *)addr;
+    s16 *dst = (s16 *)addr;
+    for (u32 i = n; i > 0; i--)
+      dst[i - 1u] = (s16)((int)src[i - 1u] << 8);
+    wi.samples = n;
+  }
+  *rate = wi.rate;
+  return wi.samples;
+}
 
 /* A Wi-Fi command keeps the core from taking any other request. */
 static int core_free(void) { return audio_ready() && !wifi_direct_active(); }
@@ -80,8 +131,24 @@ static void menu_load(void) {
   u32 addr = SLOT_MENU;
   for (int i = 0; i < MENU_COUNT; i++) {
     menu_addr[i] = addr;
-    menu_samples[i] = load(ids[i], addr, SLOT_MUSIC, &menu_rate[i]);
+    menu_samples[i] = 0;
+    if (theme_sfx[i][0])
+      menu_samples[i] = load_wav_16(theme_sfx[i], addr, SLOT_MUSIC, &menu_rate[i]);
+    if (!menu_samples[i])
+      menu_samples[i] = load(ids[i], addr, SLOT_MUSIC, &menu_rate[i]);
     addr += (menu_samples[i] * 2u + 31u) & ~31u;
+  }
+}
+
+static void home_stop(void);
+
+void ui_sound_reload_theme(void) {
+  home_stop();
+  home_resume = 0;
+  home_state = HOME_UNLOADED;
+  if (f_mount(&fs, "", 1) == FR_OK) {
+    menu_load();
+    f_mount(NULL, "", 0);
   }
 }
 
@@ -103,14 +170,24 @@ void ui_sound_boot(int startup) {
   home_shown = 1;
 }
 
-/* Reads the packed song in one go, the only part that needs the card, since
- * every other user of the card mounts and unmounts around its own work. */
+/* Reads the theme's custom bgm.wav if present, otherwise the packed built-in
+ * Home Menu song from assets.pak. */
 static void home_fetch(void) {
   u32 n = 0;
-  if (f_mount(&fs, "", 1) == FR_OK)
+  if (f_mount(&fs, "", 1) == FR_OK) {
+    if (theme_bgm[0]) {
+      n = load_wav_16(theme_bgm, HOME_PCM, HOME_PCM + HOME_PCM_MAX, &home_rate);
+      if (n) {
+        f_mount(NULL, "", 0);
+        home_samples = n;
+        home_state = HOME_READY;
+        return;
+      }
+    }
     n = asset_sound_open(ASSET_SOUND_HOME, (void *)HOME_PACKED, HOME_PACKED_MAX,
                          (int16_t *)HOME_PCM, HOME_PCM_MAX / 2u, &home_stream,
                          &home_rate);
+  }
   f_mount(NULL, "", 0);
   home_samples = n;
   home_state = n ? HOME_DECODING : HOME_FAILED;

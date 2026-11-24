@@ -27,6 +27,10 @@ typedef struct {
   void (*power_off)(void); /* does not return */
   void (*tick)(void);      /* every pass of the menu's loop */
   void (*remove_app)(const HomeApp *app); /* removes an SD app, then reloads */
+  void (*files)(void);
+  void (*camera)(void);
+  void (*music)(void);
+  void (*shop)(void);
 } HomeHooks;
 
 /* Arranges `n` apps as the layout file says (see homelayout.h). The table

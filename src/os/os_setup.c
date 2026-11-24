@@ -2636,6 +2636,8 @@ void user_config_defaults(UserConfig *cfg) {
   cfg->brightness = 3;
   cfg->sound_off = 0;
   cfg->power_off = 0;
+  cfg->camera_on = 0;
+  cfg->autoboot = 0;
 }
 
 static s16 get16(const u8 *p) { return (s16)(p[0] | (p[1] << 8)); }
@@ -2697,6 +2699,10 @@ int user_config_load(UserConfig *cfg) {
     cfg->sound_off = s_buf[USER_DAT_SOUND] & USER_SOUND_MASK;
   if (br > USER_DAT_POWER)
     cfg->power_off = s_buf[USER_DAT_POWER] & 1u;
+  if (br > USER_DAT_CAMERA)
+    cfg->camera_on = s_buf[USER_DAT_CAMERA] & 1u;
+  if (br > USER_DAT_AUTOBOOT)
+    cfg->autoboot = s_buf[USER_DAT_AUTOBOOT] & 1u;
 
   if (cfg->language >= LANG_COUNT)
     cfg->language = LANG_ENGLISH;
@@ -2732,6 +2738,8 @@ int user_config_save(const UserConfig *cfg) {
   s_buf[USER_DAT_BRIGHTNESS] = cfg->brightness <= 4 ? cfg->brightness : 3;
   s_buf[USER_DAT_SOUND] = cfg->sound_off & USER_SOUND_MASK;
   s_buf[USER_DAT_POWER] = cfg->power_off & 1u;
+  s_buf[USER_DAT_CAMERA] = cfg->camera_on & 1u;
+  s_buf[USER_DAT_AUTOBOOT] = cfg->autoboot & 1u;
   if (cfg->touch_set) {
     u8 *t = s_buf + USER_DAT_TOUCH;
     t[0] = 1;

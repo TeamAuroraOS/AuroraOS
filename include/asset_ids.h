@@ -188,9 +188,16 @@
 #define ASSET_FONT_UI                    182u
 #define ASSET_FONT_BOLD                  183u
 #define ASSET_FONT_TITLE                 184u
+#define ASSET_APP_CAMERA_64              185u
+#define ASSET_APP_CAMERA_32              186u
+#define ASSET_APP_CAMERA_16              187u
+#define ASSET_ICON_FOLDER_BAR_16         188u
+#define ASSET_ICON_FOLDER_BAR_64         189u
+#define ASSET_ICON_SHOP_BAR_16           190u
+#define ASSET_ICON_SHOP_BAR_64           191u
 
-#define ASSET_COUNT 185u
-#define ASSET_ARENA_NEEDED 730368u
+#define ASSET_COUNT 192u
+#define ASSET_ARENA_NEEDED 744448u
 #define ASSET_MAX_CSIZE 72035u
 
 #define ASSET_SOUND_STARTUP              0u
