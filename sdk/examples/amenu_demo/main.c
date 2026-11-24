@@ -1,14 +1,4 @@
-/* amenu_demo: Example /Aurora/amenu sidebar plugin for AuroraOS.
- *
- * Build with:
- *   python sdk/aurcc.py build --amenu sdk/examples/amenu_demo -o amenu_demo.bin
- * Copy amenu_demo.bin to SD:/Aurora/amenu/ on the SD card.
- *
- * Demonstrates:
- *  - Custom Tesla-style sidebar mini-app menu
- *  - Persistent top-screen HUD overlay (even while sidebar is closed)
- *  - Live app inspection & memory modding (gated by the app's modding switch)
- */
+// Example mod for Aurora Menu
 #include <aurora_amenu.h>
 
 static int g_sel = 0;
@@ -87,12 +77,8 @@ static int on_frame(const AmenuApi *api, uint32_t held, uint32_t down) {
   }
 
   api->sidebar_clear();
-  api->sidebar_header("Aurora ModKit", mod_ok ? "MOD: ON" : "MOD: OFF");
+  api->sidebar_header("Aurora Menu Example", mod_ok ? "MOD: ON" : "MOD: OFF");
   api->sidebar_item(0, "Status HUD", g_hud ? "ON" : "OFF", g_sel == 0);
-  api->sidebar_item(1, "Turbo A Mod",
-                    mod_ok ? (g_turbo_a ? "ON" : "OFF") : "LOCKED", g_sel == 1);
-  api->sidebar_item(2, "Peek Addr", addr_s, g_sel == 2);
-  api->sidebar_item(3, "Word +1", val_s, g_sel == 3);
   api->sidebar_item(4, "Back", "", g_sel == 4);
   api->sidebar_footer(g_sel == 2 ? "</>: Addr  B: Back" : "A: Toggle  B: Back");
   return 1;
