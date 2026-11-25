@@ -14,7 +14,7 @@
 
 /* audio_boot() replaces a running core whose version differs, so bump this on
  * any core change. */
-#define AUDIO_CORE_VERSION 130
+#define AUDIO_CORE_VERSION 150
 
 /* The first core that understands AUDIO_CMD_PARK. An older one can only be
  * replaced by powering the console off. */
@@ -65,6 +65,7 @@ enum {
   AUDIO_CMD_BRIGHTNESS = 14, /* arg0 = brightness level 0..4; the LCD */
                              /* readbacks come back in diag4..7 */
   AUDIO_CMD_SMP = 15,        /* arg0 = SMP_OP_*, arg1 its operand (smp.h) */
+  AUDIO_CMD_CAM = 16,        /* arg0 = CAM_OP_*, arg1 = CAM_FRONT/BACK */
 };
 
 enum {

@@ -54,7 +54,6 @@ static Asset g_assets[ASSET_COUNT];
 static int g_ok;
 static const char *g_err = "not loaded";
 
-static PakEntry g_table[ASSET_COUNT];
 static uint8_t g_scratch[ASSET_MAX_CSIZE];
 
 static PakSound g_sounds[ASSET_SOUND_COUNT]; /* size 0: not in the pack */
@@ -172,9 +171,11 @@ static void sounds_read(FIL *f, const PakHead *head, FSIZE_t file_size) {
 
 int assets_read(void) {
   static FIL f;
+  static PakEntry batch[32];
   PakHead head;
   UINT br;
-  uint32_t i, used = 0;
+  uint32_t base, used = 0;
+  int skipped = 0;
   uint8_t seen[ASSET_COUNT] = {0};
   uint32_t expected_data_off;
   FSIZE_t file_size;
@@ -193,77 +194,85 @@ int assets_read(void) {
     f_close(&f);
     return fail("pack magic/version mismatch");
   }
-  if (head.count != ASSET_COUNT) {
+  file_size = f_size(&f);
+  if (!head.count || file_size < sizeof(PakHead) ||
+      head.count > (file_size - sizeof(PakHead)) / sizeof(PakEntry)) {
     f_close(&f);
-    return fail("pack does not match this build");
-  }
-  if (head.arena > ASSETS_ARENA_MAX) {
-    f_close(&f);
-    return fail("pack too large for the arena");
+    return fail("pack index count invalid");
   }
 
   expected_data_off = sizeof(PakHead) + sizeof(PakEntry) * head.count;
-  file_size = f_size(&f);
   if (head.data_off != expected_data_off || head.data_off > file_size) {
     f_close(&f);
     return fail("pack index offset invalid");
   }
 
-  if (f_read(&f, g_table, sizeof(PakEntry) * head.count, &br) != FR_OK ||
-      br != sizeof(PakEntry) * head.count) {
-    f_close(&f);
-    return fail("pack index unreadable");
+  for (base = 0; base < head.count; base += 32u) {
+    uint32_t chunk = head.count - base;
+    if (chunk > 32u)
+      chunk = 32u;
+    if (f_lseek(&f, sizeof(PakHead) + base * sizeof(PakEntry)) != FR_OK ||
+        f_read(&f, batch, sizeof(PakEntry) * chunk, &br) != FR_OK ||
+        br != sizeof(PakEntry) * chunk) {
+      f_close(&f);
+      return fail("pack index unreadable");
+    }
+    for (uint32_t j = 0; j < chunk; j++) {
+      const PakEntry *e = &batch[j];
+      if (e->id >= ASSET_COUNT) {
+        /* Newer pack entry unknown to this build: skip cleanly so apps never
+         * need recompiling when assets.pak grows. */
+        skipped = 1;
+        continue;
+      }
+      if (seen[e->id] || !e->usize || !e->csize ||
+          e->csize > sizeof(g_scratch) || used > ASSETS_ARENA_MAX ||
+          e->usize > ASSETS_ARENA_MAX - used || e->off < head.data_off ||
+          e->off > file_size || e->csize > file_size - e->off) {
+        f_close(&f);
+        return fail("pack entry out of range");
+      }
+      seen[e->id] = 1;
+      if (f_lseek(&f, e->off) != FR_OK ||
+          f_read(&f, g_scratch, e->csize, &br) != FR_OK || br != e->csize) {
+        f_close(&f);
+        return fail("pack payload unreadable");
+      }
+      if (!rle_decode(g_scratch, e->csize, arena + used, e->usize)) {
+        f_close(&f);
+        return fail("pack payload malformed");
+      }
+      if (e->type == ASSET_TYPE_ALPHA8 || e->type == ASSET_TYPE_RGBA) {
+        uint64_t expected = (uint64_t)e->w * e->h;
+        if (e->type == ASSET_TYPE_RGBA)
+          expected *= 4u;
+        if (!e->w || !e->h || expected != e->usize) {
+          f_close(&f);
+          return fail("pack image size invalid");
+        }
+      } else if (e->type == ASSET_TYPE_FONT) {
+        const AssetFontHead *font = (const AssetFontHead *)(arena + used);
+        uint64_t expected = sizeof(AssetFontHead) +
+                            (uint64_t)font->count * sizeof(AssetGlyph) +
+                            (uint64_t)font->atlas_w * font->atlas_h;
+        if (!font->count || !font->atlas_w || !font->atlas_h ||
+            expected != e->usize) {
+          f_close(&f);
+          return fail("pack font size invalid");
+        }
+      } else {
+        f_close(&f);
+        return fail("pack asset type invalid");
+      }
+      g_assets[e->id].type = e->type;
+      g_assets[e->id].w = e->w;
+      g_assets[e->id].h = e->h;
+      g_assets[e->id].data = arena + used;
+      used += (e->usize + 3u) & ~3u;
+    }
   }
 
-  for (i = 0; i < head.count; i++) {
-    const PakEntry *e = &g_table[i];
-    if (e->id >= ASSET_COUNT || seen[e->id] || !e->usize || !e->csize ||
-        e->csize > ASSET_MAX_CSIZE || used > ASSETS_ARENA_MAX ||
-        e->usize > ASSETS_ARENA_MAX - used || e->off < head.data_off ||
-        e->off > file_size || e->csize > file_size - e->off) {
-      f_close(&f);
-      return fail("pack entry out of range");
-    }
-    seen[e->id] = 1;
-    if (f_lseek(&f, e->off) != FR_OK ||
-        f_read(&f, g_scratch, e->csize, &br) != FR_OK || br != e->csize) {
-      f_close(&f);
-      return fail("pack payload unreadable");
-    }
-    if (!rle_decode(g_scratch, e->csize, arena + used, e->usize)) {
-      f_close(&f);
-      return fail("pack payload malformed");
-    }
-    if (e->type == ASSET_TYPE_ALPHA8 || e->type == ASSET_TYPE_RGBA) {
-      uint64_t expected = (uint64_t)e->w * e->h;
-      if (e->type == ASSET_TYPE_RGBA)
-        expected *= 4u;
-      if (!e->w || !e->h || expected != e->usize) {
-        f_close(&f);
-        return fail("pack image size invalid");
-      }
-    } else if (e->type == ASSET_TYPE_FONT) {
-      const AssetFontHead *font = (const AssetFontHead *)(arena + used);
-      uint64_t expected = sizeof(AssetFontHead) +
-                          (uint64_t)font->count * sizeof(AssetGlyph) +
-                          (uint64_t)font->atlas_w * font->atlas_h;
-      if (!font->count || !font->atlas_w || !font->atlas_h ||
-          expected != e->usize) {
-        f_close(&f);
-        return fail("pack font size invalid");
-      }
-    } else {
-      f_close(&f);
-      return fail("pack asset type invalid");
-    }
-    g_assets[e->id].type = e->type;
-    g_assets[e->id].w = e->w;
-    g_assets[e->id].h = e->h;
-    g_assets[e->id].data = arena + used;
-    used += (e->usize + 3u) & ~3u;
-  }
-
-  if (used != head.arena) {
+  if (!skipped && used != head.arena) {
     f_close(&f);
     return fail("pack arena size mismatch");
   }

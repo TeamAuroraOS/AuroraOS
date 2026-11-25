@@ -72,6 +72,7 @@ void app_hid_init(void);
 void app_con_write(const char *p, size_t n);
 
 void app_snd_leave(void);
+void app_cam_leave(void);
 
 /* A network call is with the core: nothing else may be posted to it. */
 bool app_net_busy(void);

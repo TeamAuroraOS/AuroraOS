@@ -157,6 +157,7 @@ void app_leave(int code) {
     g_app_sock->leave();
   app_net_leave();
   app_fs_close_all();
+  app_cam_leave();
   app_snd_leave();
   gpu_wait_idle();
   /* Presents switch the panels between framebuffers A, B and C; the Home

@@ -48,6 +48,9 @@ int battery_charging(void);
 /* Raw MCU power-status register, for diagnosing the charging bit. */
 int power_status_raw(void);
 
+/* Set the 3DS RGB notification LED to a solid color (0,0,0 = off). */
+void power_set_led(uint8_t r, uint8_t g, uint8_t b);
+
 /* Through the MCU; neither returns. */
 void power_shutdown(void);
 void power_reboot(void);

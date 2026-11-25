@@ -47,6 +47,7 @@ _Static_assert(sizeof(aos_header_t) == 36,
 
 /* Load AURORAOS.BIN from the SD card and jump into the ARM9 payload. */
 void boot_aurora(void);
+void boot_aurora_ex(int quiet);
 
 /* ARM9 cache-flush + branch stub. */
 void aurora_jump_arm9(uint32_t entry);

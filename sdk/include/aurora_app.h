@@ -78,6 +78,14 @@ bool app_from_home(void);
 const char *app_path(void);
 const char *app_dir(void);
 
+/* Always true: AuroraOS allows /Aurora/amenu plugins to inspect and mod all
+ * running apps. */
+bool app_modding_allowed(void);
+
+/* Kept for source compatibility; modding is always enabled for all apps. */
+#define AURORA_APP_MODDING(allow) \
+  const uint32_t _app_allow_modding = 1u
+
 /* Leaving: return from main() or call exit(). Functions given to atexit()
  * run first, also when the user presses HOME, so that is the place to save.
  * Open stdio files are flushed and closed either way. */
@@ -572,6 +580,37 @@ void video_pause(bool on);
 /* To the nearest segment start at or before `ms`. */
 bool video_seek(int32_t ms);
 void video_stats(VideoStats *out);
+
+/* ---- Camera --------------------------------------------------------------
+ * Live 320x240 BGR24 camera streaming (front/inner and back/outer cameras).
+ * Requires Settings > Camera to be turned ON (default OFF). If an app calls
+ * cam_start() while Settings > Camera is OFF, AuroraOS displays a "Camera Off"
+ * pop-up telling the user to enable it in Settings and returns false. */
+#define CAMERA_FRONT  0
+#define CAMERA_BACK   1
+#define CAMERA_WIDTH  320
+#define CAMERA_HEIGHT 240
+
+/* True when Settings > Camera permission is turned ON. */
+bool cam_allowed(void);
+/* Starts streaming from CAMERA_FRONT or CAMERA_BACK (turns on the Camera LED).
+ * Shows the "Camera Off" pop-up and returns false if disabled in Settings. */
+bool cam_start(int which);
+/* Stops streaming and turns off the Camera LED (also called automatically on exit). */
+void cam_stop(void);
+/* True once at least one live frame is ready. */
+bool cam_ready(void);
+/* Increments each time ARM11 publishes a fresh 320x240 BGR24 frame. */
+uint32_t cam_frame_seq(void);
+/* Pointer to the newest 320x240 column-major BGR24 frame (or NULL if not ready). */
+const uint8_t *cam_frame_bgr(void);
+/* Fast blit of the latest 320x240 frame onto `screen` at horizontal offset `x_off`
+ * (e.g. x_off = 40 centers on SCREEN_TOP, x_off = 0 fills SCREEN_BOTTOM). */
+bool cam_draw(Screen screen, int x_off);
+/* Saves the current camera frame as a 24-bit BMP to `path` on the SD card. */
+bool cam_save_bmp(const char *path);
+/* Controls the 3DS Camera LED (requires camera permission to turn on). */
+void cam_set_led(bool on);
 
 #ifdef __cplusplus
 }

@@ -185,6 +185,21 @@ static void mcu_power(uint8_t bit) {
     __asm__ volatile("mcr p15, 0, r0, c7, c0, 4");
 }
 
+/* Set the 3DS RGB notification LED via MCU reg 0x2D (100-byte pattern). */
+void power_set_led(uint8_t r, uint8_t g, uint8_t b) {
+  uint8_t pat[100];
+  pat[0] = 0x00; /* delay */
+  pat[1] = 0x00; /* smoothing */
+  pat[2] = 0xFF; /* loop delay: stay on indefinitely */
+  pat[3] = 0x00; /* blink speed */
+  for (int i = 0; i < 32; i++) {
+    pat[4 + i]  = r;
+    pat[36 + i] = g;
+    pat[68 + i] = b;
+  }
+  I2C_writeRegBuf(I2C_DEV_MCU, 0x2D, pat, sizeof(pat));
+}
+
 void power_shutdown(void) { mcu_power(1u << 0); }
 
 void power_reboot(void) { mcu_power(1u << 2); }

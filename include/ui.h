@@ -55,6 +55,10 @@ void ui_bg_invalidate(void);
 /* Decodes two PNGs of exactly the screens' sizes into the wallpaper cache; the
  * card must be mounted. 0 if either fails. */
 int ui_theme_load(const char *top_path, const char *bottom_path);
+/* Rich theme loader: either path may be NULL (falls back to gradient using
+ * bg_top_c..bg_bot_c), and PNG or JPEG of any resolution is scaled to fill. */
+int ui_theme_load_ex(const char *top_path, const char *bottom_path,
+                     Color bg_top_c, Color bg_bot_c);
 void ui_theme_clear(void);
 
 /* The cached background for one rectangle, to erase a widget before redrawing

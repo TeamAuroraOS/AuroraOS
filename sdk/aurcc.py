@@ -32,13 +32,23 @@ RUNTIME_DIR = SDK_DIR / "runtime"
 OS_INCLUDE = AURORA_ROOT / "include"
 OS_SRC = AURORA_ROOT / "src"
 LINKER_SCRIPT = RUNTIME_DIR / "app.ld"
+AMENU_LINKER_SCRIPT = RUNTIME_DIR / "amenu.ld"
 DEFAULT_BUILD_DIR = SDK_DIR / "build"
 PNG_READER = AURORA_ROOT / "tools" / "png_read.py"
 
+AMENU_LINK_BASE = 0x27000000
+AMENU_ABI_VERSION = 1
+AMENU_HEADER_FMT = "<4sIIIIIIIII"  # include/amenu.h AmenuFileHeader, 40 bytes
+AMENU_CFLAGS = [
+    "-mcpu=arm946e-s", "-march=armv5te", "-marm", "-mno-unaligned-access",
+    "-ffreestanding", "-fno-builtin", "-Wall", "-Wextra", "-g",
+    "-ffunction-sections", "-fdata-sections", "-I" + str(SDK_INCLUDE),
+]
+
 RUNTIME_SOURCES = [RUNTIME_DIR / n for n in (
     "app_start.s", "app_main.c", "app_gfx.c", "app_console.c", "app_hid.c",
-    "app_sound.c", "app_fs.c", "app_sys.c", "app_syscalls.c", "app_net.c",
-    "app_socket.c", "app_dirent.c")]
+    "app_sound.c", "app_cam.c", "app_fs.c", "app_sys.c", "app_syscalls.c",
+    "app_net.c", "app_socket.c", "app_dirent.c")]
 # The OS's own code: drawing, GPU presents, touch, the timer, I2C (HOME, the
 # clock, the battery), FatFs and the SD driver, images, WAV, the crash screen,
 # and the network (AppNet.c, with the join's request and WPA2 key, and HTTPS:
@@ -206,9 +216,9 @@ def load_icon(path: Path | None) -> bytes:
         raise BuildError(f"cannot read icon {path}: {e}")
 
 
-def header_asm(icon: bytes, name: str) -> str:
+def header_asm(icon: bytes, name: str, allow_modding: bool = True) -> str:
     """The app header the Home Menu reads (docs/apps.md, "Per-app icons"),
-    and the default name app_path() falls back on."""
+    the default name app_path() falls back on, and the weak modding switch."""
     lines = [
         '.section .aurhead, "ax"',
         ".arm",
@@ -226,6 +236,13 @@ def header_asm(icon: bytes, name: str) -> str:
         "_app_default_name:",
         f'    .asciz "{name}"',
         ".size _app_default_name, .-_app_default_name",
+        '.section .rodata._app_allow_modding, "a"',
+        ".weak _app_allow_modding",
+        ".type _app_allow_modding, %object",
+        ".align 2",
+        "_app_allow_modding:",
+        "    .word 1",
+        ".size _app_allow_modding, .-_app_allow_modding",
     ]
     return "\n".join(lines) + "\n"
 
@@ -335,7 +352,11 @@ def build(inputs: list, output: Path | None, *, icon: Path | None = None,
           build_dir: Path = DEFAULT_BUILD_DIR, cflags: list | None = None,
           opt: str = "2", magic: str = "AURC", rebuild: bool = False,
           video: bool = False, verbose: bool = False,
-          banner: Path | None = None) -> Path:
+          banner: Path | None = None, allow_modding: bool = True,
+          amenu: bool = False) -> Path:
+    if amenu:
+        return build_amenu(inputs, output, build_dir=build_dir, cflags=cflags,
+                           opt=opt, verbose=verbose)
     find_tool(CC)
     find_tool(OBJCOPY)
     sources, found_icon = collect_sources(inputs)
@@ -351,7 +372,9 @@ def build(inputs: list, output: Path | None, *, icon: Path | None = None,
     work = build_dir / "apps" / re.sub(r"[^A-Za-z0-9_.-]", "_", name)
     work.mkdir(parents=True, exist_ok=True)
     head_s = work / "app_header.s"
-    head_s.write_text(header_asm(load_icon(icon), name), encoding="ascii")
+    head_s.write_text(header_asm(load_icon(icon), name,
+                                 allow_modding=allow_modding),
+                      encoding="ascii")
     head_o = work / "app_header.o"
 
     flags = APP_CFLAGS + [f"-O{opt}"] + (cflags or [])
@@ -394,17 +417,128 @@ def build(inputs: list, output: Path | None, *, icon: Path | None = None,
     return output
 
 
-def bss_end(elf: Path) -> int:
+def elf_symbols(elf: Path) -> dict[str, int]:
     nm = shutil.which(NM)
     if not nm:
-        return 0
+        return {}
     proc = subprocess.run([nm, str(elf)], capture_output=True, text=True,
                           env=tool_env())
+    syms: dict[str, int] = {}
     for line in proc.stdout.splitlines():
         parts = line.split()
-        if len(parts) == 3 and parts[2] == "_app_bss_end":
-            return int(parts[0], 16)
-    return 0
+        if len(parts) == 3:
+            try:
+                syms[parts[2]] = int(parts[0], 16)
+            except ValueError:
+                pass
+    return syms
+
+
+def bss_end(elf: Path) -> int:
+    return elf_symbols(elf).get("_app_bss_end", 0)
+
+
+def extract_amenu_relocs(elf_bytes: bytes, payload_size: int) -> list[int]:
+    """Read R_ARM_ABS32 / R_ARM_TARGET1 offsets from an ELF32 linked with
+    --emit-relocs, returning sorted offsets relative to AMENU_LINK_BASE."""
+    if len(elf_bytes) < 52 or elf_bytes[:4] != b"\x7fELF":
+        raise BuildError("invalid ELF output when packing amenu plugin")
+    _, _, _, _, _, _, shoff, _, _, _, _, shentsize, shnum, _ = struct.unpack_from(
+        "<16sHHIIIIIHHHHHH", elf_bytes, 0)
+    sections = []
+    for i in range(shnum):
+        off = shoff + i * shentsize
+        sections.append(struct.unpack_from("<IIIIIIIIII", elf_bytes, off))
+
+    relocs: set[int] = set()
+    SHT_RELA, SHT_NOBITS, SHT_REL = 4, 8, 9
+    SHF_ALLOC = 0x2
+    for sh in sections:
+        _, sh_type, _, _, sh_offset, sh_size, _, sh_info, _, sh_entsize = sh
+        if sh_type not in (SHT_REL, SHT_RELA):
+            continue
+        if sh_info >= len(sections):
+            continue
+        _, t_type, t_flags, *_ = sections[sh_info]
+        if not (t_flags & SHF_ALLOC) or t_type == SHT_NOBITS:
+            continue
+        stride = sh_entsize or (12 if sh_type == SHT_RELA else 8)
+        for pos in range(sh_offset, sh_offset + sh_size, stride):
+            r_offset, r_info = struct.unpack_from("<II", elf_bytes, pos)
+            r_type = r_info & 0xFF
+            if r_type in (2, 38):  # R_ARM_ABS32, R_ARM_TARGET1
+                if AMENU_LINK_BASE <= r_offset < AMENU_LINK_BASE + payload_size:
+                    relocs.add(r_offset - AMENU_LINK_BASE)
+    return sorted(relocs)
+
+
+def build_amenu(inputs: list, output: Path | None, *,
+                build_dir: Path = DEFAULT_BUILD_DIR,
+                cflags: list | None = None, opt: str = "2",
+                verbose: bool = False) -> Path:
+    """Build a relocatable /Aurora/amenu plugin (.bin, magic AMNU)."""
+    find_tool(CC)
+    find_tool(OBJCOPY)
+    sources, _ = collect_sources(inputs)
+    first = Path(inputs[0])
+    stem = first.resolve().name if first.is_dir() else first.stem
+    if output is None:
+        output = Path(stem + ".bin")
+    name = safe_name(output.stem)
+
+    work = build_dir / "amenu" / re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+    work.mkdir(parents=True, exist_ok=True)
+    flags = AMENU_CFLAGS + [f"-O{opt}"] + (cflags or [])
+    jobs, objs = [], []
+    common = Path(os.path.commonpath([str(s.resolve().parent) for s in sources]))
+    for src in sources:
+        obj = work / obj_name(src, common)
+        objs.append(obj)
+        jobs.append((src, obj, ARCH if src.suffix == ".s" else flags))
+    compile_all(jobs, verbose)
+
+    elf = work / (name + ".elf")
+    payload = work / (name + ".payload")
+    run([CC, *ARCH, "-T", AMENU_LINKER_SCRIPT, "-nostartfiles", "-nostdlib",
+         "-Wl,--emit-relocs", "-Wl,--gc-sections", "-Wl,--build-id=none",
+         "-Wl,--no-warn-rwx-segments", *objs, "-lgcc", "-o", elf], verbose)
+    run([OBJCOPY, "-O", "binary", elf, payload], verbose)
+
+    syms = elf_symbols(elf)
+    if "amenu_plugin_entry" not in syms:
+        raise BuildError("amenu plugin must export AMENU_EXPORT_PLUGIN(...)")
+    entry_off = syms["amenu_plugin_entry"] - AMENU_LINK_BASE
+    bss_start = syms.get("_amenu_bss_start", AMENU_LINK_BASE)
+    bss_end_addr = syms.get("_amenu_bss_end", bss_start)
+    bss_size = max(0, bss_end_addr - bss_start)
+
+    data = payload.read_bytes()
+    pad = (-len(data)) & 3
+    if pad:
+        data += b"\x00" * pad
+    relocs = extract_amenu_relocs(elf.read_bytes(), len(data))
+
+    reloc_offset = 40 + len(data)
+    reloc_bytes = b"".join(struct.pack("<I", off) for off in relocs)
+    header = struct.pack(
+        AMENU_HEADER_FMT,
+        b"AMNU",
+        AMENU_ABI_VERSION,
+        AMENU_LINK_BASE,
+        entry_off,
+        len(data),
+        bss_size,
+        reloc_offset,
+        len(relocs),
+        0,
+        0,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    image = header + data + reloc_bytes
+    output.write_bytes(image)
+    print(f"Built amenu plugin {output} ({len(image):,} bytes; "
+          f"payload {len(data):,}, bss {bss_size:,}, {len(relocs)} relocs)")
+    return output
 
 
 TEMPLATE = """\
@@ -445,6 +579,69 @@ int main(void) {{
 """
 
 
+AMENU_TEMPLATE = """\
+// {name}: an Aurora Menu (/Aurora/amenu) sidebar plugin.
+// Build: python <AuroraOS>/sdk/aurcc.py build --amenu {name} -o {name}.bin
+// Copy {name}.bin to SD:/Aurora/amenu/ on the SD card.
+#include <aurora_amenu.h>
+
+static int g_sel = 0;
+static int g_hud = 0;
+
+static void on_open(const AmenuApi *api) {{
+  (void)api;
+  g_sel = 0;
+}}
+
+static int on_frame(const AmenuApi *api, uint32_t held, uint32_t down) {{
+  (void)held;
+  if (down & AMENU_KEY_B)
+    return 0;
+  if (down & AMENU_KEY_UP)
+    g_sel = g_sel > 0 ? g_sel - 1 : 1;
+  if (down & AMENU_KEY_DOWN)
+    g_sel = g_sel < 1 ? g_sel + 1 : 0;
+  if (down & AMENU_KEY_A) {{
+    if (g_sel == 0)
+      g_hud = !g_hud;
+    else
+      return 0;
+  }}
+
+  api->sidebar_clear();
+  api->sidebar_header("{name}", api->app_modding_allowed() ? "MOD: ON" : "MOD: OFF");
+  api->sidebar_item(0, "HUD Overlay", g_hud ? "ON" : "OFF", g_sel == 0);
+  api->sidebar_item(1, "Back", "", g_sel == 1);
+  api->sidebar_footer("A: Toggle  B: Back");
+  return 1;
+}}
+
+static void on_hud(const AmenuApi *api, int app_active, int modding_allowed) {{
+  if (!g_hud)
+    return;
+  api->hud_rect(AMENU_SCREEN_TOP, 4, 4, 132, 16, AMENU_COL_BLACK, 180);
+  api->hud_text(AMENU_SCREEN_TOP, 8, 8,
+                app_active ? (modding_allowed ? "{name} [MOD]" : "{name}") : "{name} [OS]",
+                api->accent_color());
+}}
+
+static const AmenuPlugin g_plugin = {{
+  AMENU_ABI_VERSION,
+  "{name}",
+  "Aurora SDK",
+  "1.0",
+  AMENU_FLAG_HAS_MENU | AMENU_FLAG_HAS_HUD,
+  NULL,
+  on_open,
+  on_frame,
+  on_hud,
+  NULL,
+}};
+
+AMENU_EXPORT_PLUGIN(g_plugin);
+"""
+
+
 def shown(path: Path) -> str:
     """Relative to here when that stays below here, else absolute."""
     try:
@@ -464,7 +661,8 @@ def cmd_build(a) -> int:
               cflags=[f"-I{d}" for d in a.include] + [f"-D{d}" for d in a.define]
               + (a.cflags.split() if a.cflags else []),
               opt=a.opt, magic=a.magic, rebuild=a.rebuild, video=a.video,
-              verbose=a.verbose, banner=Path(a.banner) if a.banner else None)
+              verbose=a.verbose, banner=Path(a.banner) if a.banner else None,
+              allow_modding=a.allow_modding, amenu=a.amenu)
     except BuildError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -478,6 +676,14 @@ def cmd_new(a) -> int:
         print(f"Error: {folder} exists and is not empty", file=sys.stderr)
         return 1
     folder.mkdir(parents=True, exist_ok=True)
+    if a.amenu:
+        (folder / "main.c").write_text(AMENU_TEMPLATE.format(name=name),
+                                       encoding="ascii")
+        print(f"Created {shown(folder)}/main.c (Aurora Menu plugin)")
+        print(f"Build:  python {shown(Path(__file__))} build --amenu "
+              f"{shown(folder)} -o {name}.bin")
+        print(f"Then copy {name}.bin to SD:/Aurora/amenu on the card.")
+        return 0
     (folder / "main.c").write_text(TEMPLATE.format(name=name),
                                    encoding="ascii")
     (folder / (name + ".icon")).write_text(
@@ -528,6 +734,17 @@ def main(argv=None) -> int:
     b.add_argument("--video", action="store_true",
                    help="include the video engine (about 2 MB; the first build "
                         "also compiles FFmpeg)")
+    b.add_argument("--amenu", action="store_true",
+                   help="build a relocatable Aurora Menu plugin (.bin, magic "
+                        "AMNU) for SD:/Aurora/amenu/")
+    mod = b.add_mutually_exclusive_group()
+    mod.add_argument("--allow-modding", dest="allow_modding",
+                     action="store_true", default=True,
+                     help="allow /Aurora/amenu plugins to mod this app "
+                          "(default for newly compiled apps)")
+    mod.add_argument("--no-modding", dest="allow_modding",
+                     action="store_false",
+                     help="disallow /Aurora/amenu plugins from modding this app")
     b.add_argument("-v", "--verbose", action="store_true",
                    help="show the toolchain commands")
     b.set_defaults(func=cmd_build)
@@ -535,6 +752,8 @@ def main(argv=None) -> int:
     n = sub.add_parser("new", help="start a project folder")
     n.add_argument("name")
     n.add_argument("--dir", help="where to create it (default: here)")
+    n.add_argument("--amenu", action="store_true",
+                   help="create an /Aurora/amenu sidebar plugin project")
     n.set_defaults(func=cmd_new)
 
     v = sub.add_parser("version", help="print versions and the toolchain")

@@ -15,6 +15,7 @@ int stereo11_is3d(void);
 void stereo11_blank(int on);
 void stereo11_barrier(GpuShared *g, uint32_t flags, uint32_t pattern);
 void p3d11_run(GpuShared *g);
+void system_menu11_draw_hud(int panel, uint32_t fb_addr);
 
 typedef volatile uint32_t vu32;
 #define GREG(off) (*(vu32 *)(GPU_REG_BASE + (off)))
@@ -449,6 +450,8 @@ static void present_one(GpuShared *g, int i, uint32_t src, uint32_t len) {
   const Panel *p = &panels[i];
   if (mode[i] == GPU_VSYNC_OFF) {
     ppf_copy(g, src, p->fb[0], len);
+    if (!g->err)
+      system_menu11_draw_hud(i, p->fb[0]);
     if (i == 0 && stereo_fb[0]) {
       stereo_fb[0] = 0;
       show(0, 0);
@@ -461,6 +464,7 @@ static void present_one(GpuShared *g, int i, uint32_t src, uint32_t len) {
   ppf_copy(g, src, p->fb[f], len);
   if (g->err)
     return;
+  system_menu11_draw_hud(i, p->fb[f]);
   if (!blank_wait(i, mode[i]))
     missed[i]++;
   show(i, f);
@@ -497,6 +501,7 @@ static void present_set(GpuShared *g, uint32_t top, uint32_t right,
     }
     if (g->err)
       return;
+    system_menu11_draw_hud(i, panels[i].fb[k]);
     if (mode[i] == GPU_VSYNC_OFF) {
       if (i == 0 && was != stereo_fb[0])
         show(0, 0);
@@ -601,6 +606,14 @@ int gpu11_menu_frame(void) {
     return -1;
   menu_saved_bottom = shown[1];
   return (shown[1] + 1) % 3;
+}
+
+int gpu11_menu_prev_frame(void) {
+  return menu_saved_bottom >= 0 ? menu_saved_bottom : shown[1];
+}
+
+int gpu11_front_frame(int panel) {
+  return (panel == 0 || panel == 1) ? shown[panel] : 0;
 }
 
 void gpu11_menu_show(int frame) {

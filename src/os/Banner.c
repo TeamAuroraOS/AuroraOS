@@ -11,9 +11,10 @@
 extern void os_dcache_flush(void);
 
 #define AR_BASE    BANNER_ARENA_ADDR
+#define AR_WALL    (BANNER_ARENA_ADDR + 0x00580000u)
 #define AR_SCRATCH (BANNER_ARENA_ADDR + 0x00600000u)
 #define AR_FILE    (BANNER_ARENA_ADDR + 0x00700000u)
-#define AR_END     AR_SCRATCH
+#define AR_END     AR_WALL
 
 #define MAX_TEX   48
 #define MAX_MESH  64
@@ -102,6 +103,7 @@ typedef struct {
   s16 img_x, img_y;
   u16 img_w, img_h, img_scale;
   u32 pcm, pcm_samples, pcm_rate;
+  u32 static_top;
   u32 list, dynv, dyni;
   const char *err;
 } Banner;
@@ -169,13 +171,22 @@ static s64 deg_at(s32 phase, s32 speed, u32 ms) {
   return (s64)phase + (s64)speed * (s64)ms / 1000;
 }
 
+static u32 crc_tab[256];
+static int crc_tab_ready;
+
 static u32 crc_step(u32 crc, const u8 *p, u32 n) {
-  crc = ~crc;
-  while (n--) {
-    crc ^= *p++;
-    for (int k = 0; k < 8; k++)
-      crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+  if (!crc_tab_ready) {
+    for (u32 i = 0; i < 256u; i++) {
+      u32 c = i;
+      for (int k = 0; k < 8; k++)
+        c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+      crc_tab[i] = c;
+    }
+    crc_tab_ready = 1;
   }
+  crc = ~crc;
+  while (n--)
+    crc = (crc >> 8) ^ crc_tab[(crc ^ *p++) & 0xFFu];
   return ~crc;
 }
 
@@ -217,22 +228,34 @@ static void px565(u32 fmt, u16 v, u8 *o) {
   }
 }
 
-static u32 tile_offset(u32 x, u32 y, u32 w) {
-  u32 mo = (x & 1u) | ((y & 1u) << 1) | ((x & 2u) << 1) | ((y & 2u) << 2) |
-           ((x & 4u) << 2) | ((y & 4u) << 3);
-  return (((y >> 3) * (w >> 3) + (x >> 3)) * 64u + mo) * 4u;
-}
+static const u8 morton64[64] = {
+    0,  1,  4,  5, 16, 17, 20, 21,
+    2,  3,  6,  7, 18, 19, 22, 23,
+    8,  9, 12, 13, 24, 25, 28, 29,
+   10, 11, 14, 15, 26, 27, 30, 31,
+   32, 33, 36, 37, 48, 49, 52, 53,
+   34, 35, 38, 39, 50, 51, 54, 55,
+   40, 41, 44, 45, 56, 57, 60, 61,
+   42, 43, 46, 47, 58, 59, 62, 63,
+};
 
 static void tile(const u8 *src, u32 w, u32 h, u8 *dst) {
-  for (u32 y = 0; y < h; y++)
-    for (u32 x = 0; x < w; x++) {
-      const u8 *s = src + (y * w + x) * 4u;
-      u8 *d = dst + tile_offset(x, y, w);
-      d[0] = s[3];
-      d[1] = s[2];
-      d[2] = s[1];
-      d[3] = s[0];
+  u32 tw = w >> 3, th = h >> 3;
+  u32 *out = (u32 *)dst;
+  for (u32 ty = 0; ty < th; ty++) {
+    for (u32 tx = 0; tx < tw; tx++) {
+      u32 *blk = out + (ty * tw + tx) * 64u;
+      const u8 *row = src + ((ty << 3) * w + (tx << 3)) * 4u;
+      const u8 *mo = morton64;
+      for (u32 ly = 0; ly < 8u; ly++, row += w * 4u) {
+        const u8 *s = row;
+        for (u32 lx = 0; lx < 8u; lx++, s += 4u) {
+          blk[*mo++] = (u32)s[3] | ((u32)s[2] << 8) |
+                       ((u32)s[1] << 16) | ((u32)s[0] << 24);
+        }
+      }
     }
+  }
 }
 
 static void halve(const u8 *s, u32 w, u32 h, u8 *d) {
@@ -332,8 +355,12 @@ static int texture_blob(const u8 *d, u32 len, BnTex *t, u32 *iw, u32 *ih) {
   if (fmt == 3u ? pos + n > len
                 : fmt == 4u ? pos + (n + 1u) / 2u > len : pos + n * 2u > len)
     return 0;
-  for (u32 i = 0; i < pw * ph * 4u; i++)
-    rgba[i] = 0;
+  if (pw != w || ph != h) {
+    u32 *z = (u32 *)rgba;
+    u32 nw = pw * ph;
+    for (u32 i = 0; i < nw; i++)
+      z[i] = 0;
+  }
   for (u32 y = 0; y < h; y++)
     for (u32 x = 0; x < w; x++) {
       u32 i = y * w + x;
@@ -373,24 +400,44 @@ static int halo_texture(BnTex *t) {
   return texture_from_rgba(HALO_SIZE, HALO_SIZE, t);
 }
 
+static const u8 *wall_cached_src;
+static u32 wall_cached_sig;
+
+static u32 wall_sig(const u8 *bg) {
+  u32 h = 2166136261u;
+  u32 stride = (TOP_SCREEN_WIDTH * TOP_SCREEN_HEIGHT * 3u) / 64u;
+  for (u32 i = 0; i < 64u; i++)
+    h = (h ^ bg[i * stride]) * 16777619u;
+  return h;
+}
+
 static int wallpaper_texture(BnTex *t) {
   const u8 *bg = ui_wallpaper_top();
-  u8 *dst;
+  u8 *dst = (u8 *)(uintptr_t)AR_WALL;
   if (!bg)
     return 0;
-  dst = (u8 *)alloc(WALL_W * WALL_H * 4u, 128);
-  if (!dst)
-    return 0;
-  for (u32 x = 0; x < TOP_SCREEN_WIDTH; x++) {
-    const u8 *col = bg + x * TOP_SCREEN_HEIGHT * 3u;
-    for (u32 y = 0; y < TOP_SCREEN_HEIGHT; y++) {
-      const u8 *s = col + (TOP_SCREEN_HEIGHT - 1u - y) * 3u;
-      u8 *d = dst + tile_offset(x, y, WALL_W);
-      d[0] = 255;
-      d[1] = s[0];
-      d[2] = s[1];
-      d[3] = s[2];
+  u32 sig = wall_sig(bg);
+  if (bg != wall_cached_src || sig != wall_cached_sig) {
+    u32 *out = (u32 *)dst;
+    const u32 tw = WALL_W >> 3;
+    for (u32 ty = 0; ty < (TOP_SCREEN_HEIGHT >> 3); ty++) {
+      for (u32 tx = 0; tx < (TOP_SCREEN_WIDTH >> 3); tx++) {
+        u32 *blk = out + (ty * tw + tx) * 64u;
+        const u8 *mo = morton64;
+        for (u32 ly = 0; ly < 8u; ly++) {
+          u32 y = (ty << 3) + ly;
+          u32 row_off = (TOP_SCREEN_HEIGHT - 1u - y) * 3u;
+          for (u32 lx = 0; lx < 8u; lx++) {
+            u32 x = (tx << 3) + lx;
+            const u8 *s = bg + x * TOP_SCREEN_HEIGHT * 3u + row_off;
+            blk[*mo++] = 255u | ((u32)s[0] << 8) |
+                         ((u32)s[1] << 16) | ((u32)s[2] << 24);
+          }
+        }
+      }
     }
+    wall_cached_src = bg;
+    wall_cached_sig = sig;
   }
   t->addr = (u32)(uintptr_t)dst;
   t->w = WALL_W;
@@ -657,11 +704,15 @@ static int parse_model(const u8 *d, u32 len) {
     if (ub < 1u || ub > 24u || (u32)(uvb - d) + 17u + 2u * ulen > len)
       return 0;
     top = (float)((1u << ub) - 1u);
-    for (u32 i = 0; i < vc; i++) {
-      float u = u0 + (float)bits_at(uvb + 17, ulen, i * ub, ub) * ((u1 - u0) / top);
-      float v = v0 + (float)bits_at(uvb + 17 + ulen, ulen, i * ub, ub) * ((v1 - v0) / top);
-      vb[i].uv[0] = u;
-      vb[i].uv[1] = 1.0f - v;
+    {
+      float su = (u1 - u0) / top;
+      float sv = (v1 - v0) / top;
+      for (u32 i = 0; i < vc; i++) {
+        float u = u0 + (float)bits_at(uvb + 17, ulen, i * ub, ub) * su;
+        float v = v0 + (float)bits_at(uvb + 17 + ulen, ulen, i * ub, ub) * sv;
+        vb[i].uv[0] = u;
+        vb[i].uv[1] = 1.0f - v;
+      }
     }
   }
   {
@@ -1095,11 +1146,16 @@ static int verify(const u8 *d, u32 size, u32 *count, u32 *first) {
   return 1;
 }
 
+static int luts_ready;
+
 static void luts(void) {
+  if (luts_ready)
+    return;
   for (int i = 0; i < 256; i++)
     lut255[i] = (float)i * (1.0f / 255.0f);
   for (int i = 0; i <= 256; i++)
     lut256[i] = (float)i * (1.0f / 256.0f);
+  luts_ready = 1;
 }
 
 int banner_parse(const u8 *data, u32 size) {
@@ -1195,6 +1251,7 @@ int banner_parse(const u8 *data, u32 size) {
       n->lit = (u32)(uintptr_t)copy;
     }
   }
+  bn.static_top = bn.top;
   bn.dynv = (u32)(uintptr_t)alloc(DYN_VERTS * sizeof(BnVert), 16);
   bn.dyni = (u32)(uintptr_t)alloc(DYN_VERTS / 4u * 6u * 2u, 16);
   bn.list = (u32)(uintptr_t)alloc(LIST_WORDS * 4u, 16);
@@ -1316,27 +1373,171 @@ u32 banner_find(const char *app_path, u16 *icon, u8 *anim, int *has_icon) {
   return BANNER_NONE;
 }
 
+#define BNR_CACHE_DIR     "Aurora/cache"
+#define BNR_CACHE_MAGIC   0x43524E42u /* "BNRC" */
+#define BNR_CACHE_VERSION 1u
+
+typedef struct {
+  u32 magic;
+  u32 version;
+  u32 src_size;
+  u32 src_crc;
+  u32 arena_bytes;
+} BnrCacheHead;
+
+static void cache_path_for(const char *app_path, char out[48]) {
+  static const char hex[16] = "0123456789abcdef";
+  u32 h = 2166136261u;
+  if (app_path) {
+    for (const char *p = app_path; *p; p++)
+      h = (h ^ (u8)*p) * 16777619u;
+  }
+  const char *pre = BNR_CACHE_DIR "/b_";
+  char *d = out;
+  while (*pre)
+    *d++ = *pre++;
+  for (int i = 7; i >= 0; i--)
+    *d++ = hex[(h >> (i * 4)) & 0xFu];
+  *d++ = '.'; *d++ = 'b'; *d++ = 'i'; *d++ = 'n'; *d = '\0';
+}
+
+static int cache_try_load(const char *cpath, u32 src_size, u32 src_crc) {
+  FIL cf;
+  BnrCacheHead ch;
+  UINT got = 0;
+  if (f_open(&cf, cpath, FA_READ) != FR_OK)
+    return 0;
+  if (f_read(&cf, &ch, sizeof(ch), &got) != FR_OK || got != sizeof(ch) ||
+      ch.magic != BNR_CACHE_MAGIC || ch.version != BNR_CACHE_VERSION ||
+      ch.src_size != src_size || ch.src_crc != src_crc ||
+      ch.arena_bytes > (AR_END - AR_BASE)) {
+    f_close(&cf);
+    return 0;
+  }
+  if (f_read(&cf, &bn, sizeof(bn), &got) != FR_OK || got != sizeof(bn)) {
+    f_close(&cf);
+    return 0;
+  }
+  if (ch.arena_bytes > 0 &&
+      (f_read(&cf, (void *)(uintptr_t)AR_BASE, ch.arena_bytes, &got) != FR_OK ||
+       got != ch.arena_bytes)) {
+    f_close(&cf);
+    return 0;
+  }
+  f_close(&cf);
+
+  bn.ok = 0;
+  bn.err = 0;
+  luts();
+  if (!bn.opaque && bn.wall_tex >= 0 && (u32)bn.wall_tex < MAX_TEX + 2)
+    wallpaper_texture(&bn.tex[bn.wall_tex]);
+  bn.base = AR_BASE;
+  bn.top = AR_BASE + ch.arena_bytes;
+  bn.static_top = bn.top;
+  bn.dynv = (u32)(uintptr_t)alloc(DYN_VERTS * sizeof(BnVert), 16);
+  bn.dyni = (u32)(uintptr_t)alloc(DYN_VERTS / 4u * 6u * 2u, 16);
+  bn.list = (u32)(uintptr_t)alloc(LIST_WORDS * 4u, 16);
+  if (!bn.dynv || !bn.dyni || !bn.list)
+    return 0;
+  os_dcache_flush();
+  bn.ok = 1;
+  return 1;
+}
+
+static void cache_save(const char *cpath, u32 src_size, u32 src_crc) {
+  FIL cf;
+  BnrCacheHead ch;
+  UINT bw = 0;
+  u32 arena_bytes = bn.static_top > AR_BASE ? bn.static_top - AR_BASE : 0;
+  if (arena_bytes > (AR_END - AR_BASE))
+    return;
+  f_mkdir("Aurora");
+  f_mkdir(BNR_CACHE_DIR);
+  if (f_open(&cf, cpath, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
+    return;
+  ch.magic = BNR_CACHE_MAGIC;
+  ch.version = BNR_CACHE_VERSION;
+  ch.src_size = src_size;
+  ch.src_crc = src_crc;
+  ch.arena_bytes = arena_bytes;
+  const char *old_err = bn.err;
+  bn.err = 0;
+  int ok = f_write(&cf, &ch, sizeof(ch), &bw) == FR_OK && bw == sizeof(ch) &&
+           f_write(&cf, &bn, sizeof(bn), &bw) == FR_OK && bw == sizeof(bn);
+  bn.err = old_err;
+  if (ok && arena_bytes > 0)
+    ok = f_write(&cf, (const void *)(uintptr_t)AR_BASE, arena_bytes, &bw) == FR_OK &&
+         bw == arena_bytes;
+  f_close(&cf);
+  if (!ok)
+    f_unlink(cpath);
+}
+
+u32 banner_cache_clear(void) {
+  static DIR dir;
+  static FILINFO fno;
+  u32 removed = 0;
+  bn.ok = 0;
+  wall_cached_src = 0;
+  if (f_mount(&bn_fs, "", 1) == FR_OK) {
+    if (f_opendir(&dir, BNR_CACHE_DIR) == FR_OK) {
+      while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0]) {
+        if (fno.fattrib & AM_DIR)
+          continue;
+        char path[300];
+        const char *pre = BNR_CACHE_DIR "/";
+        char *d = path;
+        while (*pre)
+          *d++ = *pre++;
+        const char *fn = fno.fname;
+        while (*fn && d < path + sizeof(path) - 1)
+          *d++ = *fn++;
+        *d = '\0';
+        if (f_unlink(path) == FR_OK)
+          removed++;
+      }
+      f_closedir(&dir);
+    }
+    f_mount(NULL, "", 0);
+  }
+  return removed;
+}
+
 int banner_load(const char *app_path, u32 where) {
   FIL f;
-  u32 base, size = 0;
-  int ok = 0;
+  u32 base, size = 0, src_crc = 0;
+  int ok = 0, cached = 0;
   u8 *buf = (u8 *)(uintptr_t)AR_FILE;
+  char cpath[48];
   bn.ok = 0;
   bn.err = "the banner could not be read";
+  cache_path_for(app_path, cpath);
   if (f_mount(&bn_fs, "", 1) == FR_OK) {
     if (open_banner(&f, app_path, where, &base)) {
-      u8 h[20];
-      if (read_at(&f, base, h, 20)) {
-        size = rd32(h + 16);
-        ok = size >= 32u && size <= BANNER_FILE_MAX && read_at(&f, base, buf, size);
+      if (read_at(&f, base, buf, 32)) {
+        size = rd32(buf + 16);
+        src_crc = rd32(buf + 28);
+        if (size >= 32u && size <= BANNER_FILE_MAX) {
+          if (cache_try_load(cpath, size, src_crc)) {
+            cached = 1;
+            ok = 1;
+          } else {
+            UINT got = 0;
+            ok = f_read(&f, buf + 32, size - 32u, &got) == FR_OK &&
+                 got == size - 32u;
+          }
+        }
       }
       f_close(&f);
     }
+    if (ok && !cached) {
+      ok = banner_parse(buf, size);
+      if (ok)
+        cache_save(cpath, size, src_crc);
+    }
+    f_mount(NULL, "", 0);
   }
-  f_mount(NULL, "", 0);
-  if (!ok)
-    return 0;
-  return banner_parse(buf, size);
+  return ok;
 }
 
 void banner_unload(void) { bn.ok = 0; }

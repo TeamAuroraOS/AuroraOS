@@ -120,12 +120,17 @@ void gpu11_show_a(void);
 /* The resident system menu draws in a hidden bottom framebuffer, then swaps
  * it in while it runs and restores the application's last frame on exit. */
 int gpu11_menu_frame(void);
+int gpu11_menu_prev_frame(void);
+int gpu11_front_frame(int panel);
 void gpu11_menu_show(int frame);
 void gpu11_menu_restore(void);
 
 /* Resident ARM11 system-menu service. Polling is independent of app input and
  * runs even when an app does not call its C/Auric runtime. */
 void system_menu11_poll(void);
+/* Composite active plugin HUDs onto an off-screen framebuffer right before
+ * Gpu11 flips it to the LCD (eliminates HUD flicker). */
+void system_menu11_draw_hud(int panel, uint32_t fb_addr);
 
 /* Update the lid state and blank/restore the backlights without blocking. */
 void core11_sleep_poll(void);
@@ -162,5 +167,9 @@ void core11_clock_restart(AudioCtrl *ct);
 /* AUDIO_CMD_RUN11: calls `entry` (FCRAM, ARM code) with `arg`, with the MMU,
  * the L1 caches, branch prediction and the VFP on until it returns. */
 void run11(AudioCtrl *ct, uint32_t entry, uint32_t arg);
+
+/* AUDIO_CMD_CAM: 3DS camera driver (Cam11.c). */
+void cam11_command(uint32_t op, uint32_t arg1);
+void cam11_tick(void);
 
 #endif

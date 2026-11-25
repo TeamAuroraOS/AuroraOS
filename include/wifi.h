@@ -510,7 +510,8 @@ int wifi_online(void);
 /* On the SD card: the firmware Settings > Wi-Fi copies from NAND, and the
  * network it saves ("ssid=" and "password=" lines). */
 #define WIFI_FW_DIR   "Aurora/wifi"
-#define WIFI_NET_FILE "Aurora/wifi/network.txt"
+#define WIFI_NET_FILE  "Aurora/wifi/network.txt"
+#define WIFI_NETS_FILE "Aurora/wifi/networks.txt"
 
 /* WiFiJoin.c, which apps link too. */
 /* Stages the firmware blobs at WIFI_FW_ADDR from the mounted card; 1 when all

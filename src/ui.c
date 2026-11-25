@@ -174,14 +174,52 @@ static u8 *const bg_bot = (u8 *)UI_BG_BOT_ADDR;
 static int bg_ready;
 static int theme_active;
 
-static int theme_copy(const char *path, u8 *dst, int want_w, int want_h) {
+static Color custom_bg_top = COLOR_HM_BG_TOP;
+static Color custom_bg_bot = COLOR_HM_BG_BOT;
+static int theme_has_top;
+static int theme_has_bot;
+
+/* Copies or aspect-fills (cover) any PNG/JPEG into the column-major BGR
+ * wallpaper buffer `dst` (want_w x want_h). */
+static int theme_copy_scaled(const char *path, u8 *dst, int want_w, int want_h) {
   Image img;
-  if (image_load(path, &img) != IMG_OK || img.w != want_w ||
-      img.h != want_h)
+  if (!path || !path[0] || image_load(path, &img) != IMG_OK ||
+      img.w <= 0 || img.h <= 0)
     return 0;
+
+  if (img.w == want_w && img.h == want_h) {
+    for (int x = 0; x < want_w; x++) {
+      for (int y = 0; y < want_h; y++) {
+        const u8 *src = img.rgb + ((u32)y * (u32)want_w + (u32)x) * 3u;
+        u8 *p = dst + ((u32)x * (u32)want_h + (u32)(want_h - 1 - y)) * 3u;
+        p[0] = src[2];
+        p[1] = src[1];
+        p[2] = src[0];
+      }
+    }
+    return 1;
+  }
+
+  /* Cover-crop so any aspect ratio fills the screen with no black bars. */
+  int crop_w = img.w, crop_h = img.h;
+  int off_x = 0, off_y = 0;
+  if ((s64)img.w * want_h > (s64)want_w * img.h) {
+    crop_w = (int)(((s64)img.h * want_w) / want_h);
+    if (crop_w < 1) crop_w = 1;
+    off_x = (img.w - crop_w) / 2;
+  } else {
+    crop_h = (int)(((s64)img.w * want_h) / want_w);
+    if (crop_h < 1) crop_h = 1;
+    off_y = (img.h - crop_h) / 2;
+  }
+
   for (int x = 0; x < want_w; x++) {
+    int sx = off_x + (int)(((s64)x * crop_w) / want_w);
+    if (sx >= img.w) sx = img.w - 1;
     for (int y = 0; y < want_h; y++) {
-      const u8 *src = img.rgb + ((u32)y * (u32)want_w + (u32)x) * 3u;
+      int sy = off_y + (int)(((s64)y * crop_h) / want_h);
+      if (sy >= img.h) sy = img.h - 1;
+      const u8 *src = img.rgb + ((u32)sy * (u32)img.w + (u32)sx) * 3u;
       u8 *p = dst + ((u32)x * (u32)want_h + (u32)(want_h - 1 - y)) * 3u;
       p[0] = src[2];
       p[1] = src[1];
@@ -191,35 +229,68 @@ static int theme_copy(const char *path, u8 *dst, int want_w, int want_h) {
   return 1;
 }
 
+static void bg_compose_colors(u8 *dst, int w, int h, Color top_c, Color bot_c);
+
 int ui_theme_load(const char *top_path, const char *bottom_path) {
   theme_active = 0;
+  theme_has_top = 0;
+  theme_has_bot = 0;
   bg_ready = 0;
   if (!top_path || !bottom_path ||
-      !theme_copy(top_path, bg_top, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT) ||
-      !theme_copy(bottom_path, bg_bot, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT))
+      !theme_copy_scaled(top_path, bg_top, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT) ||
+      !theme_copy_scaled(bottom_path, bg_bot, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT))
     return 0;
   theme_active = 1;
+  theme_has_top = 1;
+  theme_has_bot = 1;
+  bg_ready = 1;
+  return 1;
+}
+
+int ui_theme_load_ex(const char *top_path, const char *bottom_path,
+                     Color bg_top_c, Color bg_bot_c) {
+  custom_bg_top = bg_top_c;
+  custom_bg_bot = bg_bot_c;
+  theme_has_top = (top_path && top_path[0])
+                      ? theme_copy_scaled(top_path, bg_top, TOP_SCREEN_WIDTH,
+                                          TOP_SCREEN_HEIGHT)
+                      : 0;
+  theme_has_bot = (bottom_path && bottom_path[0])
+                      ? theme_copy_scaled(bottom_path, bg_bot, BOT_SCREEN_WIDTH,
+                                          BOT_SCREEN_HEIGHT)
+                      : 0;
+  theme_active = 1;
+  if (!theme_has_top)
+    bg_compose_colors(bg_top, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT,
+                      custom_bg_top, custom_bg_bot);
+  if (!theme_has_bot)
+    bg_compose_colors(bg_bot, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+                      custom_bg_top, custom_bg_bot);
   bg_ready = 1;
   return 1;
 }
 
 void ui_theme_clear(void) {
   theme_active = 0;
+  theme_has_top = 0;
+  theme_has_bot = 0;
+  custom_bg_top = COLOR_HM_BG_TOP;
+  custom_bg_bot = COLOR_HM_BG_BOT;
   bg_ready = 0;
 }
 
 /* The theme gradient with the pack's pattern tinted over it, or diagonal facets
  * without the pack. Per-pixel and slow, so it runs once. */
-static void bg_compose(u8 *dst, int w, int h) {
+static void bg_compose_colors(u8 *dst, int w, int h, Color top_c, Color bot_c) {
   const Asset *a = asset_get(ASSET_WALLPAPER);
   Color ramp[TOP_SCREEN_HEIGHT];
   u8 ar = g_accent.r, ag = g_accent.g, ab = g_accent.b;
 
   for (int i = 0; i < h; i++) {
     int tt = (h > 1) ? (i * 255) / (h - 1) : 0;
-    ramp[i].r = (u8)((COLOR_HM_BG_TOP.r * (255 - tt) + COLOR_HM_BG_BOT.r * tt) / 255);
-    ramp[i].g = (u8)((COLOR_HM_BG_TOP.g * (255 - tt) + COLOR_HM_BG_BOT.g * tt) / 255);
-    ramp[i].b = (u8)((COLOR_HM_BG_TOP.b * (255 - tt) + COLOR_HM_BG_BOT.b * tt) / 255);
+    ramp[i].r = (u8)((top_c.r * (255 - tt) + bot_c.r * tt) / 255);
+    ramp[i].g = (u8)((top_c.g * (255 - tt) + bot_c.g * tt) / 255);
+    ramp[i].b = (u8)((top_c.b * (255 - tt) + bot_c.b * tt) / 255);
   }
 
   for (int px = 0; px < w; px++) {
@@ -251,11 +322,19 @@ static void bg_compose(u8 *dst, int w, int h) {
 
 void ui_bg_build(void) {
   if (theme_active) {
+    if (!theme_has_top)
+      bg_compose_colors(bg_top, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT,
+                        custom_bg_top, custom_bg_bot);
+    if (!theme_has_bot)
+      bg_compose_colors(bg_bot, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+                        custom_bg_top, custom_bg_bot);
     bg_ready = 1;
     return;
   }
-  bg_compose(bg_top, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT);
-  bg_compose(bg_bot, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT);
+  bg_compose_colors(bg_top, TOP_SCREEN_WIDTH, TOP_SCREEN_HEIGHT,
+                    COLOR_HM_BG_TOP, COLOR_HM_BG_BOT);
+  bg_compose_colors(bg_bot, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+                    COLOR_HM_BG_TOP, COLOR_HM_BG_BOT);
   bg_ready = 1;
 }
 

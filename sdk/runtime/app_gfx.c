@@ -6,6 +6,7 @@
 #include "font.h"
 #include "gpu.h"
 #include "image.h"
+#include "system_menu.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -463,6 +464,20 @@ static int mono_text(Screen s, int x, int y, int scale, uint32_t color,
 static Font g_fonts[4];
 static int g_fonts_state; /* 0 not tried, 1 loaded, -1 not there */
 
+static int font_from_addr(uint32_t addr, Font *out) {
+  if (addr < ASSETS_ARENA_ADDR ||
+      addr >= ASSETS_ARENA_ADDR + ASSETS_ARENA_MAX - sizeof(AssetFontHead))
+    return 0;
+  const uint8_t *p = (const uint8_t *)(uintptr_t)addr;
+  const AssetFontHead *h = (const AssetFontHead *)p;
+  if (!h->count || !h->atlas_w || !h->atlas_h)
+    return 0;
+  out->head = h;
+  out->glyphs = (const AssetGlyph *)(p + sizeof(AssetFontHead));
+  out->atlas = p + sizeof(AssetFontHead) + h->count * sizeof(AssetGlyph);
+  return 1;
+}
+
 static const Font *font_of(GfxFont f) {
   static const u32 ids[4] = {ASSET_FONT_SMALL, ASSET_FONT_UI, ASSET_FONT_BOLD,
                              ASSET_FONT_TITLE};
@@ -470,7 +485,16 @@ static const Font *font_of(GfxFont f) {
     return NULL;
   if (!g_fonts_state) {
     g_fonts_state = -1;
-    if (app_fs_mount() && assets_read()) {
+    /* Prefer fonts already decoded into ASSETS_ARENA by AuroraOS so apps never
+     * depend on assets.pak layout/IDs or need recompiling when assets.pak changes. */
+    volatile AuroraSystemMenuShared *sm = aurora_system_menu_shared();
+    if (sm->os_ready &&
+        font_from_addr(sm->font_small_addr, &g_fonts[0]) &&
+        font_from_addr(sm->font_reg_addr, &g_fonts[1]) &&
+        font_from_addr(sm->font_bold_addr, &g_fonts[2]) &&
+        font_from_addr(sm->font_title_addr, &g_fonts[3])) {
+      g_fonts_state = 1;
+    } else if (app_fs_mount() && assets_read()) {
       int ok = 1;
       for (int i = 0; i < 4; i++)
         ok &= asset_font(ids[i], &g_fonts[i]);

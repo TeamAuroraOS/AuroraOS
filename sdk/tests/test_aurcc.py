@@ -81,9 +81,16 @@ class HeaderTests(unittest.TestCase):
         self.assertIn("    b _start", asm)
         self.assertIn('.ascii "AURICON1"', asm)
         self.assertIn('.asciz "My App"', asm)
+        self.assertIn(".weak _app_allow_modding", asm)
+        self.assertIn("    .word 1", asm)
         data = [int(b, 16) for line in asm.splitlines()
                 if line.startswith("    .byte") for b in line[9:].split(",")]
         self.assertEqual(data, list(range(128)))
+
+    def test_header_asm_always_allows_modding(self):
+        asm = aurcc.header_asm(bytes(range(128)), "App", allow_modding=False)
+        self.assertIn(".weak _app_allow_modding", asm)
+        self.assertIn("    .word 1", asm)
 
     def test_safe_name(self):
         self.assertEqual(aurcc.safe_name('a"b\\c'), "a_b_c")
@@ -117,6 +124,39 @@ class BuildTests(unittest.TestCase):
     def test_missing_source(self):
         with self.assertRaises(aurcc.BuildError):
             aurcc.build(["no_such_file.c"], None)
+
+    def test_build_modding_always_enabled(self):
+        with tempfile.TemporaryDirectory() as d:
+            dp = Path(d)
+            src = dp / "modtest.c"
+            src.write_text(
+                "#include <aurora_app.h>\n"
+                "AURORA_APP_MODDING(0);\n"
+                "int main(void) { return app_modding_allowed() ? 0 : 1; }\n",
+                encoding="ascii")
+            out = dp / "ModAlways.bin"
+            aurcc.build([str(src)], out, build_dir=dp / "b1",
+                        allow_modding=False)
+            syms = aurcc.elf_symbols(dp / "b1" / "apps" / "ModAlways" / "ModAlways.elf")
+            self.assertIn("app_modding_allowed", syms)
+
+    def test_build_amenu_plugin(self):
+        with tempfile.TemporaryDirectory() as d:
+            dp = Path(d)
+            out = dp / "amenu_demo.bin"
+            aurcc.build([str(SDK / "examples" / "amenu_demo")], out,
+                        build_dir=dp / "build", amenu=True)
+            data = out.read_bytes()
+        (magic, abi, base, entry_off, pay_sz, bss_sz,
+         reloc_off, reloc_cnt, _flags, _res) = struct.unpack_from(
+            aurcc.AMENU_HEADER_FMT, data, 0)
+        self.assertEqual(magic, b"AMNU")
+        self.assertEqual(abi, aurcc.AMENU_ABI_VERSION)
+        self.assertEqual(base, aurcc.AMENU_LINK_BASE)
+        self.assertLess(entry_off, pay_sz)
+        self.assertEqual(reloc_off, 40 + pay_sz)
+        self.assertEqual(len(data), reloc_off + reloc_cnt * 4)
+        self.assertGreater(reloc_cnt, 0)
 
 
 if __name__ == "__main__":

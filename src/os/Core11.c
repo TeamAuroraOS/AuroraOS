@@ -306,6 +306,8 @@ void audio11_main(void) {
         }
         else if (cmd == AUDIO_CMD_SMP)
           smp11_command(ct, arg0, ct->arg1);
+        else if (cmd == AUDIO_CMD_CAM)
+          cam11_command(arg0, ct->arg1);
         else if (cmd == AUDIO_CMD_PARK)
           core11_park(ct);
       }
@@ -320,6 +322,7 @@ void audio11_main(void) {
     stereo11_tick();
     wifi11_tick();
     video11_tick();
+    cam11_tick();
     /* Reads only this core's own timer, so the ARM9 keeps the bus meanwhile. */
     while (core11_now_us() - now < CORE_PASS_US)
       ;

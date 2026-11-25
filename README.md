@@ -5,7 +5,7 @@
 ![Platform](https://img.shields.io/badge/platform-Nintendo%203DS-red?logo=nintendo3ds&logoColor=white)
 ![Status](https://img.shields.io/badge/status-in%20development-yellow)
 
-Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta 8 v0.1.7-nova7.**
+Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta 8 v0.1.7-everest**
 
 *Built using knowledge from GodMode9 and Luma source code.*
 
@@ -104,5 +104,11 @@ Aurora is licensed **GPL-3.0** (see `LICENSE`), with these exceptions:
   come from the Mozilla CA store as curl publishes it, under the MPL-2.0; see
   `docs/tls.md`.
 
+### Credit
+
+Thanks to Octoblimp for the camera driver in [Android Eclair 3DS](https://github.com/Octoblimp/Android-Eclair-3DS). The license for the [Android Eclair 3DS](https://github.com/Octoblimp/Android-Eclair-3DS) project has been included [here](LICENSE-CAMDRIVER).
+
 ### AI Disclaimer:
 AI was used in the making of most documentation and some in-code comments. AI was used for the writing of arm assembly, Mainstream Corporate AI was not used. A local model was used on the PC of @DisLoPik.
+
+AI was also used in the assistance of @MrMoonii to write Beta 8 Release. All AI that was used for Beta 8 Release was only used for bugfixes and assistance to understand the codebase.
