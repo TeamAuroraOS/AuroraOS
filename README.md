@@ -21,8 +21,11 @@ works is in [`docs/features.md`](docs/features.md).
 - Copy `Aurora/assets.pak` to `SD:/Aurora/assets.pak` (optional: without it the
   UI falls back to its built-in icons and font)
 
-Optional:
+## How to build
 
+- You need devkitpro installed and set to path you can install it here https://devkitpro.org/wiki/Getting_Started
+- You also need firmtool installed you can get it from here https://github.com/TuxSH/firmtool
+Optional:
 - Copy the `Aurora/Store` folder to `SD:/Aurora/Store` for aShop's banners and
   welcome art
 - Apps such as `Games/Tetris.BIN` go in `SD:/Aurora/Apps/`, apps written in C
