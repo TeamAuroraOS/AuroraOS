@@ -1,9 +1,10 @@
 # AuroraOS app loader
 
 The AuroraOS Home Menu (`src/os/os_main.c`, `src/os/HomeMenu.c`) discovers
-and launches app containers from the SD card, alongside the built-in Music,
-Files, 3D Model and aShop, and lets them be arranged in pages and folders
-([`home.md`](home.md)). The
+and launches app containers from the SD card and lets them be arranged in
+pages and folders ([`home.md`](home.md)). The built-in screens (aShop, Files,
+Music, Camera) open from the Home Menu's bar since Beta 8, and the 3D Model
+viewer from Settings. The
 File Explorer and the [terminal](terminal.md) (`./Tetris.bin`, or `Tetris` for
 an app in `Aurora\Apps` or `Aurora\Apps\C`) start apps the same way.
 
@@ -36,8 +37,10 @@ SD:\Aurora\Apps\C\<Name>\   each C app's data, made by Aurora
 * Each app carries **its own icon**, embedded in the binary; the Home Menu reads
   and displays it (see *Per-app icons* below). Apps without one get a generic
   icon.
-* The built-in Music, Files, 3D Model and aShop are arranged the same way. If
-  there is no SD card or neither folder, the menu shows just those.
+* If there is no SD card or neither folder, the grid is empty; the bar's
+  shortcuts still work.
+* A file with the Aurora Menu plugin magic `AMNU` found in either folder is
+  not an app: the scan moves it to `SD:\Aurora\amenu\` ([`amenu.md`](amenu.md)).
 * **aShop** ([`store.md`](store.md)) installs apps here too, C apps in
   `Aurora\Apps\C`, and the Home Menu shows a new one as soon as aShop closes,
   without a restart.
@@ -262,6 +265,61 @@ generic icon. Icons are authored as a simple 32x32 text bitmap (32 lines, `#`
 means on) and embedded by `aurc --icon` or `aurcc.py --icon` (which also takes
 a 32x32 PNG); `Games/Tetris_Source/Tetris.icon` is a worked example.
 
+### Colour icons and 3D banners
+
+Two later additions (PRs 45 and 48 by Cracko298, 2026-11-12/13) let an SD app
+look richer on the Home Menu. Both are optional, and the 1-bit icon above is
+still the fallback.
+
+**Colour icon (AIC1, `include/appicon.h`).** 2,056 bytes: `AIC1`, one byte
+for animation (0 or 1), three zero bytes, then a 32 x 32 RGB565 picture
+(little-endian, row by row). `scan_apps()` looks for it:
+
+1. appended to the container right after the ARM9 payload (the header's
+   `arm9_offset` must be 36 and the payload 140 bytes to 16 MB);
+2. in a side file named after the whole app path plus `.rgb`
+   (`Aurora/Apps/Foo.bin.rgb`), exactly 2,056 bytes;
+3. in the app's banner (its ICON chunk), which wins over both.
+
+It is drawn instead of the 1-bit icon on tiles, folder tiles, the top screen
+and the Aurora Menu's Dock, with rounded corners. With the animation byte set,
+a "galaxy" shimmer runs over it, every 100 ms, wherever it shows on the page.
+Nothing in the tree draws AIC1 files; `sdk/appbanner.py` copies one between an
+app and a banner.
+
+**Banner (BNR version 3, `src/os/Banner.c`, `include/banner.h`).** When the
+selection rests on an app that has one, the whole top screen shows its 3D
+scene, drawn by the PICA200 each frame with the status bar on top, and an
+optional jingle plays once on voice 6 while the Home Menu's song pauses. Menu
+sounds Off silences the jingle. Banners are made with Cracko298's BNR Studio,
+which is not in this repository: a banner must carry the author's seal and a
+CRC-32 seeded with `crc32("Cracko298")`, or it is refused. A file is at most
+1 MB, and it is found:
+
+1. embedded at the end of the app, after its AIC1 icon:
+   `py sdk/appbanner.py App.bin x.bnr [--keep-app-icon] [-o out]` (or
+   `--strip` to take it out), or `py sdk/aurcc.py build ... --banner x.bnr`;
+   embedding needs an AIC1 icon in the app or the banner;
+2. beside the app with the extension swapped (`Aurora/Apps/Foo.bnr`);
+3. as `banner.bnr` in the app's data folder (`Aurora/Apps/C/<Name>/`).
+
+The Home Menu loads one banner at a time, 160 ms after the selection stops
+moving, into an arena at `0x24000000` that every way out of the Home Menu
+gives back (`banner_leave_home()`).
+
+**Banner cache (Beta 8).** Parsing a banner (decoding and tiling its
+textures, the jingle) takes time, so `banner_load()` saves the parsed result
+in `SD:/Aurora/cache/b_<hash>.bin`, named by a hash of the app's path: a
+28-byte header (`BNRC`, version 2, `sizeof(Banner)`, `AURORA_BUILD_DATE`, the
+banner file's size and CRC), the banner's state, then the arena it used. The next load whose file has the same
+size and CRC reads that instead and only rebuilds the wallpaper texture and
+the per-frame buffers. **Settings > Clear Cache** asks, deletes every file in
+`SD:/Aurora/cache` and says how many it removed. The cache saves the
+`Banner` structure as it is in memory, so a file is used only by a build with
+the same structure size and build date; any other build parses the banner
+again and rewrites the file. A cache file that fails to read part-way no
+longer leaves the banner marked loaded (fixed 2026-11-26).
+
 ## Returning to the home menu (HOME button)
 
 Pressing **HOME** in an app returns to the Home Menu instantly. Because an app
@@ -291,12 +349,13 @@ ignores HOME, so nothing branches into an uninstalled stub.
 > calls per frame. A loop that calls no built-in at all will not respond to
 > HOME. Returning from `fn main` also goes back to the Home Menu.
 
-### The system menu in an app
+### The Aurora Menu in an app
 
-L + Down + Select opens the system menu in any app started from the Home
+L + Down + Select opens the Aurora Menu in any app started from the Home
 Menu. The ARM11 core draws it and reads the buttons itself, so it opens
-whatever the app is doing (see [`home.md`](home.md), "The system menu").
-Power Off and Cancel are handled there. **Return to Home** is a request the
+whatever the app is doing (see [`amenu.md`](amenu.md)). Power Off,
+Brightness and plugins are handled there. **Home** (Return to Home), and
+opening a Dock app, is a request the
 app's runtime picks up: the C SDK (1.2) at its next button read, present or
 core command, and the Auric runtime at its next built-in, and each then leaves
 as if HOME had been pressed. The block they share is `AuroraSystemMenuShared`
@@ -304,8 +363,16 @@ at `0x233A8000` (`include/system_menu.h`). The ARM9 writes the first cache
 line: `app_active` (set by `os_install_return()`, cleared by the return stub)
 and `app_caps`, which `os_install_return()` clears and the runtime sets to
 `AURORA_SYSTEM_MENU_CAP_HOME` as it starts (`app_hid_init()` in the C SDK,
-`aur_app_start()` before `fn main` in Auric). The core writes `menu_open`
-and `action`, one line each.
+`aur_app_start()` before `fn main` in Auric; the C SDK from Beta 8 also sets
+`AURORA_SYSTEM_MENU_CAP_MODDING`, which nothing checks). The core writes
+`menu_open` and `action`, one line each. Beta 8 grew the block: the accent,
+brightness, plugin modding fields, the app's path, the OS's font addresses,
+the theme's colours and the Dock ([`amenu.md`](amenu.md), "Memory").
+
+Aurora Menu plugins can read and write an app's memory and press its buttons
+while it runs. That is allowed for every app, old or new; `aurcc build
+--no-modding` does not turn it off ([`amenu.md`](amenu.md), "Modding a
+running app").
 
 The core cannot leave an app by itself: apps run with interrupts masked, so
 only their runtime can jump to the return stub. An app built before Beta 7
@@ -336,6 +403,12 @@ the SDK sets, and HOME then goes back to the Home Menu through the return stub
 the hook, so its own crash screen is unchanged. Auric apps do not install a
 crash handler.
 
+Taking the SD card out shows the crash screen with the reason "SD Card
+Eject" (`CRASH_SD_EJECT`, PR 38): the OS checks the card-detect bit in
+`get_keys()` (`sdcard_poll()`), and a C app built since then in `app_loop()`
+(`app_sdcard_poll()`). Since 2026-11-26 the app side names the ARM9 as the processor,
+where apps run; PR 38 had it say ARM11.
+
 ## The existing boot flow is unchanged
 
 `Aurora.firm -> "Boot Aurora" -> loads AURORAOS.BIN -> jumps` works exactly as
@@ -348,9 +421,11 @@ before. The only loader change is that `boot_aurora()` now calls the shared
 | File | Responsibility |
 |------|----------------|
 | `src/container.c`, `include/container.h` | shared header parse + ARM9 load, `aurora_magic_kind()` (`AOS1`/`AUR1`/`AURC`), a C app's data folder (`aurora_c_data_dir()`, `aurora_c_data_make()`) |
-| `src/loader.c` | `boot_aurora()`, built on the shared parser |
+| `src/loader.c` | `boot_aurora()` and `boot_aurora_ex(quiet)` (the firm's start, with its progress and error screens), built on the shared parser |
 | `src/os/os_main.c` | scan `SD:\Aurora\Apps` and `SD:\Aurora\Apps\C`, sort, per-app icons, launch block, launch + HOME-return install |
 | `src/os/os_launch.s` | relocatable app hand-off stub, return stub, cache sync |
+| `src/os/Banner.c`, `include/banner.h`, `include/appicon.h` | finding, loading, caching and drawing 3D banners; colour icons |
+| `src/os/AmenuLoader.c`, `include/amenu.h` | moving `AMNU` plugins out of the app folders and loading them |
 | `src/os/os.ld` | `_os_image_end` symbol for the return snapshot |
 | `include/loader.h` | app staging / return-contract / icon constants |
 | `src/i2c.c`, `include/i2c.h` | `I2C_readRegBuf`, used to poll the MCU for the HOME button |

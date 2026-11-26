@@ -80,7 +80,8 @@ typedef struct AmenuApi {
   void     (*set_brightness)(int level);
   void     (*request_home)(void);
 
-  /* Active app inspection & modding (gated by AURORA_SYSTEM_MENU_CAP_MODDING) */
+  /* Active app inspection & modding (allowed for every app; app_modding_allowed
+   * returns 1 on both CPUs) */
   int         (*app_active)(void);
   int         (*app_modding_allowed)(void);
   const char *(*app_path)(void);

@@ -218,7 +218,7 @@ is no depth. Not checked: the 3DS XL, the Old 3DS's 3D LED.
 
 ## On the console
 
-1. Open **3D Model**. The bottom screen should name the model. If it says
+1. Open **Settings > 3D Model Test**. The bottom screen should name the model. If it says
    `Software cube: GPU ...`, the reason after "GPU" is where it stopped
    (clear, command list or copy).
 2. Raise the slider. The raw value should rise from near 0, and `3D on`

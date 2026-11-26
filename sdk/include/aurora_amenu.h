@@ -6,8 +6,13 @@
  *
  * Plugins run inside the Tesla-inspired Aurora Menu sidebar (L+Down+Select)
  * and can also draw persistent HUD overlays or mod the currently running app
- * (when the app permits modding; newly compiled C SDK apps default to YES,
- * old compiled apps default to NO). */
+ * (allowed for every app; app_modding_allowed() always returns 1).
+ *
+ * on_load runs once, on whichever CPU needs the plugin first: the ARM9 (OS
+ * screens) or the ARM11 core (inside apps, and every HUD). Each side passes
+ * its own AmenuApi, so always use the api given to the current callback and
+ * never keep one from an earlier call. Plugin code must not rely on
+ * unaligned memory access, since the ARM11 traps it. */
 #ifndef AURORA_AMENU_SDK_H
 #define AURORA_AMENU_SDK_H
 
@@ -60,7 +65,7 @@ extern "C" {
 #define AMENU_COL_YELLOW  0xFFD60Au
 #define AMENU_COL_CYAN    0x64E8C8u
 
-/* App memory regions accessible when app_modding_allowed() is true */
+/* App memory regions the app_mem_* calls accept (on both CPUs) */
 #define AMENU_APP_RAM_START  0x22000000u
 #define AMENU_APP_RAM_END    0x23000000u
 #define AMENU_APP_HEAP_START 0x24000000u
@@ -99,7 +104,7 @@ typedef struct AmenuApi {
   void     (*set_brightness)(int level);
   void     (*request_home)(void);
 
-  /* Active app inspection & modding (gated by app's modding permission) */
+  /* Active app inspection & modding (allowed for every app) */
   int         (*app_active)(void);
   int         (*app_modding_allowed)(void);
   const char *(*app_path)(void);
@@ -130,8 +135,8 @@ typedef struct AmenuPlugin {
   /* Return 1 to stay open in the sidebar, 0 to return to the main menu. */
   int  (*on_menu_frame)(const AmenuApi *api, uint32_t keys_held,
                         uint32_t keys_down);
-  /* Called periodically while running (even when sidebar is closed) if HUD
-   * is enabled for this plugin. */
+  /* While the HUD is on: on the ARM11, as each frame is presented (or every
+   * 100 ms when nothing is), not while the Aurora Menu is open. */
   void (*on_hud_tick)(const AmenuApi *api, int app_active, int modding_allowed);
   /* Optional callback when the plugin's HUD/mod is toggled from the sidebar. */
   int  (*on_toggle)(const AmenuApi *api, int enabled);

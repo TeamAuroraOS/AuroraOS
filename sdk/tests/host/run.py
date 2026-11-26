@@ -38,7 +38,7 @@ SOURCES = [
 ]
 # Sources only one test links, alone: the ARM11 core's own code shares names
 # with the app side (net_ping, for one), as two binaries may.
-ONLY = {"net11": ["Net11.c"]}
+ONLY = {"net11": ["Net11.c"], "tcp_listen": ["Net11.c"]}
 # The harness's own files: those standing in for the OS, and those standing
 # in for runtime files it does not build (with the runtime's headers).
 HARNESS = ["stubs.c", "core_model.c", "ramdisk.c"]

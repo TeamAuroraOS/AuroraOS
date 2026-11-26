@@ -23,8 +23,9 @@ server sends it.
 
 ## Opening it
 
-aShop is a tile on the Home Menu. With the tile selected, the top screen shows
-the auroraShop logo in place of the usual icon and name card.
+aShop opens from the shop icon in the Home Menu's top bar (since Beta 8; it
+was a tile before, which showed the auroraShop logo on the top screen). With
+the icon selected, the top screen shows its name and icon.
 
 - **No account linked:** "Aurora account required" with *Back* and *Link an
   account*. *Link an account* opens the same screen as Settings > Aurora

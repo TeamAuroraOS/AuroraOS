@@ -129,8 +129,10 @@ void appnet_stream_close(void);
  * while a stream is open. */
 int appnet_tcp_open(u32 ip, u32 port, u32 timeout_ms);
 int appnet_tcp_listen(u32 port);
-/* Two independent connections. Select the same channel before wifi_tcp_* IO.
- * The second channel requires core 127. A port of zero is invalid. */
+/* Two independent connections. They return with channel 0 selected, which
+ * everything else uses: select channel 1 around its own wifi_tcp_* IO and
+ * channel 0 again after. Channel 1 and listening (ip 0) require core 127. A
+ * port of zero is invalid. */
 int appnet_tcp_open_channel(u32 channel, u32 ip, u32 port, u32 timeout_ms);
 int appnet_tcp_listen_channel(u32 channel, u32 port);
 void appnet_tcp_release_channel(u32 channel);

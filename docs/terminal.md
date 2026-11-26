@@ -28,9 +28,15 @@ Nick@n3ds:/Aurora/Apps$
 * The path is the working folder. `/` is the root of the SD card. A path longer
   than 24 characters shows as `...` and its last folder.
 
-Text uses the built-in 8x8 font, so columns line up: 49 columns by 23 rows. The
-font is ASCII only, so any other character in a file name shows as one `?`.
-Long lines wrap at the edge.
+Since Beta 8 the text is drawn in the Figtree small font from the asset pack,
+19 rows of 12 pixels, each run of one colour as a string (`t_draw_run()` in
+`src/os/Terminal.c`). Lines still wrap at 49 characters, but the font is
+proportional, so columns no longer line up; a row whose letters would run
+past the right edge (wide capitals, for example) is drawn in the 8x8 font
+instead, which always fits 49 columns (`t_row_fits()`, `t_row8()`). Without
+the pack it is the built-in 8x8 font as before: 49 columns by 23 rows,
+columns lined up. Either way the text is ASCII only,
+so any other character in a file name shows as one `?`.
 
 Colours: the name and host use the accent colour, and the path is blue. In
 listings, folders are blue, Aurora apps green, pictures magenta and sound cyan.
@@ -53,7 +59,7 @@ Errors are red and warnings yellow.
 | **SELECT** | cancel the line, like Ctrl+C (it shows `^C`); hold it to stop a long `cp`, `rm` or `cat` |
 | **START** | close the terminal |
 | **L** + **R** | screenshot, as on every screen |
-| **L** + Down + **SELECT** | the system menu ([`home.md`](home.md)); its Return to Home closes the terminal, since **B** here is Delete |
+| **L** + Down + **SELECT** | the Aurora Menu ([`amenu.md`](amenu.md)); its Home closes the terminal, since **B** here is Delete |
 
 ### Touch keyboard
 
@@ -673,7 +679,7 @@ uname [-a] [-s] [-n] [-r] [-m] [-o]
 |--------|--------|
 | `-s` | `AuroraOS` (the default) |
 | `-n` | the host, `n3ds` or `o3ds` |
-| `-r` | the version, for example `Beta 8 v0.1.7-nova7` |
+| `-r` | the version, for example `Beta 8 v0.1.7-everest` |
 | `-m` | `armv5tel`, the ARM9 |
 | `-o` | `AuroraOS` |
 | `-a` | all of the above, in that order |

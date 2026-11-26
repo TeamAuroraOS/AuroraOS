@@ -249,7 +249,25 @@ damaged frame stops the stream, and a buffer too small is refused.
 
 The arena is at `0x23F40000`, in the 768KB gap between the bottom backbuffer
 (which ends by `0x23F38400`) and the app-launch staging area at `0x24000000`.
-The current pack (185 assets) decodes to 730,368 bytes, 93% of the gap. A pack with a different count is refused, so a C app built against an older one falls back to the built-in font until it is rebuilt (`gfx_fonts_loaded()`); it still runs. `ASSET_ARENA_NEEDED` is emitted into
+The current pack (192 assets) decodes to 744,448 bytes, 95% of the gap. Beta 8
+appended seven alpha icons after the fonts, so ids 0 to 184 mean what they
+meant before: `ASSET_APP_CAMERA_64/32/16` (185-187, from `icons/camera.png`),
+`ASSET_ICON_FOLDER_BAR_16/64` (188-189, from `icons/Folder.png`) and
+`ASSET_ICON_SHOP_BAR_16/64` (190-191, from `icons/shop.png`), for the Camera
+app and the Home Menu bar's shortcuts.
+
+Since Beta 8 (PR 51) `assets_read()` no longer insists that the pack's count
+matches the build. It reads the index 32 entries at a time and skips any entry
+whose id this build does not know, so an OS or app built before a pack grew
+still loads it; the arena-size check then only applies when nothing was
+skipped. A pack with fewer entries loads too, and what it lacks is drawn the
+built-in way. The cost is that ids are trusted: if an asset is ever inserted
+in the middle again (as Beta 7's team avatar did), an older pack could load
+with the wrong art under the moved ids. The check that every
+`ASSET_FONT_*` id holds a font still refuses a pack whose fonts moved, which
+catches most such shifts, but new assets should keep going at the end. C apps also prefer the fonts the OS
+already decoded (their addresses are in `AuroraSystemMenuShared`), so they no
+longer depend on the pack's layout at all. `ASSET_ARENA_NEEDED` is emitted into
 `asset_ids.h` and checked against `ASSETS_ARENA_MAX` at compile time, so a pack
 that outgrew the gap fails the build rather than the console.
 
@@ -262,11 +280,11 @@ Because the pack lives on the card, the payload only grew by about 5KB.
 2. Add it to `MASKS`, `COLOR` or `PEOPLE` in `tools/mkassets.py` with an id.
 3. `make assets`. This rewrites `Aurora/assets.pak` and regenerates
    `include/asset_ids.h`.
-4. Rebuild the OS, and copy the new pack to the card. The pack and the binary
-   are checked against each other at load time, so both must be updated. An
-   added asset moves the ids after it (Beta 7's team avatar moved the
-   wallpaper and the fonts), and an older pack is then refused because its
-   fonts are no longer where the OS looks.
+4. Rebuild the OS, and copy the new pack to the card. Add new art at the end
+   of the list in `tools/mkassets.py` (after the fonts, as Beta 8 did), so the
+   ids already in use stay where they are: since Beta 8 the loader takes
+   packs of any size and trusts their ids, so a moved id would show the wrong
+   art rather than refuse the pack.
 
 The builder asserts that every payload survives an RLE round-trip, so a pack
 that writes successfully decodes correctly.
@@ -282,24 +300,29 @@ refused, not cut.
 ## Themes
 
 The wallpaper is not drawn from the pack each frame. `ui_bg_build()` in
-`src/ui.c` composes it once per screen (the gradient with the pack's pattern
+`src/ui.c` composes it once per screen (a gradient with the pack's pattern
 tinted by the accent colour) into a cache at `0x25010000` (top, 288,000
 bytes) and `0x25060000` (bottom, 230,400 bytes), and every wallpaper paint is
-a copy from there. A theme from Settings > Theme (PR 24) fills that cache
-with pictures from the card instead: `ui_theme_load(top, bottom)` decodes
-`SD:/Aurora/themes/<Name>/top.png` and `bottom.png` with `image_load()`
-(through the image buffers at `0x25100000` and `0x26100000`), requires
-exactly 400x240 and 320x240, and writes them in the framebuffer's rotated
-B,G,R layout. While a theme is in use `ui_bg_build()` leaves the cache alone,
-so an accent change does not touch it; `ui_theme_clear()` goes back to the
-composed wallpaper. Settings checks a theme from the PNG headers alone
-(`image_probe()`), so only `ui_theme_load()` decodes. If a picture fails to
-decode after the top one was already copied in, `ui_theme_load()` drops the
-theme, and `theme_select()` in `src/os/os_main.c` loads the theme that was
-showing before, or leaves the built-in wallpaper to be composed at the next
-paint. The pack itself is unchanged by a theme: icons and fonts still come
-from it. The user side is in [`home.md`](home.md), "Wallpaper
-themes".
+a copy from there.
+
+A theme from Settings > Theme fills that cache from the card instead. Since
+Beta 8 that is `ui_theme_load_ex(top, bottom, bg_top, bg_bottom)`, called by
+`src/os/Theme.c`:
+
+* either picture may be missing. A picture (PNG or JPEG, through
+  `image_load()` and the image buffers at `0x25100000` and `0x26100000`) of
+  exactly 400x240 or 320x240 is copied; any other size is scaled to cover the
+  screen, cropped in the middle (nearest pixel). It is written in the
+  framebuffer's rotated B,G,R layout;
+* a screen without a picture, or whose picture fails to decode, gets the
+  composed wallpaper with the theme's `bg_top` and `bg_bottom` colours in
+  place of the built-in ones (`bg_compose_colors()`), and `ui_bg_build()`
+  composes it again when the accent changes.
+
+`ui_theme_clear()` goes back to the built-in wallpaper. The older
+`ui_theme_load(top, bottom)` stays (both pictures required, now scaled too)
+but nothing calls it. The pack itself is unchanged by a theme: icons and fonts
+still come from it. The user side is in [`home.md`](home.md), "Themes".
 
 ## Fonts and licensing
 

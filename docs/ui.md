@@ -88,7 +88,7 @@ the new frame. If the GPU refuses a copy, the ARM9 does it instead.
 
 The convention: a screen arms `ANIM_PUSH` as it opens and `ANIM_POP` as it
 returns, and the screen it returns to animates when it redraws. While the
-system menu's Return to Home unwinds the screens ([`home.md`](home.md)),
+Aurora Menu's Home unwinds the screens ([`home.md`](home.md)),
 `anim_transition()` ignores `ANIM_POP`, so they close at once instead of
 sliding one by one.
 `open_screen()` in `os_main.c` does this for the screens it opens; the File
@@ -108,7 +108,7 @@ anim_popup_behind();
 
 | Where | Kind |
 |-------|------|
-| Home Menu to Settings, Music, Files, 3D Model, aShop, the terminal, and back | slide |
+| Home Menu to Settings, Music, Files, aShop, the Camera, the terminal, and back; Settings to 3D Model Test | slide |
 | aShop to a section, a page, a download or search, and back | slide |
 | Home Menu into a folder, and out | slide |
 | Settings to each of its pages, About to More Info, and back | slide |

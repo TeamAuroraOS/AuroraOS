@@ -1,4 +1,4 @@
-/* Loads /Aurora/amenu/*.bin plugins from the SD card into resident FCRAM so
+/* Loads the .bin and .ovl plugins in SD:/Aurora/amenu into resident FCRAM so
  * both the OS sidebar and the ARM11 in-app Tesla-style sidebar can run them. */
 #include "amenu.h"
 #include "aurora.h"
@@ -51,12 +51,23 @@ static int file_is_amnu(const char *path) {
   return ok;
 }
 
+/* A plugin of the same name already there is kept as <name>.old, which the
+ * loader skips, rather than deleted. */
 void amenu_migrate_file_mounted(const char *src_path, const char *fname) {
-  char dst_path[160];
+  char dst_path[160], old_path[168];
+  char *p = old_path;
   f_mkdir("Aurora");
   f_mkdir(AMENU_DIR);
   join_path(dst_path, AMENU_DIR, fname);
-  f_unlink(dst_path);
+  for (const char *q = dst_path; *q;)
+    *p++ = *q++;
+  *p++ = '.';
+  *p++ = 'o';
+  *p++ = 'l';
+  *p++ = 'd';
+  *p = 0;
+  f_unlink(old_path);
+  f_rename(dst_path, old_path);
   f_rename(src_path, dst_path);
 }
 
@@ -166,6 +177,8 @@ int amenu_load_mounted(void) {
     tbl->slots[i].hud_enabled = 0;
     tbl->slots[i].filename[0] = '\0';
   }
+  /* The core must see the table gone before any slot is overwritten. */
+  os_cache_sync();
 
   f_mkdir("Aurora");
   f_mkdir(AMENU_DIR);

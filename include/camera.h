@@ -8,16 +8,22 @@
 #define CAM_SHARED_ADDR 0x233AC000u
 
 /* Scratch YUYV frame (320 x 240 x 2 = 153,600 bytes) + double-buffered
- * 3DS column-major BGR24 output (320 x 240 x 3 = 230,400 bytes each),
- * all inside the idle 0x26E40000..0x26F00000 window below 0x27000000. */
-#define CAM_YUYV_ADDR   0x26E40000u
-#define CAM_BGR0_ADDR   0x26E80000u
-#define CAM_BGR1_ADDR   0x26EC0000u
+ * 3DS column-major BGR24 output (320 x 240 x 3 = 230,400 bytes each), in the
+ * gap between the screenshot buffers (to 0x26B1CA36) and the animation frames
+ * (from 0x26C00000), which nothing else uses, in the OS or in apps. */
+#define CAM_YUYV_ADDR   0x26B20000u /* -> 0x26B45800 */
+#define CAM_BGR0_ADDR   0x26B48000u /* -> 0x26B80400 */
+#define CAM_BGR1_ADDR   0x26B84000u /* -> 0x26BBC400 */
 #define CAM_WIDTH       320u
 #define CAM_HEIGHT      240u
 #define CAM_FRAME_BYTES (CAM_WIDTH * CAM_HEIGHT * 2u)
 #define CAM_FRAME_WORDS (CAM_FRAME_BYTES / 4u)
 #define CAM_BGR_BYTES   (CAM_WIDTH * CAM_HEIGHT * 3u)
+
+_Static_assert(CAM_YUYV_ADDR + CAM_FRAME_BYTES <= CAM_BGR0_ADDR &&
+                   CAM_BGR0_ADDR + CAM_BGR_BYTES <= CAM_BGR1_ADDR &&
+                   CAM_BGR1_ADDR + CAM_BGR_BYTES <= 0x26C00000u,
+               "camera buffers overlap each other or Anim.c's frames");
 
 static inline uint32_t cam_bgr_addr(uint32_t idx) {
   return (idx & 1u) ? CAM_BGR1_ADDR : CAM_BGR0_ADDR;

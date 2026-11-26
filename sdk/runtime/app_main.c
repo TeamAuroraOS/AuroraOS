@@ -139,7 +139,7 @@ void app_sdcard_poll(void) {
 
   g_sd_previous = present;
   if (!present) {
-    crash_with_reason(CRASH_SD_EJECT, CRASH_CPU_ARM11);
+    crash_with_reason(CRASH_SD_EJECT, CRASH_CPU_ARM9); /* apps run there */
   }
 }
 

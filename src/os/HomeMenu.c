@@ -2105,10 +2105,12 @@ static int sm_app_active(void) { return 0; }
 static int sm_app_modding(void) { return 1; }
 static const char *sm_app_path(void) { return "/AURORAOS.BIN"; }
 
+/* The same ranges as the in-app side (SystemMenu11.c): the image and the app
+ * heap. Above 0x25000000 lie the launch and HOME return stubs. */
 static int sm_addr_valid(uint32_t addr, uint32_t len) {
   if (len == 0u || addr + len < addr) return 0;
   if (addr >= 0x22000000u && addr + len <= 0x23000000u) return 1;
-  if (addr >= 0x24000000u && addr + len <= 0x26000000u) return 1;
+  if (addr >= 0x24000000u && addr + len <= 0x25000000u) return 1;
   return 0;
 }
 
@@ -2440,7 +2442,7 @@ static void sm_run_plugin(AmenuSlot *slot) {
   }
 }
 
-void home_system_menu(void) {
+static void system_menu_run(void) {
   volatile u32 *bottom = (volatile u32 *)VRAM_BOT_A;
   SmItem items[AMENU_MAX_PLUGINS + 5];
   int count, selected = 0, scroll = 0;
@@ -2718,6 +2720,18 @@ void home_system_menu(void) {
       bottom[i] = sm_saved_bottom[i];
     screen_present_bottom();
   }
+}
+
+/* While menu_open is set the core runs no plugin HUD, so a plugin never runs
+ * on both CPUs at once and Reload /amenu can rewrite the slots. Outside apps
+ * the core does not write this line. */
+void home_system_menu(void) {
+  volatile AuroraSystemMenuShared *s = aurora_system_menu_shared();
+  s->menu_open = 1;
+  os_cache_sync();
+  system_menu_run();
+  s->menu_open = 0;
+  os_cache_sync();
 }
 
 static void button(int b) {

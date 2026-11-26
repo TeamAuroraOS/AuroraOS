@@ -40,6 +40,8 @@ int main(void) {
 * [Quick start](#quick-start)
 * [Writing an app](#writing-an-app)
 * [The API at a glance](#the-api-at-a-glance)
+* [The camera](#the-camera)
+* [Aurora Menu plugins](#aurora-menu-plugins)
 * [The C library](#the-c-library)
 * [Memory](#memory)
 * [Building](#building)
@@ -107,16 +109,25 @@ static void save(void) { fs_write_file(path, &state, sizeof(state)); }
 atexit(save);
 ```
 
-Pressing L + Down + Select opens Aurora's system menu in apps launched from
-the Home Menu. The resident ARM11 system service owns the chord and draws the
-overlay independently of the app's input and rendering loops. Updated C
-runtimes hide pad input from the app while the menu is open. Return to Home is
-delivered to this runtime at SDK boundaries: at start the runtime tells the
-core it handles it (`app_caps`), and the core then passes it on, after which
-the app leaves through `exit()` as HOME does. An app built with an older SDK
-gets a "press HOME" notice instead, so rebuild existing `.bin` files with
-`sdk/aurcc.py`. Power off and Cancel are handled by the resident service
-itself.
+Pressing L + Down + Select opens the Aurora Menu in apps launched from the
+Home Menu ([`docs/amenu.md`](../docs/amenu.md)). The resident ARM11 system
+service owns the chord and draws the sidebar independently of the app's input
+and rendering loops. Updated C runtimes hide pad input from the app while the
+menu is open. Home (Return to Home), and opening an app from the menu's Dock,
+is delivered to this runtime at SDK boundaries: at start the runtime tells
+the core it handles it (`app_caps`), and the core then passes it on, after
+which the app leaves through `exit()` as HOME does. An app built with an
+older SDK gets a "press HOME" notice instead, so rebuild existing `.bin`
+files with `sdk/aurcc.py`. Power Off, Brightness and plugins are handled by
+the resident service itself.
+
+Aurora Menu plugins may read and write the app's memory and press its
+buttons while it runs. The runtime helps them: it cleans its data cache when
+the menu opens, flushes its caches when the menu closes or a plugin signals
+a write (`mod_flush_seq`), and ORs a plugin's buttons (`mod_keys`) into every
+button read. This is allowed for every app: `app_modding_allowed()` always
+returns true, and `AURORA_APP_MODDING(0)` and `--no-modding` are kept only so
+older sources still build.
 
 HOME is noticed in `app_loop()`, `hid_scan()`, `hid_wait()` and `sys_sleep()`;
 a long computation that calls none of them does not respond to it until it
@@ -277,8 +288,13 @@ What the console's network allows, all of it run by the OS's ARM11 core:
   `app_loop()`, `hid_scan()`, `sys_sleep()`, every socket call and a closed lid
   count as touching it, so this only bites a loop that does none of them.
   HOME and `exit()` close sockets (a FIN, then a reset after 1 s).
-* **Not there**: `listen()`/`accept()` (`EOPNOTSUPP`; nothing can connect to
-  the console), IPv6 (`EAFNOSUPPORT`), raw sockets, `sendmsg()`/`recvmsg()`,
+* **Listening** (core 127 and later; `EOPNOTSUPP` on an older core):
+  `listen()` waits on the bound port (49152 if none) and `accept()` returns a
+  new socket once a client connects. It is one TCP connection like the rest:
+  while a socket holds it, no other can connect or listen (`EBUSY`), the
+  backlog is ignored, and the listener waits again at the next `accept()`
+  once the connection is given up.
+* **Not there**: IPv6 (`EAFNOSUPPORT`), raw sockets, `sendmsg()`/`recvmsg()`,
   `SIGPIPE` (`send()` gives `EPIPE`), reverse lookups (`getnameinfo()` gives
   numbers), TLS on a socket (use `https://` with the `http_` calls),
   `getsockname()`'s port for TCP (0). `shutdown(SHUT_WR)` stops `send()` but
@@ -316,14 +332,17 @@ Everything is declared, with comments, in
 | Sound | `snd_load` (WAV), `snd_play`, `snd_play_volume`, `snd_music`, `snd_music_volume`, `snd_stop_music`, `snd_stop_sounds`, `snd_unload_all`, `snd_available` |
 | Files | stdio, plus `fs_read_file`, `fs_write_file`, `fs_exists`, `fs_is_dir`, `fs_mkdir` (with parents), `fs_dir_open`/`read`/`close`, `fs_available` |
 | System | `sys_millis`, `sys_micros`, `sys_sleep`, `sys_time`, `sys_battery`, `sys_battery_tenths`, `sys_battery_temperature`, `sys_battery_millivolts`, `sys_charging`, `sys_is_new3ds`, `sys_user_name`, `sys_language`, `sys_accent`, `sys_power_off`, `sys_reboot` |
+| Camera | `cam_allowed`, `cam_start`, `cam_stop`, `cam_ready`, `cam_frame_seq`, `cam_frame_bgr`, `cam_draw`, `cam_save_bmp`, `cam_set_led`; `CAMERA_FRONT`, `CAMERA_BACK` ([The camera](#the-camera)) |
 | Network | `net_available`, `net_connect`, `net_connected`, `net_error`, `net_address`, `net_resolve`, `net_ping`, `net_on_wait`, `net_tcp_exchange`; `http_get`, `http_post`, `http_request`, `http_header`, `http_free`, `http_download`, `http_url_encode`; and BSD sockets ([Sockets](#sockets)) |
 
 Notes:
 
-* The Figtree fonts are the OS's, read from `SD:/Aurora/assets.pak` the first
-  time one is used. Without the pack, or with a pack from an OS build with a
-  different set of art, text falls back to the 8x8 font
-  (`gfx_fonts_loaded()` says which).
+* The Figtree fonts are the OS's. Since Beta 8 the runtime first takes the
+  fonts the OS already decoded into its asset arena (their addresses are in
+  the shared block at `0x233A8000` once the OS has booted), so an app does
+  not depend on the pack's layout; otherwise it reads `SD:/Aurora/assets.pak`
+  the first time a font is used. Without either, text falls back to the 8x8
+  font (`gfx_fonts_loaded()` says which).
 * `hid_cpad()` gives -127..127 on each axis, 0 in a small dead zone;
   `KEY_CPAD_*` act as buttons when the pad is pushed about a third of the way.
 * Sounds are WAV files, 8 or 16-bit PCM at any rate, mono or stereo (mixed
@@ -334,6 +353,46 @@ Notes:
   columns (40 on the bottom) and scrolls. Text shows at the next
   `app_loop()`, `hid_wait()` or `gfx_present()`. It is 8x8 ASCII: other
   characters show as a blank cell.
+
+## The camera
+
+New in SDK 1.7 (Beta 8). An app can stream the back
+or front camera at 320 x 240 while **Settings > Camera** is on; it is off by
+default. `cam_start()` with the setting off shows a "Camera Off" pop-up on the
+bottom screen until the user dismisses it, then returns false.
+
+```c
+if (cam_start(CAMERA_BACK)) {
+  while (app_loop() && !(hid_keys_down() & KEY_B))
+    if (cam_ready())
+      cam_draw(SCREEN_TOP, 40);
+  cam_save_bmp("last.bmp");     /* in the app's data folder */
+  cam_stop();
+}
+```
+
+Frames are column-major BGR24, the screens' own layout, so `cam_draw()` is a
+plain copy; `cam_frame_bgr()` gives the frame for your own processing, and
+`cam_frame_seq()` tells a new frame from the last. The camera LED is on while
+streaming, and leaving the app stops the camera. The driver runs on the ARM11
+core (core 150); details in [`docs/camera.md`](../docs/camera.md).
+
+## Aurora Menu plugins
+
+`aurcc` also builds plugins for the Aurora Menu: small relocatable binaries
+(magic `AMNU`, at most 120 KB with their data) that go in
+`SD:/Aurora/amenu/` and add a page to the menu's sidebar, draw a HUD over
+both screens, or mod the running app. They use their own header,
+[`include/aurora_amenu.h`](include/aurora_amenu.h), and get no C library:
+everything goes through the `AmenuApi` table they are handed.
+
+```
+py sdk/aurcc.py new --amenu MyPlugin
+py sdk/aurcc.py build --amenu MyPlugin -o MyPlugin.bin
+```
+
+The format, the callbacks, the API and how they run on both CPUs are in
+[`docs/amenu.md`](../docs/amenu.md).
 
 ## The C library
 
@@ -402,6 +461,10 @@ folder.
 | `--cflags "..."` | other compiler flags |
 | `--magic AUR1` | an `AUR1` container instead of `AURC`, for an OS from before `AURC` (Beta v0.1.4 and earlier), which refuses `AURC` ("Not an AUR1 app") |
 | `--magic AOS1` | an `AOS1` container, to boot as `AURORAOS.BIN` from the launcher |
+| `--banner FILE` | append a BNR Studio `.bnr` 3D banner (and its AIC1 colour icon) through `sdk/appbanner.py`; see [`docs/apps.md`](../docs/apps.md), "Colour icons and 3D banners" |
+| `--video` | link the video engine ([Video](#video)) |
+| `--amenu` | build an Aurora Menu plugin instead of an app ([Aurora Menu plugins](#aurora-menu-plugins)) |
+| `--allow-modding`, `--no-modding` | accepted, but no effect: plugins may mod every app |
 | `--build-dir DIR` | where objects go (default `sdk/build`, git-ignored) |
 | `--rebuild` | compile the SDK runtime again |
 | `-v` | show each compiler command |
@@ -413,7 +476,8 @@ the Bricks example 167 KB. The link map is left beside the objects
 (`sdk/build/apps/NAME/NAME.map`).
 
 `py sdk/aurcc.py new NAME [--dir DIR]` starts a project: `NAME/main.c` (a
-small program to change) and `NAME/NAME.icon`.
+small program to change) and `NAME/NAME.icon`. With `--amenu` it writes an
+Aurora Menu plugin's `main.c` instead.
 
 The tool's own tests: `py sdk/tests/test_aurcc.py` (the build test runs when
 `arm-none-eabi-gcc` is on `PATH`). The runtime's own tests run its real code
@@ -430,6 +494,7 @@ on a PC against a model of the ARM11 core: `py sdk/tests/host/run.py`
 | [`examples/net`](examples/net/main.c) | the network: joins with a spinner from `net_on_wait()`, fetches a page (A), pings a host (Y), downloads the page into its data folder (X) |
 | [`examples/system_menu`](examples/system_menu/main.c) | checks L + Down + Select while the app uses Down and Select for gameplay |
 | [`examples/sockets`](examples/sockets/main.c) | BSD sockets and `<dirent.h>`: a page over a TCP socket (A), the time from an NTP server over UDP (X), the data folder through `scandir()` (Y) |
+| [`examples/amenu_demo`](examples/amenu_demo/main.c) | an Aurora Menu plugin, not an app (`build --amenu`): a page that switches a status HUD on the top screen (see [`docs/amenu.md`](../docs/amenu.md)) |
 
 ```
 py sdk/aurcc.py build sdk/examples/bricks -o Bricks.bin
@@ -553,10 +618,10 @@ and `examples/videotest`. The first such build also compiles FFmpeg
 * One screen layer each, 24-bit colour, no 3D or stereoscopic drawing yet
   (the OS's PICA200 3D pipeline is not exposed).
 * The network is HTTP and HTTPS (TLS 1.2 only) over the saved Wi-Fi network,
-  one call at a time, requests up to 2 KB and responses up to 1020 KB
-  (`http_download()` for bigger files), and BSD sockets: one TCP connection
-  and one UDP port at a time, UDP datagrams sent up to 524 bytes, no
-  listening, no IPv6, no TLS on a socket or `net_tcp_exchange()`
+  one call at a time, requests up to 2 KB and responses up to 960 KB
+  (1020 KB before core 127; `http_download()` for bigger files), and BSD
+  sockets: one TCP connection (which may be a listening one) and one UDP port
+  at a time, UDP datagrams sent up to 524 bytes, no IPv6, no TLS on a socket or `net_tcp_exchange()`
   ([Sockets](#sockets)). The sockets are new: they were run on a PC against
   a model of the core, not yet on a console.
 * The New 3DS's extra buttons (ZL, ZR, C-stick) are not read.

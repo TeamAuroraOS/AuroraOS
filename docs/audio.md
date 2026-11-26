@@ -200,9 +200,10 @@ on the maintainer's console on 2026-11-01:
   fade, so `TRIM_LEAD` cuts the silence and each pass stays on the beat. The
   jump across the seam is 143, less than the song's usual step between two
   samples (283), so the loop does not click.
-- It stops when anything opens from the Home Menu: Settings, Files, Terminal,
-  Music, 3D Model, aShop or an SD app (`ui_sound_home_leave()`, in `home_open`,
-  `home_settings` and `home_terminal` in `os_main.c`). Folders and pop-ups are
+- It stops when anything opens from the Home Menu: Settings, the Terminal,
+  an SD app, or the bar's aShop, Files, Music and Camera
+  (`ui_sound_home_leave()`, in `home_open`, `home_settings`, `home_terminal`,
+  `home_shop`, `home_files`, `home_music` and `home_camera` in `os_main.c`). Folders and pop-ups are
   part of the Home Menu and leave it playing. Coming back restarts it from the
   top, with no startup sound.
 - It stops when the lid closes (`get_keys()` calls `ui_sound_lid_closed()` before
@@ -262,8 +263,25 @@ aShop:
 A message closed with A, B or a tap (`ui_sound_close(keys)`) plays back for B
 and select otherwise. `fv_confirm()` makes its Yes/No sound itself, so the
 File Explorer's confirm boxes make it too. The Files screens, the Terminal, the
-Music app, the 3D Model viewer, the keyboard, the setup wizard and the system
-menu (Aurore Tools) make no menu sounds, apart from those confirm boxes.
+Music app, the 3D Model viewer, the keyboard and the setup wizard make no
+menu sounds, apart from those confirm boxes. The Aurora Menu on OS screens
+and the Camera app do (select, back and move); the Aurora Menu inside apps,
+drawn by the core, does not.
+
+### A theme's sounds (Beta 8)
+
+A theme can replace the Home Menu's song with `bgm.wav` and the three menu
+sounds with `select.wav`, `back.wav` and `move.wav` in its folder
+([`home.md`](home.md), "Themes"). `ui_sound_set_theme()` takes their paths
+from `src/os/Theme.c`. `menu_load()` reads each theme sound with `wav_load()`
+as 16-bit mono (an 8-bit file is widened in place) into the 256 KB menu-sound
+slot, falling back to the pack's sound for any that is missing or does not
+load; the three share the slot, so a long first sound leaves less room for
+the others. `home_fetch()` reads `bgm.wav` the same way into the song's 5 MB
+PCM buffer and marks it ready at once, with no ADPCM slices to decode; if it
+fails, the pack's song is used. Choosing a theme calls
+`ui_sound_reload_theme()`, which stops the song and reloads the menu sounds,
+so the change is heard at once.
 
 ## A core's start-up
 
@@ -451,6 +469,33 @@ live in the core too:
   whose runtime set `app_caps`, and it closes the menu as soon as
   `app_active` drops (an older app left by HOME meanwhile), so the restarting
   OS's probe is answered. See [`home.md`](home.md), "The system menu".
+- **Core 151** (2026-11-26): the camera's buffers moved from `0x26E40000`
+  (inside aShop's arena) to `0x26B20000` ([`camera.md`](camera.md)), and
+  comments in `include/system_menu.h` changed. Nothing else on the core.
+- **Core 150** (Beta 8, PR 51, 2026-11-23; the number jumped from 130):
+  - `AUDIO_CMD_CAM` (16, `cam11_command()`) and `cam11_tick()` on every pass
+    of the loop: the camera driver in `src/os/Cam11.c`
+    ([`camera.md`](camera.md)).
+  - The system menu became the Aurora Menu: a sidebar drawn with the OS's
+    Figtree fonts into the two spare bottom framebuffers in turn, with
+    plugins, Brightness and the Dock ([`amenu.md`](amenu.md)).
+    `gpu11_menu_prev_frame()` and `gpu11_front_frame()` are new in
+    `Gpu11.c`.
+  - Plugin HUDs: `present_one()` and `present_set()` call
+    `system_menu11_draw_hud()` after copying a frame into a framebuffer and
+    before showing it; `system_menu11_poll()` runs them every 100 ms when
+    nothing is being presented.
+  - `src/i2c.c` gained `I2C_writeRegBuf()` and `src/power.c`
+    `power_set_led()` (the notification LED), both linked into the core.
+- **Core 130** (PR 47): before a RUN11 job the core folds the MPCore private
+  timer into its clock (`core11_now_us()`), and afterwards restarts the timer
+  (`timebase_start()`), so a job that reprograms that timer no longer breaks
+  the core's clock. `AUDIO_RUN11_VERSION` stays 116.
+- **Core 129** (PR 46) is a number change only; 128 was skipped.
+- **Core 127** (PR 45, `AUDIO_TCP_LISTEN_VERSION`): a second background TCP
+  connection (`WIFI_NETOP_TCP_BG2`, rings at `0x232F0000`) and listening for
+  one incoming connection; the HTTP reply buffer shrank to 960 KB to make
+  room ([`wifi.md`](wifi.md)).
 - **Core 126**: only the Wi-Fi code changed: one UDP port for apps
   (`WIFI_NETOP_UDP_BIND`, `AUDIO_UDP_VERSION`, rings at `0x233FC100`), and
   lookups beside a background TCP connection ([`wifi.md`](wifi.md), "A UDP

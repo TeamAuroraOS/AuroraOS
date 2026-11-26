@@ -94,6 +94,7 @@ static u32 prev_keys = 0;
 static u32 prev_physical_keys = 0;
 static u32 last_physical_down = 0;
 static int system_menu_from_chord;
+static void brightness_pull(void);
 static u32 prev_cpad_dirs = 0;
 static int cpad_nav_enabled = 1;
 static u32 repeat_mark;
@@ -186,6 +187,7 @@ u32 get_keys_down(void) {
       system_menu_from_chord = 1;
       home_system_menu();
       system_menu_from_chord = 0;
+      brightness_pull();
       down &= ~chord;
     }
   }
@@ -215,6 +217,26 @@ static const char *const br_labels[BR_LEVELS] = {"1 / 5", "2 / 5", "3 / 5",
                                                  "4 / 5", "5 / 5"};
 
 static UserConfig g_cfg;
+static int g_brightness_unsaved;
+
+/* The level also goes to the shared block, where the Aurora Menu reads and
+ * changes it. */
+static void brightness_to(u8 level) {
+  g_brightness = level;
+  aurora_system_menu_shared()->brightness = level;
+  audio_set_brightness(level);
+}
+
+/* The Aurora Menu changed the level: keep it like Settings would. It is saved
+ * from the Home Menu's loop, since a screen underneath may hold the card. */
+static void brightness_pull(void) {
+  u32 level = aurora_system_menu_shared()->brightness;
+  if (level <= 4u && level != g_brightness) {
+    g_brightness = (u8)level;
+    g_cfg.brightness = (u8)level;
+    g_brightness_unsaved = 1;
+  }
+}
 
 
 enum { ACT_LAUNCH, ACT_MUSIC, ACT_FILES, ACT_CUBE, ACT_STORE, ACT_CAMERA };
@@ -237,7 +259,7 @@ static char app_kind[MAX_APPS]; /* aurora_magic_kind(): 'C' for a C app */
 static int  app_count;
 
 /* The SD apps, then the built-in screens. */
-static HomeApp home_apps[MAX_APPS + 5];
+static HomeApp home_apps[MAX_APPS];
 static int home_count;
 
 /* Relocatable app hand-off + return stubs (src/os/os_launch.s), and the end of
@@ -800,8 +822,7 @@ static void bright_bottom(int level) {
 }
 
 static void bright_set(int level) {
-  g_brightness = (u8)level;
-  audio_set_brightness((u32)level);
+  brightness_to((u8)level);
   bright_top(level);
   bright_bottom(level);
 }
@@ -841,9 +862,8 @@ static void brightness_screen(void) {
     }
     if (k & BUTTON_B) {
       ui_sound_back();
-      g_brightness = (u8)kept;
       if (level != kept)
-        audio_set_brightness((u32)kept);
+        brightness_to((u8)kept);
       return;
     }
     ui_idle();
@@ -3454,13 +3474,13 @@ static void settings_open(void) {
         settings_paint();
     }
     if (sel == SET_BRIGHTNESS && (k & (BUTTON_DLEFT | BUTTON_DRIGHT))) {
-      u8 was = g_brightness;
-      if ((k & BUTTON_DRIGHT) && g_brightness < 4) g_brightness++;
-      if ((k & BUTTON_DLEFT) && g_brightness > 0) g_brightness--;
-      if (g_brightness != was)
+      u8 level = g_brightness;
+      if ((k & BUTTON_DRIGHT) && level < 4) level++;
+      if ((k & BUTTON_DLEFT) && level > 0) level--;
+      if (level != g_brightness)
         ui_sound_move();
-      g_cfg.brightness = g_brightness;
-      audio_set_brightness(g_brightness);
+      g_cfg.brightness = level;
+      brightness_to(level);
       user_config_save(&g_cfg);
       settings_draw(sel);
     }
@@ -4358,6 +4378,12 @@ static void os_gpu_late(void);
 static void home_tick(void) {
   os_gpu_late();
   ui_sound_home_tick();
+  /* The Power button's double press opens the Aurora Menu from here. */
+  brightness_pull();
+  if (g_brightness_unsaved) {
+    g_brightness_unsaved = 0;
+    user_config_save(&g_cfg);
+  }
 }
 
 static const HomeHooks home_hooks = {home_open, home_settings, home_terminal,
@@ -4472,8 +4498,21 @@ void os_main(void) {
   g_accent = aurora_accent_presets[g_cfg.accent];
   g_lang = g_cfg.language;
   g_rtc_offset = g_cfg.clock_offset;
-  g_brightness = g_cfg.brightness <= 4 ? g_cfg.brightness : 3;
-  audio_set_brightness(g_brightness);
+  {
+    /* A level the in-app Aurora Menu set is kept. On a cold boot the shared
+     * block holds whatever FCRAM held, so it counts only after an app. */
+    u8 level = g_cfg.brightness <= 4 ? g_cfg.brightness : 3;
+    if (core == AUDIO_BOOT_RUNNING) {
+      os_cache_sync();
+      u32 in_app = menu->brightness;
+      if (in_app <= 4u && in_app != level) {
+        level = (u8)in_app;
+        g_cfg.brightness = level;
+        user_config_save(&g_cfg);
+      }
+    }
+    brightness_to(level);
+  }
   ui_sound_config(g_cfg.sound_off);
   /* An app that crashed or left without stopping its video may have left cores
    * running in memory that is the OS's again. */
@@ -4488,7 +4527,6 @@ void os_main(void) {
     g_cfg.touch_set = 0; /* unusable values: keep the default */
   theme_boot_load(aurora_accent_presets[g_cfg.accent]);
   theme_sync_menu_accent();
-  menu->brightness = g_brightness;
   boot_mark(BT_CONFIG);
 
   /* Now that the accent is known. */
@@ -4503,16 +4541,20 @@ void os_main(void) {
   boot_mark(BT_APPS);
 
   home_init(home_apps, home_count, &home_hooks);
-  /* If the user picked a pinned app from the in-app Aurora Menu Dock,
-   * immediately switch straight into that app! */
+  /* An app picked from the in-app Aurora Menu's Dock starts at once. Only
+   * after an app: on a cold boot the index is whatever FCRAM held. */
   os_cache_sync();
-  if (menu->dock_launch_idx < menu->dock_count &&
+  if (core == AUDIO_BOOT_RUNNING &&
+      menu->dock_launch_idx < menu->dock_count &&
       menu->dock_launch_idx < AURORA_DOCK_MAX &&
       menu->dock[menu->dock_launch_idx].path[0]) {
     u32 idx = menu->dock_launch_idx;
     menu->dock_launch_idx = AURORA_DOCK_LAUNCH_NONE;
+    /* The app takes the OS's fonts and runs plugin HUDs only once set. */
+    menu->os_ready = 1;
     os_cache_sync();
     os_launch_app((const char *)menu->dock[idx].path);
+    menu->os_ready = 0; /* the launch failed: finish booting first */
   }
   menu->dock_launch_idx = AURORA_DOCK_LAUNCH_NONE;
   anim_transition(ANIM_FADE, ANIM_BOTH); /* from the boot or the setup wizard */

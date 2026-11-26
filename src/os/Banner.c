@@ -1375,18 +1375,22 @@ u32 banner_find(const char *app_path, u16 *icon, u8 *anim, int *has_icon) {
 
 #define BNR_CACHE_DIR     "Aurora/cache"
 #define BNR_CACHE_MAGIC   0x43524E42u /* "BNRC" */
-#define BNR_CACHE_VERSION 1u
+#define BNR_CACHE_VERSION 2u
 
+/* The file holds the Banner struct as it is in memory, so it is only good for
+ * a build with the same struct: layout and build guard that. */
 typedef struct {
   u32 magic;
   u32 version;
+  u32 layout; /* sizeof(Banner) */
+  u32 build;  /* AURORA_BUILD_DATE */
   u32 src_size;
   u32 src_crc;
   u32 arena_bytes;
 } BnrCacheHead;
 
 static void cache_path_for(const char *app_path, char out[48]) {
-  static const char hex[16] = "0123456789abcdef";
+  static const char hex[] = "0123456789abcdef";
   u32 h = 2166136261u;
   if (app_path) {
     for (const char *p = app_path; *p; p++)
@@ -1409,24 +1413,26 @@ static int cache_try_load(const char *cpath, u32 src_size, u32 src_crc) {
     return 0;
   if (f_read(&cf, &ch, sizeof(ch), &got) != FR_OK || got != sizeof(ch) ||
       ch.magic != BNR_CACHE_MAGIC || ch.version != BNR_CACHE_VERSION ||
+      ch.layout != sizeof(bn) || ch.build != AURORA_BUILD_DATE ||
       ch.src_size != src_size || ch.src_crc != src_crc ||
       ch.arena_bytes > (AR_END - AR_BASE)) {
     f_close(&cf);
     return 0;
   }
-  if (f_read(&cf, &bn, sizeof(bn), &got) != FR_OK || got != sizeof(bn)) {
-    f_close(&cf);
-    return 0;
-  }
-  if (ch.arena_bytes > 0 &&
-      (f_read(&cf, (void *)(uintptr_t)AR_BASE, ch.arena_bytes, &got) != FR_OK ||
-       got != ch.arena_bytes)) {
+  /* From here bn holds the file's copy, ok flag included: a failure must not
+   * leave it looking loaded. */
+  int read_ok = f_read(&cf, &bn, sizeof(bn), &got) == FR_OK && got == sizeof(bn);
+  bn.ok = 0;
+  bn.err = "the banner could not be read";
+  if (!read_ok ||
+      (ch.arena_bytes > 0 &&
+       (f_read(&cf, (void *)(uintptr_t)AR_BASE, ch.arena_bytes, &got) != FR_OK ||
+        got != ch.arena_bytes))) {
     f_close(&cf);
     return 0;
   }
   f_close(&cf);
 
-  bn.ok = 0;
   bn.err = 0;
   luts();
   if (!bn.opaque && bn.wall_tex >= 0 && (u32)bn.wall_tex < MAX_TEX + 2)
@@ -1457,6 +1463,8 @@ static void cache_save(const char *cpath, u32 src_size, u32 src_crc) {
     return;
   ch.magic = BNR_CACHE_MAGIC;
   ch.version = BNR_CACHE_VERSION;
+  ch.layout = sizeof(bn);
+  ch.build = AURORA_BUILD_DATE;
   ch.src_size = src_size;
   ch.src_crc = src_crc;
   ch.arena_bytes = arena_bytes;

@@ -15,8 +15,8 @@ models' files were checked on the PC; see "What has been checked".
 
 ## Using it
 
-Copy a binary glTF file to **`SD:/Aurora/model.glb`**, then open **Home Menu >
-3D Model**. The bottom screen shows the load (Reading, Parsing, Meshes,
+Copy a binary glTF file to **`SD:/Aurora/model.glb`**, then open **Settings >
+3D Model Test** (until Beta 7 it was a tile on the Home Menu). The bottom screen shows the load (Reading, Parsing, Meshes,
 Textures), then the model appears on the top screen, centred and scaled to a
 radius of 2 units, seen from 4.5 units away.
 

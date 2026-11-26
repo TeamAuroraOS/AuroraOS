@@ -31,8 +31,13 @@ Optional:
 - Apps such as `Games/Tetris.BIN` go in `SD:/Aurora/Apps/`, apps written in C
   in `SD:/Aurora/Apps/C/`; see [`docs/apps.md`](docs/apps.md) and
   [`sdk/README.md`](sdk/README.md)
-- Wallpaper themes go in `SD:/Aurora/themes/<Name>/` as `top.png` (400x240) and
-  `bottom.png` (320x240); pick one in Settings > Theme
+- Themes go in `SD:/Aurora/themes/<Name>/`: `top` and `bottom` pictures (PNG
+  or JPEG, any size), and optionally `theme.ini` colours, a `bgm.wav` Home
+  Menu song and `select`/`back`/`move.wav` sounds. Copy
+  `Aurora/themes/NorthernLights` for an example, then pick it in Settings >
+  Theme; see [`docs/home.md`](docs/home.md)
+- Aurora Menu plugins (`.bin` files with the `AMNU` magic) go in
+  `SD:/Aurora/amenu/`; see [`docs/amenu.md`](docs/amenu.md)
 
 Wi-Fi needs the console's own Wi-Fi firmware. The first time you open
 Settings > Wi-Fi, Aurora offers to copy it from the system NAND (read only) to
@@ -50,22 +55,26 @@ Settings > Wi-Fi, Aurora offers to copy it from the system NAND (read only) to
 |-------|--------|
 | D-pad + **A**, or tap a tile | open an app |
 | **L** / **R**, or swipe | turn the page |
-| **Y** | move a tile, make, rename or remove a folder, delete an app |
+| **Y** | move a tile, make, rename or remove a folder, delete an app, pin it to the Dock |
 | Hold a tile with the stylus | drag it; drop it on a folder to put it in, or on an app to make a folder |
 | **B** | leave a folder |
 | **START**, or the settings icon | Settings |
 | **X** | [terminal](docs/terminal.md) |
 | **L** + **R** | screenshot, on any screen |
-| **L** + **Down** + **Select** | system menu, here and in apps |
+| **L** + **Down** + **Select** | the Aurora Menu, here and in apps |
+| Power button | once: power off; twice: the Aurora Menu |
 
-The power icon at the top left of the touch screen turns the console off. More
-in [`docs/home.md`](docs/home.md).
+The power icon at the top left of the touch screen turns the console off; the
+icons at the right of the bar open aShop, Files, Music, the Camera and
+Settings. More in [`docs/home.md`](docs/home.md).
 
 ## Documentation
 
 * [`docs/features.md`](docs/features.md): everything that works, and its state
 * [`docs/source-layout.md`](docs/source-layout.md): where the code for each part lives
-* [`docs/home.md`](docs/home.md): the Home Menu, the system menu, wallpaper themes
+* [`docs/home.md`](docs/home.md): the Home Menu, themes
+* [`docs/amenu.md`](docs/amenu.md): the Aurora Menu, the Dock and plugins
+* [`docs/camera.md`](docs/camera.md): the Camera app and the camera driver
 * [`docs/apps.md`](docs/apps.md): the app container format and loader
 * [`docs/store.md`](docs/store.md): aShop, the store, and publishing apps
 * [`docs/account.md`](docs/account.md): Aurora accounts
@@ -96,6 +105,11 @@ Aurora is licensed **GPL-3.0** (see `LICENSE`), with these exceptions:
   driver `ctr_pica.c`) stay **GPL-2.0**, the license of the code they derive
   from, since GPL-2.0-only is incompatible with GPL-3.0. The text is in
   `LICENSE.wifi`; credits are in `docs/wifi.md` and `docs/gpu.md`.
+- The **camera driver** in `src/os/Cam11.c` is ported from Octoblimp's Android
+  Eclair 3DS (its kernel driver `ctr_cam.c` and `CameraHardwareN3ds.cpp`) and
+  carries an `SPDX-License-Identifier: GPL-2.0` header. `LICENSE-CAMDRIVER`
+  holds the Apache-2.0 licence that project ships; see the credit below and
+  `docs/camera.md`.
 - The New 3DS clock switch in `src/os/Clock11.c` follows fastboot3DS and libn3ds
   (derrek and profi200, GPL-3.0).
 - The **Figtree** font is under the **SIL Open Font License 1.1** (Copyright 2022

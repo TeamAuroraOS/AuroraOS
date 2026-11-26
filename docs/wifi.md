@@ -36,8 +36,8 @@ a New 3DS at about 160 KB/s).** Every received frame used to be read a byte per 
 at the 523 kHz identification clock, about 0.3 s for a full one, which held
 aShop's downloads to about 4 KB a second. Network operations now read a
 128-byte block per CMD53 on the fastest clock the bus takes, up to 16.8 MHz,
-and the HTTP reply buffer grew from 8 KB to 1020 KB so aShop can ask for
-large pieces (see *The bus in network operations*). The boot and the join
+and the HTTP reply buffer grew from 8 KB to 1020 KB (960 KB since core 127)
+so aShop can ask for large pieces (see *The bus in network operations*). The boot and the join
 are unchanged.
 
 **Core v114 speaks TCP, and it works on hardware (New 3DS, 2026-10-04).** A new
@@ -578,11 +578,15 @@ if it cannot, the session ends and the answer is `WIFI_NETS_NOLINK`.
 | `DNS` | an A query for `name` to the DNS server DHCP gave (the router if none), up to three tries; `ip`, or `NONAME` (NXDOMAIN), `DNSFAIL`, `BADNAME`, `TIMEOUT` |
 | `PING` | one echo to `ip` with `seq`: 56 data bytes as Linux sends; `rtt_us`, `ttl`, `bytes`, `from`, or `ICMPERR` with the type and code of an unreachable or time-exceeded that quotes our echo |
 | `LEAVE` | `WMI_DISCONNECT`, and the session ends |
-| `HTTP` | one HTTP exchange over TCP with `ip`:`port` (core 114): the request at `WIFI_HTTP_REQ` (`0x233B9000`, 2 KB) goes out, the reply comes back at `WIFI_HTTP_RESP` (`0x23200000`, 1020 KB; 8 KB at `0x233B9800` before core 115) until the server closes or its `Content-Length` is in; `resp_len`, `stage`, `resent`, or `REFUSED` (RST), `TOOBIG`, `TIMEOUT` |
+| `HTTP` | one HTTP exchange over TCP with `ip`:`port` (core 114): the request at `WIFI_HTTP_REQ` (`0x233B9000`, 2 KB) goes out, the reply comes back at `WIFI_HTTP_RESP` (`0x23200000`, 960 KB from core 127, 1020 KB in cores 115-126, 8 KB at `0x233B9800` before core 115) until the server closes or its `Content-Length` is in; `resp_len`, `stage`, `resent`, or `REFUSED` (RST), `TOOBIG`, `TIMEOUT` |
 | `TCP` | a connection with `ip`:`port` that the ARM9 drives through `WifiTcp` until it closes it (core 121; see *A connection the ARM9 drives*); `stage`, `resent`, or `REFUSED`, `NOHOST`, `TIMEOUT` |
 | `TCP_BG` | the same, but the command ends as soon as the SYN is out, and the core keeps the connection going between other commands (core 124; see *A connection in the background*) |
 | `UDP_BIND` | from core 126: datagrams to and from local port `port` (0: the core picks one from 49152) go through `WifiUdp`, in the background, until `UDP_UNBIND`, a join, a probe, `LEAVE`, the session ending, or 15 s without an `alive` bump; binding again moves it and empties the rings. `TOOBIG` for port 68, the DHCP client's (see *A UDP port for apps*) |
 | `UDP_UNBIND` | from core 126: the port closes |
+| `TCP_BG2` | from core 127: a second background connection, the same as `TCP_BG` but through its own `WifiTcp` at `0x232F0000` (see *A second connection, and listening*) |
+
+From core 127 an `ip` of 0 in a `TCP_BG` or `TCP_BG2` request listens on
+`port` instead of connecting.
 
 A frame for an address off our subnet goes to the router's MAC; one on the
 subnet first needs that host's MAC, asked for with ARP (one entry is kept).
@@ -742,6 +746,36 @@ The TCP window is still the 8 KB of `NET_TCP_WND`. On a New 3DS at full power (t
 maintainer's console, 2026-11-02) `curl --speed` read a 10 MB file at about 300 KB/s
 with the Terminal drawing throughout, against 160 KB/s before core 124.
 
+### A second connection, and listening
+
+Core 127 (PR 45 by Cracko298, 2026-11-12, `AUDIO_TCP_LISTEN_VERSION`) adds two
+things to the background connection:
+
+* **A second channel.** `WIFI_NETOP_TCP_BG2` runs another connection beside
+  the first, with its own rings at `WIFI_TCP2_ADDR` (`0x232F0000`, 49,216
+  bytes, between the HTTP reply buffer and `AudioCtrl`; a static assert in
+  `WiFi11.c` keeps it there). On the core it is `g_net_extra` and `g_tr[1]`;
+  `wifi_data_rx` offers it any IPv4 TCP frame the first channel turns down.
+  To make room, the HTTP reply buffer shrank to 960 KB (`0xF0000`).
+* **Listening.** With `ip` 0 the core waits on `port` (`NET_TCP_LISTEN`),
+  answers a SYN with a SYN-ACK (resent on the retransmission timer, the
+  peer's MAC taken from the SYN's frame) and opens the connection on the
+  ACK. One connection per listen, no backlog; a listener needs `alive` bumps
+  like any connection. `WifiTcp`'s last words became `peer_ip`, `peer_port`
+  and `local_port`.
+
+A `TCP_BG` on a channel that is still running now answers `WIFI_NETS_BUSY`;
+before, it replaced the connection. On the ARM9, `wifi_tcp_select(channel)`
+(`WiFiTcp.c`) points every `wifi_tcp_*` call at one channel's rings, and
+AppNet has `appnet_tcp_open_channel()`, `appnet_tcp_listen_channel()`,
+`appnet_tcp_release_channel()` and `appnet_tcp_listen()` (channel 0).
+`wifi_tcp_select()` sets a global, and streams, sockets and TLS use channel 0
+without selecting it, so since 2026-11-26 `appnet_tcp_open_channel()` puts
+channel 0 back before it returns (PR 45 left channel 1 selected); code that
+uses channel 1 selects it around its own `wifi_tcp_*` calls. The C SDK's `listen()` and `accept()` use channel 0
+(see `sdk/README.md`, *Sockets*). None of this is recorded as tried on a
+console.
+
 ### When a session stops working
 
 Nothing reads the chip between commands, and much of what can go wrong with
@@ -885,7 +919,7 @@ does for the OS:
   are (64 KB first, then 16 to 512 KB for about 3 s each, halved after a
   failure that may pass), write them to `<path>.part` and rename it; a
   server that ignores Range sends the whole file, which then must fit in
-  1020 KB.
+  960 KB (1020 KB before core 127).
 - Between posting and the acknowledgement the core does nothing else, so
   the runtimes post nothing else: the SDK copies frames to framebuffer A by
   the CPU for a `net_on_wait()` handler and drops sounds, and HOME pressed
@@ -901,26 +935,36 @@ The console-side setup. The Settings row shows the saved network's name.
 
 - **Search for networks** boots the chip and scans (about 20 s). The list has
   one row per name, strongest first, with signal bars and a lock on secured
-  networks; hidden networks are left out. The saved network stays listed
-  even when the search did not see it.
+  networks; hidden networks are left out. Saved networks stay listed even when
+  the search did not see them; the active one is tagged "Active", the others
+  "Saved".
 - **Picking an open network** saves it and joins it (about half a minute),
   and the console stays joined for the terminal. The top screen then says
   `Connected to ...` with the address, the router and the pings, or why it stopped: not found (the 3DS only sees 2.4 GHz, channels 1
   to 13), the firmware's disconnect reason, no DHCP answer, and so on.
-- **Picking a secured network** opens the keyboard in its password mode,
-  filled in with the saved password when it is the saved network: the `abc`
+- **Picking a saved network** (Beta 8) joins it at once with its saved
+  password, and makes it the active one.
+- **Picking a secured network** that is not saved opens the keyboard in its
+  password mode (**X** opens it for a saved one too, to change its password),
+  filled in with the saved password if there is one: the `abc`
   key (or L) cycles lower case, upper case and a layer with every ASCII
   symbol; B deletes, START is done, SELECT cancels. A password of 8 to 63
   characters (or a 64-hex-digit PSK) is saved with the network and the
   console joins it. A wrong one ends with "Wrong password?".
 - Networks AuroraOS cannot join show their security as a tag (`WPA3`,
   `802.1X`, `WEP`, `WPA`, `TKIP`) and say why when picked.
-- **Y** on the saved network forgets it.
+- **Y** on a saved network forgets it; if it was the active one, the next
+  saved network becomes active.
 - Without the firmware on the SD card it first offers to copy it from the
   console (see the next section).
 
-The network is kept in `SD:/Aurora/wifi/network.txt`, two lines,
-`ssid=` and `password=`, in plain text. While a command runs the core cannot
+The active network is kept in `SD:/Aurora/wifi/network.txt`, two lines,
+`ssid=` and `password=`, in plain text; apps and the terminal join with it.
+Since Beta 8 (PR 51) up to eight networks are remembered in
+`SD:/Aurora/wifi/networks.txt` (`WIFI_NETS_FILE`), the same two lines per
+network, most recently used first. A network in `network.txt` that the list
+lacks is added to it when Settings > Wi-Fi loads, so an older card keeps its
+network. When a ninth is saved the oldest is dropped. While a command runs the core cannot
 present frames, so the progress screen (what the chip is doing, a spinner,
 the seconds) is drawn straight into the framebuffer on screen, with CPU
 drawing only. B twice stops waiting; the screen then stays on a "still
@@ -1099,10 +1143,10 @@ there into shared FCRAM before each boot. Main.type5 is copied but not used.
 
 ## Path forward
 
-1. Servicing the chip between commands: done for one TCP connection
-   (`TCP_BG`, core 124) and one UDP port (core 126), which the C SDK's sockets
-   use. Several TCP connections at once, a listening socket, and UDP datagrams
-   larger than one 566-byte frame (or fragments) are still to do. Keeping
+1. Servicing the chip between commands: done for two TCP connections
+   (`TCP_BG`, core 124, and `TCP_BG2`, core 127), a listening socket (core
+   127) and one UDP port (core 126), which the C SDK's sockets use. UDP
+   datagrams larger than one 566-byte frame (or fragments) are still to do. Keeping
    segments that arrive out of order, rather than dropping them, would help
    links that reorder.
 2. WPA3 (SAE) would need the firmware to pass authentication frames to the

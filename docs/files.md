@@ -180,7 +180,7 @@ accent colour and the title bar counts them.
   and right move between digits. **A** or **B** leaves it.
 * **START** or Save writes the changes after a confirmation; **SELECT** or Revert
   drops them; **B** or Close leaves, asking first if anything is unsaved.
-  Return to Home in the system menu (L + Down + Select, see
+  Home in the Aurora Menu (L + Down + Select, see
   [`home.md`](home.md)) leaves without asking and drops unsaved changes, as
   HOME does in an app.
 

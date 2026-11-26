@@ -17,7 +17,8 @@ ARM9 runs the OS; the ARM11 handles the hardware the ARM9 cannot reach.
 | Stereoscopic top screen | `src/os/Stereo9.c` (slider, model) | `src/os/Stereo11.c` (mode, barrier) |
 | Codec bus (shared by audio + touch) | | `src/os/Codec11.c` |
 | Core entry and command loop | | `src/os/Core11.c` |
-| System menu (L + Down + Select) | `src/os/HomeMenu.c` (`home_system_menu`, OS screens) | `src/os/SystemMenu11.c` (inside apps) |
+| Aurora Menu (L + Down + Select) and plugin HUDs | `src/os/HomeMenu.c` (`home_system_menu`, OS screens), `src/os/AmenuLoader.c` (loads plugins) | `src/os/SystemMenu11.c` (inside apps, and every HUD) |
+| Camera | `src/os/Camera.c` (the app), `sdk/runtime/app_cam.c` (C apps) | `src/os/Cam11.c` (the driver) |
 | Screen brightness | `src/os/Audio9.c` (`audio_set_brightness`) | `src/os/Core11.c` |
 | Lid closed | `include/lid.h` (the OS and the app runtimes wait) | `src/os/Core11.c` (`core11_sleep_poll`, backlights off) |
 | New 3DS clock switch | `src/model.c` | `src/os/Clock11.c` |
@@ -25,7 +26,7 @@ ARM9 runs the OS; the ARM11 handles the hardware the ARM9 cannot reach.
 
 The ARM11 files link into one core binary, which the ARM9 embeds and wakes;
 `src/os/core11.h` carries what they share; `src/power.c` and `src/i2c.c` are
-built into the core as well, for the system menu's Power Off. ARM9-only
+built into the core as well, for the Aurora Menu's Power Off and LED. ARM9-only
 modules keep plain names: `src/screen.c`, `src/power.c`, `src/i2c.c`,
 `src/sdmmc.c`, `src/os/Timer9.c`,
 `src/assets.c`, `src/ui.c` (with the cached wallpaper a theme replaces),
@@ -36,7 +37,8 @@ operations in `src/os/FileOps.c`, screenshots in `src/os/Screenshot.c`, touch
 calibration in `src/os/TouchCal.c`, the terminal in `src/os/Terminal.c` with its
 commands in `src/os/TermCmds.c`, the render test in `src/os/RenderTest.c`, and
 the Home Menu in `src/os/HomeMenu.c` with its arrangement in
-`src/os/HomeLayout.c`, the aShop store in `src/os/Store.c`, the startup sound,
+`src/os/HomeLayout.c` and its 3D app banners in `src/os/Banner.c`, themes in
+`src/os/Theme.c`, the aShop store in `src/os/Store.c`, the startup sound,
 menu sounds, the Home Menu's song and aShop's music in `src/os/UiSound.c`, Aurora accounts
 in `src/os/Account.c` with the QR encoder in `src/os/Qr.c` and the HTTP
 client both use in `src/os/Http.c`, the Wi-Fi
@@ -52,7 +54,9 @@ compiler. `sdk/` is for apps in C: the public header `sdk/include/aurora_app.h`,
 the runtime in `sdk/runtime/` (which links the OS's own drivers from `src/`
 and devkitARM's newlib; `app_socket.c` and `app_dirent.c` add BSD sockets and
 `<dirent.h>`, with the socket headers newlib lacks in `sdk/include/`), the
-build tool `sdk/aurcc.py`, examples in `sdk/examples/`, and tests:
+build tool `sdk/aurcc.py` (which also builds Aurora Menu plugins with
+`sdk/include/aurora_amenu.h` and `sdk/runtime/amenu.ld`), `sdk/appbanner.py`
+(puts a banner in an app), examples in `sdk/examples/`, and tests:
 `sdk/tests/test_aurcc.py` for the tool, `sdk/tests/host/` for the runtime's
 code run on a PC against a model of the ARM11 core. `cpu-stress/` is a CPU benchmark built both as an AuroraOS C
 app and as Horizon homebrew, to compare the two systems.

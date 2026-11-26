@@ -57,20 +57,40 @@ drain the ARM9 write buffer, then write bit 0 or bit 2 of `0x20` and wait for
 the power to go. The screens go off first because the MCU can hang otherwise.
 Neither function returns.
 
-The Home Menu's power icon (after asking), its old-core prompt and the system
-menu's Power Off (L + Down + Select, [`home.md`](home.md)) use
+The Home Menu's power icon (after asking), its old-core prompt and the Aurora
+Menu's Power Off (L + Down + Select, [`amenu.md`](amenu.md)) use
 `power_shutdown()`,
 and the terminal's `shutdown`, `poweroff`, `reboot` and `systemctl
 poweroff|reboot` use both. The crash handler keeps its own copy of the
 power-off sequence in `src/os/crash.c`, so a fault never depends on more code
 than it has to.
 
-Inside an app the system menu runs on the ARM11 core, so from core 118
+Inside an app the Aurora Menu runs on the ARM11 core, so from core 118
 `src/power.c` and `src/i2c.c` are compiled a second time for the core
 (`build/os_power11.o`, `build/os_i2c11.o`) and the core calls the same
 `power_shutdown()`. The drain instruction is a data synchronisation barrier on
 the ARM11. A change to either file changes the core, so it needs an
 `AUDIO_CORE_VERSION` bump.
+
+### The Power button (Beta 8)
+
+The Home Menu reads the Power button itself: every 16 passes of its loop,
+`mcu_power_pressed()` (`src/os/HomeMenu.c`) reads the MCU's four interrupt
+bytes at `0x10` and looks at bit 0. One press shows the same "Turn off the
+console?" question as the power icon; a second press within 300 ms (and at
+least 35 ms after the first) opens the Aurora Menu instead. The first read at
+start-up throws away a press left over from boot. Only the Home Menu does
+this; other screens and apps do not react to the button.
+
+### The notification LED (Beta 8)
+
+`power_set_led(r, g, b)` in `src/power.c` writes a 100-byte pattern to MCU
+register `0x2D`: no delay or smoothing, a loop delay of 0xFF (stay on), then
+32 identical steps for each of red, green and blue, so the LED holds one
+colour (0, 0, 0 turns it off). It needed `I2C_writeRegBuf()`, a multi-byte
+write added to `src/i2c.c`. Aurora Menu plugins reach it through
+`set_led_color`; nothing in the OS calls it otherwise. The camera LED is a
+different register, `0x2B` ([`camera.md`](camera.md)).
 
 ## Closing the lid
 
@@ -176,6 +196,9 @@ darkest level. The launcher's own Settings
 (`set_brightness()` in `src/main.c`) still only stores the value, since the
 firm's ARM9 has no core to ask.
 
+The Aurora Menu's Brightness row changes the same level; the OS saves it
+too ([`amenu.md`](amenu.md)).
+
 ## Full power
 
 From core 124 a New 3DS or New 2DS XL runs at its full clock from boot: 804 MHz on
@@ -183,7 +206,10 @@ a retail console (536 MHz on the LGR1 prototype), with the 2 MB L2 cache on.
 `os_main()` asks as soon as `USER.dat` is read, and again after every HOME return,
 in case an app put the clock back. Settings > Full power turns it off and on at
 once and saves it in `USER.dat` byte 53 (`USER_DAT_POWER`, 1 for off, so older
-files read as on). Off, a New model runs at the 268 MHz of an Old 3DS without its
+files read as on). Beta 8 adds byte 54 (`USER_DAT_CAMERA`, Settings > Camera,
+[`camera.md`](camera.md)) and byte 55 (`USER_DAT_AUTOBOOT`, Settings >
+Autoboot, read by the firm; see "Autoboot" below); both read as 0 (off) in
+older files. Off, a New model runs at the 268 MHz of an Old 3DS without its
 L2 cache. An Old 3DS has nothing to switch, and the row shows `---`.
 
 Horizon's Home Menu also runs at 804 MHz, but Aurora's ARM11 polls and never
@@ -195,6 +221,27 @@ Holding SELECT at boot leaves it off for that boot, as it does the caches.
 
 Works on the maintainer's New 3DS (2026-11-02), along with everything else they
 tried: `systemctl status core11` and `cores`, Wi-Fi, and the switch.
+
+## Autoboot (Beta 8)
+
+**Settings > Autoboot** (off by default) saves byte 55 of `USER.dat`. The
+firm (`src/main.c`, `Aurora.firm`) reads it at start (`read_autoboot_flag()`,
+up to four tries to mount the card): when it is on, the firm shows only the
+Aurora logo on a black top screen and starts `AURORAOS.BIN` without its menu
+or progress screen (`boot_aurora_ex(1)`). Holding **A** through the first
+~350 ms opens the menu instead, while a short A press (from a chainloader
+such as Luma3DS's menu) still autoboots. If the boot fails, the error screen
+comes up and B goes to the menu.
+
+The firm's menu itself was redrawn in the Home Menu's style: three tiles
+(Start, Power, Settings, the last one only for brightness) with a preview of
+the choice on the top screen, using the asset pack's icons and fonts when
+`SD:/Aurora/assets.pak` loads. Its errors now say what went wrong in a
+sentence ("SD Card Not Found", "AuroraOS Not Found", "Couldn't Start
+AuroraOS") and **START** shows the details (stage, FatFs code, sizes and
+addresses). The SD card and FatFs tests that START and SELECT used to open
+are no longer reachable (`ui_sd_test()` and `ui_fs_test()` are still in the
+file).
 
 ## What the UI shows
 

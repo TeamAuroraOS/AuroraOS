@@ -1504,24 +1504,38 @@ int appnet_download(const char *url, const char *headers, const char *path,
 int appnet_tcp_open_channel(u32 channel, u32 ip, u32 port, u32 timeout_ms) {
   g_err[0] = 0;
   if (channel > 1 || !port || port > 65535u || !appnet_ready()) return 0;
-  if (ctrl->version < AUDIO_TCP_BG_VERSION || ((channel || !ip) && ctrl->version < AUDIO_TCP_LISTEN_VERSION)) {
-    g_last_st = WIFI_NETS_NOLINK; err("sockets need Aurora core 127", 0, 0); return 0;
+  if (ctrl->version < AUDIO_TCP_BG_VERSION) {
+    g_last_st = WIFI_NETS_NOLINK; err("sockets need a newer AuroraOS", 0, 0); return 0;
+  }
+  if ((channel || !ip) && ctrl->version < AUDIO_TCP_LISTEN_VERSION) {
+    g_last_st = WIFI_NETS_NOLINK;
+    err("listening and a second connection need a newer AuroraOS", 0, 0);
+    return 0;
   }
   if ((g_tcp_held & (1 << channel)) || st_is_open()) {
     g_last_st = WIFI_NETS_BUSY; err("TCP channel is in use", 0, 0); return 0;
   }
   u32 op = channel ? WIFI_NETOP_TCP_BG2 : WIFI_NETOP_TCP_BG;
   if (!claim_op(op)) return 0;
+  /* wifi_tcp_* act on the selected channel, and streams, sockets and TLS all
+   * use channel 0 without selecting it, so channel 0 is put back before every
+   * return. A user of channel 1 selects it around its own wifi_tcp_* calls. */
   wifi_tcp_select(channel); wifi_tcp_setup(ip, port, timeout_ms);
   send(AUDIO_CMD_WIFI_NET, op);
   for (u32 t0 = appnet_ms(); !core_done();) {
     if (appnet_ms() - t0 >= 5000u) {
       wifi_tcp_close(WIFI_TCP_ABORT);
+      wifi_tcp_select(0);
       err("TCP start timed out", 0, 0); return 0;
     }
   }
   g_busy = 0;
-  if (wifi_tcp_state() == WIFI_TCP_CLOSED) { g_last_st = wifi_tcp_end_status(); return 0; }
+  if (wifi_tcp_state() == WIFI_TCP_CLOSED) {
+    g_last_st = wifi_tcp_end_status();
+    wifi_tcp_select(0);
+    return 0;
+  }
+  wifi_tcp_select(0);
   g_tcp_held |= 1 << channel;
   return 1;
 }

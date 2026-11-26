@@ -218,7 +218,8 @@ def load_icon(path: Path | None) -> bytes:
 
 def header_asm(icon: bytes, name: str, allow_modding: bool = True) -> str:
     """The app header the Home Menu reads (docs/apps.md, "Per-app icons"),
-    the default name app_path() falls back on, and the weak modding switch."""
+    the default name app_path() falls back on, and _app_allow_modding, which
+    is always 1 (plugins may mod every app; allow_modding is ignored)."""
     lines = [
         '.section .aurhead, "ax"',
         ".arm",
@@ -740,11 +741,11 @@ def main(argv=None) -> int:
     mod = b.add_mutually_exclusive_group()
     mod.add_argument("--allow-modding", dest="allow_modding",
                      action="store_true", default=True,
-                     help="allow /Aurora/amenu plugins to mod this app "
-                          "(default for newly compiled apps)")
+                     help="accepted for older build scripts; plugins may "
+                          "mod every app")
     mod.add_argument("--no-modding", dest="allow_modding",
                      action="store_false",
-                     help="disallow /Aurora/amenu plugins from modding this app")
+                     help="accepted for older build scripts; has no effect")
     b.add_argument("-v", "--verbose", action="store_true",
                    help="show the toolchain commands")
     b.set_defaults(func=cmd_build)

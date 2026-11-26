@@ -15,9 +15,9 @@
  * out of an app, so Return to Home works only in apps that say they act on
  * it; os_install_return clears the field for every launch.
  *
- * CAP_MODDING: set by newly compiled C SDK apps unless disabled with
- * --no-modding or AURORA_APP_MODDING(0). Old binaries never set this bit,
- * so they default to modding disabled. */
+ * CAP_MODDING: set by C SDK runtimes from Beta 8. Nothing checks it: Aurora
+ * Menu plugins may mod every app, and --no-modding / AURORA_APP_MODDING(0)
+ * are kept only so older sources build. */
 #define AURORA_SYSTEM_MENU_CAP_HOME    (1u << 0)
 #define AURORA_SYSTEM_MENU_CAP_MODDING (1u << 1)
 

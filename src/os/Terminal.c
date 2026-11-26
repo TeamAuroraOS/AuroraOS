@@ -297,6 +297,39 @@ static void t_draw_run(volatile u8 *fb, int *px, int y, const char *s, int n,
   *px += ui_tw(&ui_small, tmp);
 }
 
+/* Rows wrap at T_COLS characters, but Figtree is proportional: a row of wide
+ * letters would run past the screen's edge, and such a row is drawn in the
+ * 8x8 font instead, which always fits. `slack` keeps room for the cursor. */
+static int t_row_fits(const char *s, int n, int slack) {
+  char tmp[T_COLS + 1];
+  if (n > T_COLS)
+    n = T_COLS;
+  if (n < 0)
+    n = 0;
+  for (int i = 0; i < n; i++)
+    tmp[i] = s[i] ? s[i] : ' ';
+  tmp[n] = 0;
+  return T_X0 + ui_tw(&ui_small, tmp) + slack <= TOP_SCREEN_WIDTH - 4;
+}
+
+/* One row in the 8x8 font at pixel row y, with the cursor at cur_col (-1 for
+ * none). */
+static void t_row8(volatile u8 *fb, int y, const char *ch, const u8 *co,
+                   int n, int cur_col) {
+  for (int c = 0; c < T_COLS; c++) {
+    int x = T_X0 + c * FONT_WIDTH;
+    char v = c < n ? ch[c] : ' ';
+    if (c == cur_col) {
+      draw_filled_rect(fb, x, y, FONT_WIDTH, T_LH, TOP_SCREEN_HEIGHT,
+                       t_pal[TC_TEXT]);
+      if (v && v != ' ')
+        draw_char(fb, x, y + 1, TOP_SCREEN_HEIGHT, v, t_bg, t_pal[TC_TEXT]);
+    } else if (c < n && v && v != ' ') {
+      draw_char(fb, x, y + 1, TOP_SCREEN_HEIGHT, v, t_rgb(co[c]), t_bg);
+    }
+  }
+}
+
 /* The scrollback, then the prompt and command line (or a job's status), the
  * newest rows at the bottom unless scrolled back. Uses the anti-aliased
  * Figtree ui_small font when assets.pak is loaded, falling back to 8x8. */
@@ -338,10 +371,12 @@ static void t_render(void) {
     int y = T_Y0 + r * lh;
     if (v < keep + (u32)partial) {
       const TLine *l = &t_buf[(lo + v) % T_KEEP];
-      if (nice) {
-        int len = T_COLS;
-        while (len > 0 && (!l->ch[len - 1] || l->ch[len - 1] == ' '))
-          len--;
+      int len = T_COLS;
+      while (len > 0 && (!l->ch[len - 1] || l->ch[len - 1] == ' '))
+        len--;
+      if (nice && !t_row_fits(l->ch, len, 0)) {
+        t_row8(fb, y, l->ch, l->co, len, -1);
+      } else if (nice) {
         int x = T_X0, c = 0;
         while (c < len) {
           u8 col = l->co[c];
@@ -357,7 +392,11 @@ static void t_render(void) {
       continue;
     }
     int k = (int)(v - keep - (u32)partial) * T_COLS;
-    if (nice) {
+    int on_row = lv_n - k < T_COLS ? lv_n - k : T_COLS;
+    int cur_col = (t_cursor_on && cur >= k && cur < k + T_COLS) ? cur - k : -1;
+    if (nice && !t_row_fits(lv_ch + k, on_row, cur_col >= 0 ? 8 : 0)) {
+      t_row8(fb, y, lv_ch + k, lv_co + k, on_row, cur_col);
+    } else if (nice) {
       int x = T_X0;
       for (int c = 0; c < T_COLS; c++) {
         int i = k + c;
