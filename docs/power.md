@@ -89,8 +89,10 @@ register `0x2D`: no delay or smoothing, a loop delay of 0xFF (stay on), then
 32 identical steps for each of red, green and blue, so the LED holds one
 colour (0, 0, 0 turns it off). It needed `I2C_writeRegBuf()`, a multi-byte
 write added to `src/i2c.c`. Aurora Menu plugins reach it through
-`set_led_color`; nothing in the OS calls it otherwise. The camera LED is a
-different register, `0x2B` ([`camera.md`](camera.md)).
+`set_led_color`, and the camera turns it white while it runs
+([`camera.md`](camera.md)); the camera also writes the camera LED register,
+`0x2B`. A plugin colour set while the camera runs replaces the white until
+the camera stops, which turns the LED off.
 
 ## Closing the lid
 

@@ -75,4 +75,7 @@ static inline volatile CamShared *cam_shared(void) {
 /* Built-in Home Menu Camera app (Capture + Gallery). */
 void camera_app_run(void);
 
+/* At OS start: stops a camera an app left on and turns its light off. */
+void camera_boot_reset(int core_was_running);
+
 #endif

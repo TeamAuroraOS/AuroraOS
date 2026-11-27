@@ -593,10 +593,11 @@ void video_stats(VideoStats *out);
 
 /* True when Settings > Camera permission is turned ON. */
 bool cam_allowed(void);
-/* Starts streaming from CAMERA_FRONT or CAMERA_BACK (turns on the Camera LED).
+/* Starts streaming from CAMERA_FRONT or CAMERA_BACK and turns the camera light
+ * on (the notification LED shines white).
  * Shows the "Camera Off" pop-up and returns false if disabled in Settings. */
 bool cam_start(int which);
-/* Stops streaming and turns off the Camera LED (also called automatically on exit). */
+/* Stops streaming and turns the camera light off (also called automatically on exit). */
 void cam_stop(void);
 /* True once at least one live frame is ready. */
 bool cam_ready(void);
@@ -609,7 +610,8 @@ const uint8_t *cam_frame_bgr(void);
 bool cam_draw(Screen screen, int x_off);
 /* Saves the current camera frame as a 24-bit BMP to `path` on the SD card. */
 bool cam_save_bmp(const char *path);
-/* Controls the 3DS Camera LED (requires camera permission to turn on). */
+/* The camera light (requires camera permission to turn on; it cannot be turned
+ * off while the camera streams). */
 void cam_set_led(bool on);
 
 #ifdef __cplusplus

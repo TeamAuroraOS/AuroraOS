@@ -7,6 +7,7 @@
 #include "camera.h"
 #include "ff.h"
 #include "i2c.h"
+#include "power.h"
 #include "user.h"
 
 extern void os_cache_sync(void);
@@ -30,10 +31,20 @@ bool cam_allowed(void) {
   return cam_perm_enabled();
 }
 
+/* The camera LED (MCU register 0x2B: 2 on, 0 off) and the notification LED in
+ * white, which is the one a user can see on every model. */
+static void cam_light(bool on) {
+  u8 v = on ? 0xFFu : 0u;
+  I2C_writeReg(I2C_DEV_MCU, 0x2Bu, on ? 2u : 0u);
+  power_set_led(v, v, v);
+}
+
 void cam_set_led(bool on) {
   if (on && !cam_perm_enabled())
     return;
-  I2C_writeReg(I2C_DEV_MCU, 0x2Bu, on ? 2u : 0u);
+  if (!on && g_cam_active)
+    return; /* the light stays on while the camera streams */
+  cam_light(on);
 }
 
 /* Modal pop-up shown on the bottom screen when an app tries to use the camera
@@ -91,7 +102,7 @@ bool cam_start(int which) {
     return false;
 
   u32 sel = (which == CAMERA_FRONT) ? (u32)CAM_FRONT : (u32)CAM_BACK;
-  I2C_writeReg(I2C_DEV_MCU, 0x2Bu, 2u); /* Camera LED on */
+  cam_light(true);
   app_core_post(AUDIO_CMD_CAM, CAM_OP_START, sel, 0, 0);
   g_cam_active = true;
   return true;
@@ -101,7 +112,7 @@ void cam_stop(void) {
   if (!g_cam_active)
     return;
   g_cam_active = false;
-  I2C_writeReg(I2C_DEV_MCU, 0x2Bu, 0u); /* Camera LED off */
+  cam_light(false);
   if (app_core())
     app_core_post(AUDIO_CMD_CAM, CAM_OP_STOP, 0, 0, 0);
 }

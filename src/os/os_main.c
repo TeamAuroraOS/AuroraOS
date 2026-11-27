@@ -4518,8 +4518,8 @@ void os_main(void) {
    * running in memory that is the OS's again. */
   audio_smp_end();
   cam_shared()->app_allowed = g_cfg.camera_on ? 1u : 0u;
-  I2C_writeReg(I2C_DEV_MCU, 0x2Bu, 0u); /* ensure Camera LED is off at Home */
   os_cache_sync();
+  camera_boot_reset(core == AUDIO_BOOT_RUNNING);
   /* Not with SELECT held: the same fallback as the caches above. */
   if (mpu_on && !g_cfg.power_off && aurora_is_new3ds())
     aurora_n3ds_hardware();

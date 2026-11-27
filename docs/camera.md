@@ -61,9 +61,19 @@ file; anything else goes through `image_load()` and is scaled to fit.
 
 ### The camera light
 
-The app turns the camera LED on when it starts a camera and off when it
-stops (MCU register 0x2B: 2 on, 0 off). The OS also writes 0 at every start,
-so the light is off on the Home Menu after an app that left it on.
+While a camera runs, the notification LED shines white (`power_set_led()`
+at full red, green and blue, MCU register 0x2D) and the camera LED register
+0x2B is set to 2; stopping the camera turns both off. The light follows the
+camera, not the screen: it stays on in the gallery, where the camera keeps
+streaming. A C app gets the same light from `cam_start()` and `cam_stop()`.
+
+At every start the OS writes 0 to 0x2B and calls `camera_boot_reset()`: when
+the core was already running and `CamShared.status` is not `CAM_ST_OFF` (an
+app crashed with the camera on), it stops the camera, which turns the white
+light off. After a fresh core it only clears `status`, which holds whatever
+FCRAM held until a core runs the camera. The notification LED is otherwise
+left alone at start, so a colour an Aurora Menu plugin set survives a return
+to the Home Menu.
 
 ## The driver
 
@@ -163,14 +173,14 @@ int main(void) {
 | Function | Does |
 |----------|------|
 | `cam_allowed()` | true when Settings > Camera is on |
-| `cam_start(CAMERA_FRONT or CAMERA_BACK)` | turns the LED on and starts streaming; when the setting is off it shows a "Camera Off" pop-up ("please turn it on in settings") until A, B, START or a tap on OK, and returns false |
-| `cam_stop()` | stops streaming and turns the LED off; also called when the app leaves |
+| `cam_start(CAMERA_FRONT or CAMERA_BACK)` | turns the camera light on (the notification LED in white) and starts streaming; when the setting is off it shows a "Camera Off" pop-up ("please turn it on in settings") until A, B, START or a tap on OK, and returns false |
+| `cam_stop()` | stops streaming and turns the light off; also called when the app leaves |
 | `cam_ready()` | true once a frame is in |
 | `cam_frame_seq()` | goes up by one per new frame |
 | `cam_frame_bgr()` | the newest 320 x 240 frame, column-major BGR24, or NULL |
 | `cam_draw(screen, x_off)` | copies the frame into a screen at column `x_off` (0 to 80 on the top screen, 0 on the bottom one) |
 | `cam_save_bmp(path)` | writes the frame as a 24-bit BMP |
-| `cam_set_led(on)` | the LED; turning it on needs the setting |
+| `cam_set_led(on)` | the light; turning it on needs the setting, and turning it off does nothing while the camera streams |
 
 **Settings > Camera** is off by default and applies only to C apps; the
 built-in Camera app ignores it. The runtime checks `app_allowed` in

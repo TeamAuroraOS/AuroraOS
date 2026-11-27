@@ -11,6 +11,7 @@
 #include "i2c.h"
 #include "icons.h"
 #include "image.h"
+#include "power.h"
 #include "statusbar.h"
 #include "theme.h"
 #include "touch.h"
@@ -38,9 +39,12 @@ static u32  g_last_seq = 0;
 static int  g_was_live = 0;
 static int  g_gal_xfade = 0;
 
-/* MCU register 0x2B controls the 3DS Camera LED (2 = constantly on, 0 = off). */
+/* The camera LED (MCU register 0x2B: 2 on, 0 off) and the notification LED in
+ * white, which is the one a user can see on every model. */
 static void cam_set_led(int on) {
+  u8 v = on ? 0xFFu : 0u;
   I2C_writeReg(I2C_DEV_MCU, 0x2Bu, on ? 2u : 0u);
+  power_set_led(v, v, v);
 }
 
 /* Send a camera command to ARM11 (Cam11.c) via AudioCtrl mailbox.
@@ -65,6 +69,21 @@ static void cam_cmd(u32 op, u32 arg1) {
     if (ct->ack_seq == ct->cmd_seq)
       return;
   }
+}
+
+/* An app that crashed with the camera on left it streaming and the light on.
+ * CamShared is only written by a core that ran the camera, so it holds
+ * garbage until it is cleared here when a core starts fresh. */
+void camera_boot_reset(int core_was_running) {
+  volatile CamShared *cs = cam_shared();
+  os_cache_sync();
+  if (!core_was_running) {
+    cs->status = CAM_ST_OFF;
+    os_dcache_clean_range((const void *)&cs->status, sizeof(u32));
+  } else if (cs->status != CAM_ST_OFF) {
+    cam_cmd(CAM_OP_STOP, 0);
+  }
+  I2C_writeReg(I2C_DEV_MCU, 0x2Bu, 0u);
 }
 
 static Color darken(Color c, int num, int den) {

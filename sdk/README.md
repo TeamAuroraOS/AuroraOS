@@ -373,8 +373,9 @@ if (cam_start(CAMERA_BACK)) {
 
 Frames are column-major BGR24, the screens' own layout, so `cam_draw()` is a
 plain copy; `cam_frame_bgr()` gives the frame for your own processing, and
-`cam_frame_seq()` tells a new frame from the last. The camera LED is on while
-streaming, and leaving the app stops the camera. The driver runs on the ARM11
+`cam_frame_seq()` tells a new frame from the last. The notification LED
+shines white while the camera streams (`cam_set_led(false)` cannot turn it off
+then), and leaving the app stops the camera. The driver runs on the ARM11
 core (core 150); details in [`docs/camera.md`](../docs/camera.md).
 
 ## Aurora Menu plugins
