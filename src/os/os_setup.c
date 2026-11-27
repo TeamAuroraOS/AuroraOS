@@ -61,6 +61,9 @@ static const char *const T[STR_COUNT][LANG_COUNT] = {
     /* STR_DAY          */ {"Day", "D\u00EDa", "Jour", "Dia"},
     /* STR_MONTH        */ {"Month", "Mes", "Mois", "M\u00EAs"},
     /* STR_YEAR         */ {"Year", "A\u00F1o", "Ann\u00E9e", "Ano"},
+    /* STR_BIRTHDAY     */
+    {"Birthday", "Fecha de nacimiento", "Date de naissance",
+     "Data de nascimento"},
     /* STR_BACK         */ {"Back", "Atr\u00E1s", "Retour", "Voltar"},
     /* STR_NEXT         */ {"Next", "Siguiente", "Suivant", "Pr\u00F3ximo"},
     /* STR_USER_HINT    */
@@ -2178,19 +2181,36 @@ int keyboard_edit(char *name, int size, int mode, const char *hint,
 /* Focus order: 0 Name, 1 Day, 2 Month, 3 Year, 4 Back, 5 Next.
  * Left/Right move focus; Up/Down adjust the focused date field. */
 
-static void clamp_date(UserConfig *cfg) {
-  if (cfg->birth_day < 1)
-    cfg->birth_day = 1;
-  if (cfg->birth_day > 31)
-    cfg->birth_day = 31;
+#define DATE_Y 112 /* top of the birthday boxes */
+
+/* This year by the clock, but never before the year this build was made, so
+ * a clock that was never set cannot hold real birthdays back. */
+static int latest_birth_year(void) {
+  int y = (int)(AURORA_BUILD_DATE / 10000u);
+  RtcTime t;
+  if (rtc_read(&t) && t.year > y)
+    y = t.year;
+  return y;
+}
+
+static void clamp_date(UserConfig *cfg, int max_year) {
+  static const u8 month_days[12] = {31, 28, 31, 30, 31, 30,
+                                    31, 31, 30, 31, 30, 31};
   if (cfg->birth_month < 1)
     cfg->birth_month = 1;
   if (cfg->birth_month > 12)
     cfg->birth_month = 12;
   if (cfg->birth_year < 1900)
     cfg->birth_year = 1900;
-  if (cfg->birth_year > 2025)
-    cfg->birth_year = 2025;
+  if (cfg->birth_year > max_year)
+    cfg->birth_year = (u16)max_year;
+  int y = cfg->birth_year;
+  int leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+  int days = month_days[cfg->birth_month - 1] + (cfg->birth_month == 2 && leap);
+  if (cfg->birth_day < 1)
+    cfg->birth_day = 1;
+  if (cfg->birth_day > days)
+    cfg->birth_day = (u8)days;
 }
 
 static void date_box(int x, int y, const char *label, u32 val, int digits,
@@ -2230,13 +2250,15 @@ static void user_item(const UserConfig *cfg, int i, int focus, Color accent) {
                 L(STR_USER_NAME), COLOR_HM_TEXT2, COLOR_HM_SLOT, &ui_font);
       break;
     case 1:
-      date_box(40, 96, L(STR_DAY), cfg->birth_day, 2, focus == 1, accent);
+      date_box(40, DATE_Y, L(STR_DAY), cfg->birth_day, 2, focus == 1, accent);
       break;
     case 2:
-      date_box(120, 96, L(STR_MONTH), cfg->birth_month, 2, focus == 2, accent);
+      date_box(120, DATE_Y, L(STR_MONTH), cfg->birth_month, 2, focus == 2,
+               accent);
       break;
     case 3:
-      date_box(200, 96, L(STR_YEAR), cfg->birth_year, 4, focus == 3, accent);
+      date_box(200, DATE_Y, L(STR_YEAR), cfg->birth_year, 4, focus == 3,
+               accent);
       break;
     case 4:
       button(40, 168, 100, 32, L(STR_BACK), focus == 4, accent);
@@ -2250,6 +2272,8 @@ static void user_item(const UserConfig *cfg, int i, int focus, Color accent) {
 static void user_bottom(const UserConfig *cfg, int focus, Color accent) {
   clear_screen(VRAM_BOT_A, BOT_FB_SIZE, COLOR_HM_BG);
   bottom_title("Home Menu");
+  ui_text(VRAM_BOT_A, 40, 70, SH_BOT, L(STR_BIRTHDAY), COLOR_WHITE, COLOR_HM_BG,
+          &ui_bold);
   for (int i = 0; i < 6; i++)
     user_item(cfg, i, focus, accent);
   text_center_tr(VRAM_BOT_A, BOT_SCREEN_HEIGHT - 16, BOT_SCREEN_WIDTH, SH_BOT,
@@ -2270,12 +2294,13 @@ static Nav step_user(UserConfig *cfg) {
   setup_top(2, L(STR_USER_L1), L(STR_USER_L2), accent);
   screen_present_top();
 
-  clamp_date(cfg);
+  int max_year = latest_birth_year();
+  clamp_date(cfg, max_year);
   int focus = 0;
   user_bottom(cfg, focus, accent);
   while (1) {
     u32 k = get_keys_down();
-    int redraw = 0, full = 0, old_focus = focus;
+    int redraw = 0, full = 0, old_focus = focus, old_day = cfg->birth_day;
 
     if (k & BUTTON_DLEFT) {
       focus = (focus > 0) ? focus - 1 : 5;
@@ -2293,7 +2318,7 @@ static Nav step_user(UserConfig *cfg) {
         cfg->birth_month = (u8)(cfg->birth_month + d);
       else if (focus == 3)
         cfg->birth_year = (u16)(cfg->birth_year + d);
-      clamp_date(cfg);
+      clamp_date(cfg, max_year);
       redraw = 1;
     }
     if (k & BUTTON_A) {
@@ -2322,17 +2347,17 @@ static Nav step_user(UserConfig *cfg) {
         setup_top(2, L(STR_USER_L1), L(STR_USER_L2), accent);
         screen_present_top();
         redraw = full = 1;
-      } else if (touch_in(tx, ty, 40, 96, 52, 40)) {
-        cfg->birth_day = (u8)(cfg->birth_day + (ty < 116 ? 1 : -1));
-        clamp_date(cfg);
+      } else if (touch_in(tx, ty, 40, DATE_Y, 52, 40)) {
+        cfg->birth_day = (u8)(cfg->birth_day + (ty < DATE_Y + 20 ? 1 : -1));
+        clamp_date(cfg, max_year);
         redraw = 1;
-      } else if (touch_in(tx, ty, 120, 96, 52, 40)) {
-        cfg->birth_month = (u8)(cfg->birth_month + (ty < 116 ? 1 : -1));
-        clamp_date(cfg);
+      } else if (touch_in(tx, ty, 120, DATE_Y, 52, 40)) {
+        cfg->birth_month = (u8)(cfg->birth_month + (ty < DATE_Y + 20 ? 1 : -1));
+        clamp_date(cfg, max_year);
         redraw = 1;
-      } else if (touch_in(tx, ty, 200, 96, 68, 40)) {
-        cfg->birth_year = (u16)(cfg->birth_year + (ty < 116 ? 1 : -1));
-        clamp_date(cfg);
+      } else if (touch_in(tx, ty, 200, DATE_Y, 68, 40)) {
+        cfg->birth_year = (u16)(cfg->birth_year + (ty < DATE_Y + 20 ? 1 : -1));
+        clamp_date(cfg, max_year);
         redraw = 1;
       } else if (touch_in(tx, ty, 40, 168, 100, 32)) {
         return NAV_BACK;
@@ -2346,10 +2371,13 @@ static Nav step_user(UserConfig *cfg) {
     if (k & BUTTON_START)
       return NAV_NEXT;
 
-    if (full)
+    if (full) {
       user_bottom(cfg, focus, accent);
-    else if (redraw)
+    } else if (redraw) {
+      if (cfg->birth_day != old_day) /* a shorter month or a non-leap year */
+        user_item(cfg, 1, focus, accent);
       user_update(cfg, old_focus, focus, accent);
+    }
     ui_idle();
   }
 }
@@ -2708,7 +2736,7 @@ int user_config_load(UserConfig *cfg) {
     cfg->language = LANG_ENGLISH;
   if (cfg->accent >= AURORA_ACCENT_COUNT)
     cfg->accent = 0;
-  clamp_date(cfg);
+  clamp_date(cfg, latest_birth_year());
   cfg->valid = 1;
   return 1;
 }

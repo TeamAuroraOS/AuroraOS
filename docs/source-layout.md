@@ -49,6 +49,12 @@ renderer in `src/os/Soft3D.c`. The model's vertex shader is
 `src/os/model.v.pica`, assembled at build time by picasso (devkitPro's 3DS
 tools) and converted by `tools/shbin2c.py`.
 
+The firm, `Aurora.firm`, is built from every `src/*.c` file but one: its menu
+in `src/main.c`, the loader in `src/loader.c` and `src/container.c`, and the
+shared drivers above. Its ARM11 runs `src/arm11_start.s` and `src/screen11.c`,
+which points the screens at Aurora's framebuffers whatever the loader left
+([`power.md`](power.md), "Starting the firm from any loader").
+
 Apps have two toolchains. `auric-lang/` is the Auric language and its
 compiler. `sdk/` is for apps in C: the public header `sdk/include/aurora_app.h`,
 the runtime in `sdk/runtime/` (which links the OS's own drivers from `src/`

@@ -18,7 +18,7 @@ startup, before the first status bar is drawn.
 | `0x0F` | Power / charger flags | register is right; **the charging bit is not**, see below |
 | `0x30`..`0x36` | RTC: sec, min, hour, weekday, day, month, year, all BCD | confirmed on hardware |
 | `0x20` | Power control: bit 0 powers off, bit 2 reboots | bits from GodMode9; power-off confirmed on hardware |
-| `0x22` | LCD power: bit 0 turns both screens off | used before every power-off, as GodMode9 does |
+| `0x22` | LCD power: bit 0 turns both screens off, bit 1 powers them, bits 3 and 5 the two backlights | bit 0 before every power-off, as GodMode9 does; 0x02 then 0x28 when the firm powers the screens (below), as Luma3DS does |
 
 The RTC layout is not a guess: the crash handler's power-off countdown already
 depends on `0x30` counting seconds, and that works on a real console.
@@ -242,6 +242,41 @@ AuroraOS") and **START** shows the details (stage, FatFs code, sizes and
 addresses). The SD card and FatFs tests that START and SELECT used to open
 are no longer reachable (`ui_sd_test()` and `ui_fs_test()` are still in the
 file).
+
+## Starting the firm from any loader
+
+Until Beta 8 the firm drew into VRAM and left the screens to the loader, so it
+showed only when Luma3DS's chainloader menu had already turned them on with
+its framebuffers at Aurora's addresses (`0x18300000` top, `0x18346500`
+bottom). fastboot3DS turns the LCDs and the GPU off before it starts a FIRM
+that does not ask for screen init (issue #36: a black screen), Luma3DS does not
+turn them on for a hotkey payload that does not ask, and GodMode9 keeps its own
+bottom framebuffer elsewhere. Now:
+
+1. The FIRM header asks for screen init (firmtool `-i`, bit 0 of byte `0x10`),
+   so Luma3DS, boot9strap and fastboot3DS hand over with the screens on.
+2. The firm's ARM11 runs `screen11_setup()` (`src/screen11.c`, from
+   `src/arm11_start.s`) before it waits for the OS. It points both display
+   controllers at Aurora's framebuffers in BGR8 and clears them. A GPU
+   clock register (`0x10400004`) that reads `0x100`, the value fastboot3DS
+   sets for the display alone, becomes `0x70100`, which libn3ds sets before
+   the 3D engine runs; any other value is left alone.
+3. If the GPU block was off (`PDN_GPU_CNT` at `0x10141200` reads 1 in its low
+   byte, the test Luma3DS uses), it resets the block first and sets both
+   display controllers up from scratch with Luma3DS's values (backlight
+   `0x39` until the OS sets its own).
+4. It reports in `SCREEN11_STATE`, the second word of its image (`0x1FF80004`,
+   `include/screen11.h`). The loader copies the image before either CPU
+   starts, so the word starts at 0 whatever was in memory. The ARM9
+   (`screens_ready()` in `src/main.c`) waits for it, up to about 0.5 s,
+   before its first frame. After a cold setup it also powers the panels over
+   I2C, in Luma3DS's order: each LCD controller (`I2C_DEV_LCD_TOP` and
+   `I2C_DEV_LCD_BOT`, bus 1 at `0x2C` and `0x2E`) out of reset and on, then
+   MCU `0x22` = `0x02` (LCDs) and `0x28` (backlights).
+
+The OS needs nothing new: it takes the panels as the firm leaves them, as it
+always took Luma3DS's. None of this has run on a console yet (fastboot3DS,
+GodMode9, a Luma3DS hotkey, or the cold setup).
 
 ## What the UI shows
 

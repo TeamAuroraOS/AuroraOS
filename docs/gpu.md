@@ -45,7 +45,9 @@ ARM9  os_main.c / Gpu9.c            ARM11  Core11.c -> Gpu11.c
 (`0x233B0000`) and the audio PCM buffer (`0x23400000`).
 
 One useful consequence: the GPU block is already powered when AuroraOS starts,
-because the firm leaves the LCD controller driving the framebuffers. That
+because the firm leaves the LCD controller driving the framebuffers (its ARM11
+sets them up whatever the loader left: [`power.md`](power.md), "Starting the
+firm from any loader"). That
 controller sits at `0x10400400` / `0x10400500`, inside this same register block,
 and is already referenced by `aurora.h`. Only the engine clocks need enabling.
 

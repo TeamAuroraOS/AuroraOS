@@ -8,12 +8,22 @@
 .equ ARM11_MAILBOX, 0x27000000
 
 _start11:
+    b       .Lboot
+
+@ SCREEN11_STATE (include/screen11.h), at 0x1FF80004.
+    .word   0
+
+.Lboot:
     cpsid   aif
     ldr     sp, =_stack11_top
 
     ldr     r0, =ARM11_MAILBOX
     mov     r1, #0
     str     r1, [r0]
+
+    bl      screen11_setup
+
+    ldr     r0, =ARM11_MAILBOX
 .Lspin:
     ldr     r1, [r0]
     cmp     r1, #0

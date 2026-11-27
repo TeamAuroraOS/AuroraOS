@@ -20,16 +20,18 @@ OUTPUT_DIR := output
 C_SOURCES  := $(wildcard $(SRC_DIR)/*.c)
 S_SOURCES  := $(wildcard $(SRC_DIR)/*.s)
 
-ARM9_C_SRC := $(C_SOURCES)
+ARM11_C_SRC := $(SRC_DIR)/screen11.c
+ARM9_C_SRC := $(filter-out $(ARM11_C_SRC),$(C_SOURCES))
 ARM9_S_SRC := $(SRC_DIR)/start.s $(SRC_DIR)/arm9_jump.s
 ARM11_S_SRC := $(SRC_DIR)/arm11_start.s $(SRC_DIR)/arm11_jump.s
 
 ARM9_C_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/arm9_%.o,$(ARM9_C_SRC))
 ARM9_S_OBJ := $(patsubst $(SRC_DIR)/%.s,$(BUILD_DIR)/arm9_%.o,$(ARM9_S_SRC))
 ARM11_S_OBJ := $(patsubst $(SRC_DIR)/%.s,$(BUILD_DIR)/arm11_%.o,$(ARM11_S_SRC))
+ARM11_C_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/arm11_%.o,$(ARM11_C_SRC))
 
 ARM9_OBJS  := $(ARM9_S_OBJ) $(ARM9_C_OBJ)
-ARM11_OBJS := $(ARM11_S_OBJ)
+ARM11_OBJS := $(ARM11_S_OBJ) $(ARM11_C_OBJ)
 
 ARM9_ELF   := $(BUILD_DIR)/arm9.elf
 ARM9_BIN   := $(BUILD_DIR)/arm9.bin
@@ -90,13 +92,15 @@ dirs:
 	@mkdir -p $(OUTPUT_DIR)
 	@mkdir -p Files
 
+# -i sets the header's screen-init flag: Luma3DS (hotkey payloads), boot9strap
+# and fastboot3DS then hand over with the screens on instead of off.
 $(FIRM): $(ARM9_BIN) $(ARM11_BIN)
 	@echo [FIRM] Building $@
 	$(FIRMTOOL) build $@ \
 		-n $(ARM9_ENTRY) -e $(ARM11_ENTRY) \
 		-D $(ARM9_BIN) $(ARM11_BIN) \
 		-A $(ARM9_LOAD_ADDR) $(ARM11_LOAD_ADDR) \
-		-C NDMA XDMA
+		-C NDMA XDMA -i
 
 $(ARM9_ELF): $(ARM9_OBJS) $(ARM9_LD)
 	@echo [LD9 ] Linking $@
@@ -125,6 +129,10 @@ $(BUILD_DIR)/arm9_%.o: $(SRC_DIR)/%.s
 $(BUILD_DIR)/arm11_%.o: $(SRC_DIR)/%.s
 	@echo [AS11] Assembling $<
 	$(AS) $(ARM11_ASFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/arm11_%.o: $(SRC_DIR)/%.c $(wildcard $(INC_DIR)/*.h)
+	@echo [CC11] Compiling $<
+	$(CC) $(ARM11_CFLAGS) -c $< -o $@
 
 # Rebuilds Aurora/assets.pak from icons/ and assets/fonts/.
 assets:

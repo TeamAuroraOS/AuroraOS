@@ -26,6 +26,7 @@ typedef enum {
   STR_DAY,
   STR_MONTH,
   STR_YEAR,
+  STR_BIRTHDAY,
   STR_BACK,
   STR_NEXT,
   STR_USER_HINT,

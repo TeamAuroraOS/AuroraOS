@@ -9,7 +9,9 @@ typedef enum {
     I2C_DEV_POWER   = 0, /* unconfirmed */
     I2C_DEV_CAMERA  = 1, /* unconfirmed */
     I2C_DEV_CAMERA2 = 2, /* unconfirmed */
-    I2C_DEV_MCU     = 3  /* management microcontroller: power / LCDs / LEDs */
+    I2C_DEV_MCU     = 3, /* management microcontroller: power / LCDs / LEDs */
+    I2C_DEV_LCD_TOP = 5, /* the panels' controllers, as Luma3DS names them */
+    I2C_DEV_LCD_BOT = 6
 } I2cDevice;
 
 /* Safe to call more than once. */

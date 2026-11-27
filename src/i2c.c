@@ -30,6 +30,9 @@ static const struct {
     {0, 0x7A}, /* I2C_DEV_CAMERA */
     {0, 0x78}, /* I2C_DEV_CAMERA2 */
     {1, 0x4A}, /* I2C_DEV_MCU */
+    {1, 0x78}, /* unnamed */
+    {1, 0x2C}, /* I2C_DEV_LCD_TOP */
+    {1, 0x2E}, /* I2C_DEV_LCD_BOT */
 };
 
 static I2cRegs *i2cGetBusRegsBase(uint8_t busId) {

@@ -6,6 +6,7 @@
 #include "i2c.h"
 #include "icons.h"
 #include "loader.h"
+#include "screen11.h"
 #include "sdmmc.h"
 #include "user.h"
 
@@ -13,6 +14,35 @@ void delay(volatile u32 cycles) {
   while (cycles--) {
     __asm__ volatile("nop");
   }
+}
+
+#define DELAY_MS(ms) delay((ms) * 7000u) /* delay(60000) is about 9 ms */
+
+/* The firm's ARM11 points the panels at Aurora's framebuffers as it starts
+ * (src/screen11.c). If the loader left them off, the LCDs still need power,
+ * over I2C, in Luma3DS's order (arm9/source/screen.c initScreens), with its
+ * waits doubled. */
+static void screens_ready(void) {
+  u32 state = SCREEN11_BUSY;
+  for (int i = 0; i < 500 && (state = SCREEN11_STATE) == SCREEN11_BUSY; i++)
+    DELAY_MS(1);
+  if (state != SCREEN11_POWER)
+    return;
+
+  I2C_init();
+  I2C_writeReg(I2C_DEV_LCD_TOP, 0xFE, 0xAA); /* controller out of reset */
+  I2C_writeReg(I2C_DEV_LCD_BOT, 0xFE, 0xAA);
+  DELAY_MS(10);
+  I2C_writeReg(I2C_DEV_LCD_TOP, 0x01, 0x10); /* controller power */
+  I2C_writeReg(I2C_DEV_LCD_BOT, 0x01, 0x10);
+  DELAY_MS(10);
+  I2C_writeReg(I2C_DEV_LCD_TOP, 0x60, 0x00); /* clear the error flag */
+  I2C_writeReg(I2C_DEV_LCD_BOT, 0x60, 0x00);
+  DELAY_MS(10);
+  I2C_writeReg(I2C_DEV_MCU, 0x22, 0x02); /* LCD power */
+  DELAY_MS(100);
+  I2C_writeReg(I2C_DEV_MCU, 0x22, 0x28); /* both backlights */
+  DELAY_MS(10);
 }
 
 static inline void arm9_drain_write_buffer(void) {
@@ -595,6 +625,7 @@ static void draw_autoboot_logo(void) {
 }
 
 int main(void) {
+  screens_ready();
   screen_init();
   set_brightness((u32)current_brightness);
 
