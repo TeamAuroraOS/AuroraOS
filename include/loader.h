@@ -59,4 +59,11 @@ void boot_aurora_ex(int quiet);
 /* ARM9 cache-flush + branch stub. */
 void aurora_jump_arm9(uint32_t entry);
 
+/* The firm's own FatFs path ("/luma/payloads/x.firm") from the argv Luma3DS
+ * and fastboot3DS pass, or "" from any other loader. Firm only. */
+const char *loader_firm_path(void);
+/* Draws the boot card boot_aurora() opens with, without presenting it, for
+ * the firm's menu to push it in. Firm only. */
+void loader_draw_start(void *ctx);
+
 #endif

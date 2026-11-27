@@ -126,9 +126,6 @@ typedef struct {
 #define COLOR_HM_EMPTY_TOP ((Color){0x1E, 0x1E, 0x22})
 #define COLOR_HM_EMPTY_BOT ((Color){0x14, 0x14, 0x17})
 
-#define REG_LCD_TOP_BRIGHTNESS  (*(volatile u32 *)0x10202240)
-#define REG_LCD_BOT_BRIGHTNESS  (*(volatile u32 *)0x10202A40)
-
 void screen_init(void);
 void screen_present_top(void);
 void screen_present_bottom(void);
@@ -198,10 +195,6 @@ void console_init(void);
 void console_print(const char *str);
 void console_print_color(const char *str, Color color);
 
-void ui_draw_home_screen(void);
-int  ui_power_off_confirm(void);
-void ui_settings_menu(void);
-
 int  sd_init(void);
 int  sd_is_inserted(void);
 int  check_files_directory(void);
@@ -212,6 +205,5 @@ u32  get_keys(void);
 u32  get_keys_down(void);
 u32  get_keys_physical_down(void);
 void set_cpad_nav_enabled(int enabled);
-void set_brightness(u32 level);
 
 #endif

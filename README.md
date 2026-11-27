@@ -22,6 +22,14 @@ works is in [`docs/features.md`](docs/features.md).
 - Copy `Aurora/assets.pak` to `SD:/Aurora/assets.pak` (optional: without it the
   UI falls back to its built-in icons and font)
 
+## How to uninstall
+
+Start `Aurora.firm`, open **Settings > Wipe Aurora** in its menu and hold
+**L + R + Y** for three seconds. It deletes `SD:/Aurora` (apps, saves,
+settings), `SD:/AURORAOS.BIN` and the firm file itself, then restarts the
+console. With autoboot on, hold **A** as the firm starts to get its menu. See
+[`docs/power.md`](docs/power.md), "Wiping Aurora".
+
 ## How to build
 
 - You need devkitpro installed and set to path you can install it here https://devkitpro.org/wiki/Getting_Started
@@ -82,7 +90,8 @@ Settings. More in [`docs/home.md`](docs/home.md).
 * [`docs/files.md`](docs/files.md): the File Explorer, viewers, image and audio decoding
 * [`docs/terminal.md`](docs/terminal.md): the terminal and every command
 * [`docs/input.md`](docs/input.md): touch calibration, the circle pad, screenshots
-* [`docs/power.md`](docs/power.md): clock, battery, power, the lid, brightness
+* [`docs/power.md`](docs/power.md): clock, battery, power, the lid, brightness,
+  the firm's menu and Wipe Aurora
 * [`docs/update.md`](docs/update.md): System Update, the updater, the update server and publishing a release
 * [`docs/wifi.md`](docs/wifi.md): Wi-Fi bring-up and copying the firmware
 * [`docs/tls.md`](docs/tls.md): HTTPS and the certificates it trusts

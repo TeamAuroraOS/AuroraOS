@@ -194,9 +194,8 @@ that did. Left/Right on the Settings row itself also steps the level and
 saves it. At boot `os_main()` sends the saved level, or level 3 ("4 / 5")
 for a file without one. The byte is read only from
 `USER_DAT_VERSION` 3 files: older ones have a zero there, which would be the
-darkest level. The launcher's own Settings
-(`set_brightness()` in `src/main.c`) still only stores the value, since the
-firm's ARM9 has no core to ask.
+darkest level. The firm has no brightness setting: its ARM9 cannot reach
+the backlight either, and the row that only stored a number was removed.
 
 The Aurora Menu's Brightness row changes the same level; the OS saves it
 too ([`amenu.md`](amenu.md)).
@@ -236,14 +235,91 @@ such as Luma3DS's menu) still autoboots. If the boot fails, the error screen
 comes up and B goes to the menu.
 
 The firm's menu itself was redrawn in the Home Menu's style: three tiles
-(Start, Power, Settings, the last one only for brightness) with a preview of
-the choice on the top screen, using the asset pack's icons and fonts when
-`SD:/Aurora/assets.pak` loads. Its errors now say what went wrong in a
-sentence ("SD Card Not Found", "AuroraOS Not Found", "Couldn't Start
-AuroraOS") and **START** shows the details (stage, FatFs code, sizes and
-addresses). The SD card and FatFs tests that START and SELECT used to open
-are no longer reachable (`ui_sd_test()` and `ui_fs_test()` are still in the
-file).
+(Start, Power, Settings) with a preview of the choice on the top screen, using
+the asset pack's icons and fonts when `SD:/Aurora/assets.pak` loads. Its
+errors now say what went wrong in a sentence ("SD Card Not Found", "AuroraOS
+Not Found", "Couldn't Start AuroraOS") and **START** shows the details (stage,
+FatFs code, sizes and addresses). The SD card and FatFs tests that START and
+SELECT used to open are no longer reachable (`ui_sd_test()` and
+`ui_fs_test()` are still in the file).
+
+## The firm's frames and animations
+
+Until 2026-11-27 the firm drew straight into the framebuffers the panels were
+showing, with the ARM9's caches off as every loader leaves them, so each
+redraw could be watched line by line. Now (`src/fx.c`, `include/fx.h`):
+
+1. `fx_init()` turns the ARM9's protection unit and caches on with Luma3DS's
+   region table (`fx_mpu_on()` in `src/arm9_jump.s`; FCRAM, ARM9 RAM and the
+   boot ROM cached), plus write buffering for VRAM. Holding **SELECT** as the
+   firm starts leaves them off, as it does in the OS. The firm's waits were
+   nop loops timed with the caches off; `delay()` is now timed by ARM9
+   timers 0 and 1 for the same lengths (7000 "cycles" a millisecond).
+2. Drawing goes to the FCRAM backbuffers (`VRAM_TOP_BACK`, `VRAM_BOT_BACK`).
+   `fx_present()` copies a backbuffer into a framebuffer the panel is not
+   showing, the third of A/B/C that is neither shown nor shown before it (as
+   the OS's core does it), and asks the firm's ARM11 for it in
+   `SCREEN11_FLIP` (`0x1FF80008`).
+3. The firm's ARM11 no longer only waits for the OS: `screen11_serve()`
+   (`src/screen11.c`) watches for those requests and switches the panel in
+   the next vertical blank, both panels' blanks watched together, then
+   echoes the request in `SCREEN11_FLIPPED` (`0x1FF8000C`). A blank is the
+   display interrupt pending in the GIC (the method the OS uses on the New
+   3DS) or, if that never comes, the controller's vblank flag; with neither,
+   flips are done at once. A method is dropped after 300,000 polls (at least
+   three frames, under a second). If the ARM11 does not answer for 5 s, the
+   ARM9 copies every frame into all three framebuffers from then on.
+4. Before the OS starts, `fx_handoff()` puts both panels back on A with the
+   last frame, leaves no request pending and puts back Luma3DS's write
+   buffering; `aurora_jump_arm9()` cleans the cache and turns the protection
+   unit and caches off, so the OS starts as it always has. An ARM11 payload
+   in `AURORAOS.BIN` (none today) is cleaned out of the cache before its
+   entry point goes in the mailbox.
+
+The animations, all timed by the clock rather than by frames: the menu fades
+in as its bar drops and the tiles rise one after another; the highlight
+slides between tiles, lifting the tile under it, with its colour blending
+between the tiles' and a slow glow; the top preview slides like a carousel;
+a chosen tile is pushed in; screens push each other sideways (Settings, the
+wipe, back, and the boot card when Start is chosen); Power Off and the
+restart after a wipe fade to black. Autoboot draws only the logo and adds no
+wait.
+
+## Wiping Aurora
+
+**Settings > Wipe Aurora** in the firm's menu (`run_settings()` and
+`confirm_wipe()` in `src/main.c`, `src/wipe.c`) removes Aurora from the
+console:
+
+1. The top screen lists what goes: `SD:/Aurora` (apps, saves, settings,
+   themes, the asset pack), `SD:/AURORAOS.BIN` and the firm's own file. That
+   is the path its loader passed (`loader_firm_path()`, the same one System
+   Update uses), or `/luma/payloads/Aurora.firm` when the loader passed none.
+2. **L + R + Y** must be held for 3 seconds; a meter fills, each key's cap
+   lights while held, and letting go drains the meter three times as fast.
+   Keys already held as the screen opens do not count until one is let go.
+   **B** cancels.
+3. It deletes the `Aurora` folder (each folder emptied while it is read, as
+   FatFs's `delete_node()` example does it, read-only items made writable
+   first), then `AURORAOS.BIN`, then the firm file, with the count and the
+   current path on the bottom screen. Anything already missing counts as
+   done.
+4. When all three are done it shows "Aurora was removed", fades out and
+   restarts the console (`power_reboot()`, MCU register `0x20` bit 2). If
+   the firm file was not there, it says so and restarts on **A**.
+
+An error stops it at that step and names the item and the FatFs error;
+the steps after it are left undone (so the firm stays to try again), and
+**B** goes back to Settings. The firm's FatFs build has `FF_USE_CHMOD` on for
+the read-only bit (`include/ffconf.h`, shared with the OS).
+
+The firm's key reading also had a bug: `get_keys()` masked the pad with
+`0x3FF`, which drops X and Y, so the loader's "Y: Start Backup" could never
+be pressed. It reads all twelve bits now, as the OS does.
+
+Rendered on the PC with a harness that runs `main.c`, `fx.c`, `wipe.c`,
+`screen.c` and `assets.c` against an emulated ARM11 and a folder for the
+card (the wipe deleted exactly the three targets); not yet run on a console.
 
 ## Starting the firm from any loader
 
@@ -272,8 +348,9 @@ bottom framebuffer elsewhere. Now:
    display controllers up from scratch with Luma3DS's values (backlight
    `0x39` until the OS sets its own).
 4. It reports in `SCREEN11_STATE`, the second word of its image (`0x1FF80004`,
-   `include/screen11.h`). The loader copies the image before either CPU
-   starts, so the word starts at 0 whatever was in memory. The ARM9
+   `include/screen11.h`; the third and fourth are the present words, see
+   "The firm's frames and animations"). The loader copies the image before
+   either CPU starts, so the words start at 0 whatever was in memory. The ARM9
    (`screens_ready()` in `src/main.c`) waits for it, up to about 0.5 s,
    before its first frame. After a cold setup it also powers the panels over
    I2C, in Luma3DS's order: each LCD controller (`I2C_DEV_LCD_TOP` and

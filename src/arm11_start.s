@@ -10,7 +10,10 @@
 _start11:
     b       .Lboot
 
-@ SCREEN11_STATE (include/screen11.h), at 0x1FF80004.
+@ SCREEN11_STATE, SCREEN11_FLIP and SCREEN11_FLIPPED (include/screen11.h), at
+@ 0x1FF80004, 0x1FF80008 and 0x1FF8000C.
+    .word   0
+    .word   0
     .word   0
 
 .Lboot:
@@ -22,15 +25,9 @@ _start11:
     str     r1, [r0]
 
     bl      screen11_setup
+    bl      screen11_serve          @ returns the mailbox's entry point
 
-    ldr     r0, =ARM11_MAILBOX
-.Lspin:
-    ldr     r1, [r0]
-    cmp     r1, #0
-    beq     .Lspin
-
-    @ Entry point received: flush caches (arm11_jump.s) and branch into it.
-    mov     r0, r1
+    @ Flush caches (arm11_jump.s) and branch into it.
     ldr     r1, =aurora_jump_arm11
     bx      r1
 

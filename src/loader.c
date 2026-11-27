@@ -3,6 +3,7 @@
 #include "container.h"
 #include "ff.h"
 #include "font.h"
+#include "fx.h"
 #include "icons.h"
 #include "loader.h"
 #include "update.h"
@@ -77,8 +78,8 @@ static void l_text_mid(volatile u8 *fb, int cx, int y, const char *s, Color fg,
   }
 }
 
-static void loader_draw_progress(const char *title, const char *subtitle,
-                                 int progress) {
+static void progress_card(const char *title, const char *subtitle,
+                          int progress) {
   volatile u8 *fb = VRAM_BOT_A;
   const int W = BOT_SCREEN_WIDTH, H = BOT_SCREEN_HEIGHT;
 
@@ -105,7 +106,17 @@ static void loader_draw_progress(const char *title, const char *subtitle,
   if (fw > bw)
     fw = bw;
   draw_filled_round_rect(fb, bx, by, fw, bh, 4, H, COLOR_AURORA);
+}
+
+static void loader_draw_progress(const char *title, const char *subtitle,
+                                 int progress) {
+  progress_card(title, subtitle, progress);
   screen_present_bottom();
+}
+
+void loader_draw_start(void *ctx) {
+  (void)ctx;
+  progress_card("Starting AuroraOS...", "Please wait", 15);
 }
 
 static void loader_draw_error(const char *title, const char *subtitle,
@@ -178,25 +189,38 @@ static int loader_error(const char *title, const char *subtitle,
   }
 }
 
-/* The firm's own path for the OS, from the "sdmc:/..." argv[0] Luma3DS and
- * fastboot3DS pass; no magic when it booted from anywhere else. */
-static void firm_info_write(void) {
+const char *loader_firm_path(void) {
   static const char pre[] = "sdmc:/";
-  volatile u32 *magic = (volatile u32 *)AURORA_FIRM_INFO_ADDR;
-  volatile char *dst = (volatile char *)(AURORA_FIRM_INFO_ADDR + 4u);
+  static char path[AURORA_FIRM_PATH_MAX];
   const char *s = g_firm_argv0;
   u32 i = 0, n = 0;
-  *magic = 0;
+  if (path[0])
+    return path;
   while (pre[i] && (s[i] | 0x20) == pre[i])
     i++;
   if (pre[i])
-    return;
-  dst[n++] = '/';
+    return path;
+  path[n++] = '/';
   for (s += i; *s && n < AURORA_FIRM_PATH_MAX - 1u; s++)
-    dst[n++] = *s;
+    path[n++] = *s;
+  path[n] = 0;
   if (*s || n < 2u)
+    path[0] = 0;
+  return path;
+}
+
+/* The firm's own path for the OS; no magic when it booted from a loader that
+ * passed none. */
+static void firm_info_write(void) {
+  volatile u32 *magic = (volatile u32 *)AURORA_FIRM_INFO_ADDR;
+  volatile char *dst = (volatile char *)(AURORA_FIRM_INFO_ADDR + 4u);
+  const char *s = loader_firm_path();
+  u32 n = 0;
+  *magic = 0;
+  if (!s[0])
     return;
-  dst[n] = 0;
+  while ((dst[n] = s[n]))
+    n++;
   *magic = AURORA_FIRM_INFO_MAGIC;
 }
 
@@ -312,7 +336,6 @@ static void boot_file(const char *path, int quiet, int main_file) {
                         main_file);
       return;
     }
-    *(volatile u32 *)AOS_ARM11_MAILBOX = hdr.arm11_entry;
   }
 
   f_close(&loader_file);
@@ -320,6 +343,16 @@ static void boot_file(const char *path, int quiet, int main_file) {
 
   if (!quiet)
     loader_draw_progress("Starting AuroraOS...", "Almost ready...", 100);
+
+  /* The firm's ARM11 serves presents until it has an entry point, so the
+   * screens are settled first; the payload it will run must be in memory,
+   * not in the ARM9's cache, before it looks. */
+  fx_handoff();
+  if (hdr.arm11_size) {
+    fx_dcache_clean();
+    *(volatile u32 *)AOS_ARM11_MAILBOX = hdr.arm11_entry;
+    fx_dcache_clean();
+  }
 
   firm_info_write();
   aurora_jump_arm9(hdr.arm9_entry);
