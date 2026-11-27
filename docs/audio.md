@@ -469,6 +469,12 @@ live in the core too:
   whose runtime set `app_caps`, and it closes the menu as soon as
   `app_active` drops (an older app left by HOME meanwhile), so the restarting
   OS's probe is answered. See [`home.md`](home.md), "The system menu".
+- **Core 153** (2026-11-27): the back camera's picture is no longer
+  backwards (`flip_h` starts at 0 for both cameras,
+  [`camera.md`](camera.md)). Nothing else on the core.
+- **Core 152** (2026-11-27): the camera picture is no longer upside down and
+  no longer has Cb and Cr swapped (`flip_v` and `swap_uv` start at 0,
+  [`camera.md`](camera.md)). Nothing else on the core.
 - **Core 151** (2026-11-26): the camera's buffers moved from `0x26E40000`
   (inside aShop's arena) to `0x26B20000` ([`camera.md`](camera.md)), and
   comments in `include/system_menu.h` changed. Nothing else on the core.

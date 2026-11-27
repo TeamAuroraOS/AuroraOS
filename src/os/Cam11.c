@@ -527,11 +527,12 @@ static void cam_start_hw(uint32_t which) {
   cs->chip_id = 0;
   cs->words_read = 0;
   cs->overruns = 0;
-  /* Both sensors now share the exact same 0x0025 init and U/V swap.
-   * Front uses flip_h = 0 since switching 0x24 -> 0x25 adds hardware X mirror. */
-  cs->flip_v  = 1u;
-  cs->flip_h  = (which == CAM_BACK) ? 1u : 0u;
-  cs->swap_uv = 1u;
+  /* With read mode 0x0025 both sensors send their top row first and Cb before
+   * Cr; the back picture comes the right way round and the front one as a
+   * mirror would show it, so the conversion changes nothing. */
+  cs->flip_v  = 0u;
+  cs->flip_h  = 0u;
+  cs->swap_uv = 0u;
   cs->yc_mode = 2u;
   g_active_cam = which;
   g_p1 = g_p1_learned;

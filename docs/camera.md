@@ -11,7 +11,10 @@
 | Icons | `icons/camera.png` (`ASSET_APP_CAMERA_64/32/16`), `icon_camera_bits` in `include/icons.h` |
 
 **Status:** new in Beta 8 v0.1.7-everest (PR 51 by MooniiCodes, merged
-2026-11-23). It builds; no console result is recorded here.
+2026-11-23). First run on a New 3DS (2026-11-27): the picture was upside
+down with Cb and Cr swapped, fixed in core 152 and confirmed on the console;
+the back camera's picture was also backwards, fixed in core 153, which has
+not run on a console yet.
 
 The driver is a port of the camera code in Octoblimp's
 [Android Eclair 3DS](https://github.com/Octoblimp/Android-Eclair-3DS)
@@ -112,9 +115,15 @@ shown, switches `ready_buf`, adds one to `frame_seq` and sets
 | Setting in `CamShared` | Value at start |
 |------------------------|----------------|
 | `yc_mode` | 2: decide YUYV or UYVY from every frame (luma varies far more than chroma), so dark first frames cannot lock in the wrong order |
-| `flip_v` | 1 |
-| `flip_h` | 1 for the back camera, 0 for the front one (read mode 0x0025 already mirrors it) |
-| `swap_uv` | 1 |
+| `flip_v` | 0: the sensor sends its top row first |
+| `flip_h` | 0: with read mode 0x0025 the back picture comes the right way round and the front one shows you as a mirror would |
+| `swap_uv` | 0: the sensor sends Cb before Cr |
+
+PR 51 started with `flip_v` and `swap_uv` at 1, and `flip_h` at 1 for the
+back camera. On a New 3DS (2026-11-27) that drew the picture upside down and
+swapped Cb with Cr, so blue hair came out orange and skin came out blue, and
+the back camera's picture was backwards. Core 152 set `flip_v` and `swap_uv`
+to 0 (confirmed on the console); core 153 sets `flip_h` to 0 as well.
 
 On a FIFO overrun the core restarts the receiver and counts it in
 `overruns`; after three in a row it raises `p1` by one (up to 7), which
