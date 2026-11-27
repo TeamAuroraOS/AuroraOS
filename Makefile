@@ -77,7 +77,7 @@ ARM9_ENTRY      := 0x08006800
 ARM11_LOAD_ADDR := 0x1FF80000
 ARM11_ENTRY     := 0x1FF80000
 
-.PHONY: all clean rebuild dirs os greentest assets roots
+.PHONY: all clean rebuild dirs os greentest assets roots updater
 
 all: dirs $(FIRM)
 	@echo ""
@@ -142,6 +142,14 @@ assets:
 roots:
 	$(PYTHON) tools/mkroots.py assets/certs/roots.pem $(SRC_DIR)/os/TlsRoots.c
 
+# The system updater (updater/, docs/update.md), attached to every release as
+# Update.bin. A C SDK app, with the AUR1 magic so the OS makes it no data
+# folder. aurcc needs a Windows Python, as firmtool does.
+updater: dirs
+	$(or $(FIRMTOOL_PY),$(PYTHON)) sdk/aurcc.py build updater/main.c --icon updater/Update.icon \
+	  -o $(OUTPUT_DIR)/Update.bin \
+	  --magic AUR1 -I $(INC_DIR) -I lib/bearssl/inc
+
 
 clean:
 	@echo [CLEAN] Removing build artifacts...
@@ -201,6 +209,7 @@ OS_OBJS := $(BUILD_DIR)/os_start.o $(BUILD_DIR)/os_main.o \
            $(BUILD_DIR)/os_fwdump.o \
            $(BUILD_DIR)/os_account.o $(BUILD_DIR)/os_qr.o \
            $(BUILD_DIR)/os_http.o $(BUILD_DIR)/os_uisound.o \
+           $(BUILD_DIR)/os_update.o \
            $(BUILD_DIR)/os_wifitcp.o $(BUILD_DIR)/os_wifiudp.o \
            $(BUILD_DIR)/os_tls.o \
            $(BUILD_DIR)/os_tlsroots.o $(BUILD_DIR)/os_appnet.o \
@@ -380,6 +389,10 @@ $(BUILD_DIR)/os_qr.o: $(OS_DIR)/Qr.c $(wildcard $(INC_DIR)/*.h) | dirs
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/os_http.o: $(OS_DIR)/Http.c $(wildcard $(INC_DIR)/*.h) | dirs
+	@echo [CC9 ] Compiling $< '(for OS)'
+	$(CC) $(ARM9_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/os_update.o: $(OS_DIR)/Update.c $(wildcard $(INC_DIR)/*.h) | dirs
 	@echo [CC9 ] Compiling $< '(for OS)'
 	$(CC) $(ARM9_CFLAGS) -c $< -o $@
 

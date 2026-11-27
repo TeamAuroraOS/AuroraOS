@@ -41,7 +41,8 @@ the Home Menu in `src/os/HomeMenu.c` with its arrangement in
 `src/os/Theme.c`, the aShop store in `src/os/Store.c`, the startup sound,
 menu sounds, the Home Menu's song and aShop's music in `src/os/UiSound.c`, Aurora accounts
 in `src/os/Account.c` with the QR encoder in `src/os/Qr.c` and the HTTP
-client both use in `src/os/Http.c`, the Wi-Fi
+client both use in `src/os/Http.c`, System Update in `src/os/Update.c`
+([`update.md`](update.md)), the Wi-Fi
 firmware copy in `src/os/FwDump.c` (with the read-only NAND reader in
 `src/os/Nand.c` and the AES engine in `src/os/Aes.c`), the 3D Model screen in `src/os/Model3D.c` with its GLB loader in
 `src/os/Glb.c` and JSON tokenizer in `src/os/Json.c`, and the software 3D
@@ -53,7 +54,12 @@ The firm, `Aurora.firm`, is built from every `src/*.c` file but one: its menu
 in `src/main.c`, the loader in `src/loader.c` and `src/container.c`, and the
 shared drivers above. Its ARM11 runs `src/arm11_start.s` and `src/screen11.c`,
 which points the screens at Aurora's framebuffers whatever the loader left
-([`power.md`](power.md), "Starting the firm from any loader").
+([`power.md`](power.md), "Starting the firm from any loader"). `src/start.s`
+keeps the path the loader started the firm from, for System Update.
+
+The updater that installs a system update is a C SDK app in `updater/`
+(`make updater`, with its PC tests in `updater/tests/`); the server it and the
+OS talk to is `aurora-site/Update` ([`update.md`](update.md)).
 
 Apps have two toolchains. `auric-lang/` is the Auric language and its
 compiler. `sdk/` is for apps in C: the public header `sdk/include/aurora_app.h`,

@@ -5,9 +5,12 @@
 #include "font.h"
 #include "icons.h"
 #include "loader.h"
+#include "update.h"
 
 static FATFS loader_fs;
 static FIL loader_file;
+
+extern char g_firm_argv0[256]; /* start.s */
 
 static u32 l_strlen(const char *s) {
   u32 n = 0;
@@ -107,7 +110,7 @@ static void loader_draw_progress(const char *title, const char *subtitle,
 
 static void loader_draw_error(const char *title, const char *subtitle,
                               const char *d1, const char *d2, const char *d3,
-                              int detailed) {
+                              int detailed, int backup) {
   volatile u8 *fb = VRAM_BOT_A;
   const int W = BOT_SCREEN_WIDTH, H = BOT_SCREEN_HEIGHT;
   Color red = {0xFF, 0x5A, 0x52};
@@ -127,7 +130,9 @@ static void loader_draw_error(const char *title, const char *subtitle,
       l_text_mid(fb, W / 2, 140, subtitle, COLOR_HM_TEXT2, COLOR_HM_CARD,
                  ASSET_FONT_SMALL);
     draw_filled_round_rect(fb, 12, H - 36, W - 24, 26, 9, H, COLOR_HM_BAR);
-    l_text_mid(fb, W / 2, H - 29, "START: Details   B: Boot Menu",
+    l_text_mid(fb, W / 2, H - 29,
+               backup ? "Y: Start Backup  START: Details  B: Menu"
+                      : "START: Details   B: Boot Menu",
                COLOR_HM_TEXT2, COLOR_HM_BAR, ASSET_FONT_SMALL);
   } else {
     draw_filled_round_rect(fb, 8, 8, W - 16, 30, 10, H, COLOR_HM_BAR);
@@ -142,38 +147,87 @@ static void loader_draw_error(const char *title, const char *subtitle,
     if (d3 && d3[0])
       l_text(fb, 22, 130, d3, COLOR_HM_TEXT2, COLOR_HM_CARD, ASSET_FONT_SMALL);
     draw_filled_round_rect(fb, 12, H - 36, W - 24, 26, 9, H, COLOR_HM_BAR);
-    l_text_mid(fb, W / 2, H - 29, "START: Simple   B: Boot Menu",
+    l_text_mid(fb, W / 2, H - 29,
+               backup ? "Y: Start Backup  START: Simple  B: Menu"
+                      : "START: Simple   B: Boot Menu",
                COLOR_HM_TEXT2, COLOR_HM_BAR, ASSET_FONT_SMALL);
   }
   screen_present_bottom();
 }
 
-static void loader_error(const char *title, const char *subtitle,
-                         const char *d1, const char *d2, const char *d3) {
+/* Waits for B, or with `backup` also Y: 1 when Y was pressed. */
+static int loader_error(const char *title, const char *subtitle,
+                        const char *d1, const char *d2, const char *d3,
+                        int backup) {
   int detailed = 0;
   f_mount(NULL, "", 0);
   if (!assets_ok())
     assets_load();
-  loader_draw_error(title, subtitle, d1, d2, d3, detailed);
+  loader_draw_error(title, subtitle, d1, d2, d3, detailed, backup);
   while (1) {
     u32 k = get_keys_down();
     if (k & BUTTON_START) {
       detailed = !detailed;
-      loader_draw_error(title, subtitle, d1, d2, d3, detailed);
+      loader_draw_error(title, subtitle, d1, d2, d3, detailed, backup);
     }
+    if (backup && (k & BUTTON_Y))
+      return 1;
     if (k & BUTTON_B)
-      break;
+      return 0;
     delay(60000);
   }
 }
 
-void boot_aurora_ex(int quiet) {
+/* The firm's own path for the OS, from the "sdmc:/..." argv[0] Luma3DS and
+ * fastboot3DS pass; no magic when it booted from anywhere else. */
+static void firm_info_write(void) {
+  static const char pre[] = "sdmc:/";
+  volatile u32 *magic = (volatile u32 *)AURORA_FIRM_INFO_ADDR;
+  volatile char *dst = (volatile char *)(AURORA_FIRM_INFO_ADDR + 4u);
+  const char *s = g_firm_argv0;
+  u32 i = 0, n = 0;
+  *magic = 0;
+  while (pre[i] && (s[i] | 0x20) == pre[i])
+    i++;
+  if (pre[i])
+    return;
+  dst[n++] = '/';
+  for (s += i; *s && n < AURORA_FIRM_PATH_MAX - 1u; s++)
+    dst[n++] = *s;
+  if (*s || n < 2u)
+    return;
+  dst[n] = 0;
+  *magic = AURORA_FIRM_INFO_MAGIC;
+}
+
+/* The backup an update left (docs/update.md), on the mounted card. */
+static int backup_exists(void) {
+  FILINFO fno;
+  return f_stat(UPDATE_BACKUP_OS, &fno) == FR_OK && !(fno.fattrib & AM_DIR);
+}
+
+static void boot_file(const char *path, int quiet, int main_file);
+
+/* An error with the system file: the card again, with the backup offered
+ * when there is one. */
+static void loader_file_error(const char *title, const char *subtitle,
+                              const char *d1, const char *d2, const char *d3,
+                              int quiet, int backup) {
+  if (backup)
+    backup = backup_exists();
+  if (loader_error(title, subtitle, d1, d2, d3, backup))
+    boot_file(UPDATE_BACKUP_OS, quiet, 0);
+}
+
+static void boot_file(const char *path, int quiet, int main_file) {
   UINT br;
   char d1[64], d2[64], d3[64];
   char *p;
 
   if (!quiet)
-    loader_draw_progress("Starting AuroraOS...", "Please wait", 15);
+    loader_draw_progress("Starting AuroraOS...",
+                         main_file ? "Please wait" : "Starting the backup",
+                         15);
 
   FRESULT fr = f_mount(&loader_fs, "", 1);
   if (fr != FR_OK) {
@@ -182,34 +236,43 @@ void boot_aurora_ex(int quiet) {
     l_dec(p, (int)fr);
     l_cpy(d3, "Target: 0:/AURORAOS.BIN");
     loader_error("SD Card Not Found", "Insert your SD card and try again.",
-                 d1, d2, d3);
+                 d1, d2, d3, 0);
     return;
   }
 
   if (!quiet)
     loader_draw_progress("Starting AuroraOS...", "Loading system...", 35);
 
-  fr = f_open(&loader_file, "AURORAOS.BIN", FA_READ);
+  fr = f_open(&loader_file, path, FA_READ);
   if (fr != FR_OK) {
-    l_cpy(d1, "Stage: Open AURORAOS.BIN");
+    l_cpy(d1,
+          main_file ? "Stage: Open AURORAOS.BIN" : "Stage: Open the backup");
     p = l_cpy(d2, "FRESULT code: ");
     l_dec(p, (int)fr);
-    l_cpy(d3, "Expected on SD card root");
-    loader_error("AuroraOS Not Found", "Put AURORAOS.BIN on your SD card.",
-                 d1, d2, d3);
+    l_cpy(d3, main_file ? "Expected on SD card root" : UPDATE_BACKUP_OS);
+    loader_file_error("AuroraOS Not Found", "Put AURORAOS.BIN on your SD card.",
+                      d1, d2, d3, quiet, main_file);
     return;
   }
 
   aos_header_t hdr;
   aurora_status_t st = aurora_parse_header(&loader_file, &hdr);
-  if (st != AURORA_OK) {
+  /* Anything outside FCRAM would land on this firm or the hardware. */
+  int bad_range = st == AURORA_OK &&
+                  (hdr.arm9_load_addr < 0x20000000u || !hdr.arm9_size ||
+                   hdr.arm9_size > 0x01000000u ||
+                   hdr.arm9_load_addr + hdr.arm9_size > 0x28000000u);
+  if (st != AURORA_OK || bad_range) {
     f_close(&loader_file);
     l_cpy(d1, "Stage: Parse AOS header");
-    l_cpy(d2, st == AURORA_ERR_MAGIC ? "Reason: Invalid AOS1/AUR1/AURC magic"
-                                     : "Reason: Header read failed");
-    l_cpy(d3, "File: 0:/AURORAOS.BIN");
-    loader_error("Couldn't Start AuroraOS", "The system file appears damaged.",
-                 d1, d2, d3);
+    l_cpy(d2, bad_range ? "Reason: Payload outside FCRAM"
+              : st == AURORA_ERR_MAGIC ? "Reason: Invalid AOS1/AUR1/AURC magic"
+                                       : "Reason: Header read failed");
+    p = l_cpy(d3, "File: 0:/");
+    l_cpy(p, path);
+    loader_file_error("Couldn't Start AuroraOS",
+                      "The system file appears damaged.", d1, d2, d3, quiet,
+                      main_file);
     return;
   }
 
@@ -225,8 +288,9 @@ void boot_aurora_ex(int quiet) {
     l_cpy(p, " bytes");
     p = l_cpy(d3, "Load addr: ");
     l_hex32(p, hdr.arm9_load_addr);
-    loader_error("Couldn't Start AuroraOS", "Failed to read the system file.",
-                 d1, d2, d3);
+    loader_file_error("Couldn't Start AuroraOS",
+                      "Failed to read the system file.", d1, d2, d3, quiet,
+                      main_file);
     return;
   }
 
@@ -243,8 +307,9 @@ void boot_aurora_ex(int quiet) {
       l_cpy(p, "  Size: ");
       p = l_cpy(d3, "Load addr: ");
       l_hex32(p, hdr.arm11_load_addr);
-      loader_error("Couldn't Start AuroraOS", "Failed to read the system file.",
-                   d1, d2, d3);
+      loader_file_error("Couldn't Start AuroraOS",
+                        "Failed to read the system file.", d1, d2, d3, quiet,
+                        main_file);
       return;
     }
     *(volatile u32 *)AOS_ARM11_MAILBOX = hdr.arm11_entry;
@@ -256,7 +321,10 @@ void boot_aurora_ex(int quiet) {
   if (!quiet)
     loader_draw_progress("Starting AuroraOS...", "Almost ready...", 100);
 
+  firm_info_write();
   aurora_jump_arm9(hdr.arm9_entry);
 }
+
+void boot_aurora_ex(int quiet) { boot_file("AURORAOS.BIN", quiet, 1); }
 
 void boot_aurora(void) { boot_aurora_ex(0); }

@@ -15,6 +15,7 @@
 #include "timer.h"
 #include "touch.h"
 #include "ui.h"
+#include "update.h"
 #include "wifi.h"
 #include <string.h>
 
@@ -1997,7 +1998,17 @@ static void cmd_ping(int argc, char **argv) {
  * screens are drawn directly meanwhile (wifi_direct_on). */
 u32 appnet_ms(void) { return wifi_now_ms(); }
 
-int appnet_mount(void) { return t_need_sd(0); }
+/* Settings > System Update (Update.c) uses AppNet outside the Terminal, with
+ * its own card mount and drawing. */
+static int (*an_mount)(void);
+static void (*an_wait)(u32 ms);
+
+void t_appnet_hooks(int (*mount)(void), void (*wait)(u32 ms)) {
+  an_mount = mount;
+  an_wait = wait;
+}
+
+int appnet_mount(void) { return an_mount ? an_mount() : t_need_sd(0); }
 
 int appnet_launched(void) { return 1; }
 
@@ -2008,6 +2019,10 @@ static int curl_quiet;
 
 void appnet_waiting(u32 ms) {
   static char line[64];
+  if (an_wait) {
+    an_wait(ms);
+    return;
+  }
   if (curl_quiet || ms / 1000u == curl_shown)
     return;
   curl_shown = ms / 1000u;
@@ -2399,6 +2414,136 @@ static void cmd_exit(int argc, char **argv) {
   t_quit = 1;
 }
 
+/* update: Settings > System Update for the Terminal (Update.c,
+ * docs/update.md). */
+static void update_progress(u32 done, u32 total) {
+  static char line[64];
+  char *p = t_cpy(line, "Downloading the updater: ");
+  p = t_hsize(p, done);
+  if (total) {
+    p = t_cpy(p, " of ");
+    t_hsize(p, total);
+  }
+  t_busy(line);
+}
+
+/* The release notes, a line of the terminal per line of text. */
+static void update_notes_out(const char *s) {
+  static char line[T_COLS * 4];
+  while (*s) {
+    u32 n = 0;
+    while (s[n] && s[n] != '\n' && n + 1u < sizeof(line)) {
+      line[n] = s[n];
+      n++;
+    }
+    line[n] = 0;
+    if (n)
+      t_wrap(line, 2, TC_TEXT);
+    else
+      t_outc('\n', TC_TEXT);
+    s += n;
+    if (*s == '\n')
+      s++;
+  }
+}
+
+static void update_restore_cmd(void) {
+  static char name[48], why[160];
+  if (!t_need_sd("update"))
+    return;
+  if (!update_backup(name, sizeof(name))) {
+    t_err("update", 0, 0, "no update has left a backup to restore");
+    return;
+  }
+  if (!t_boot) {
+    t_err("update", 0, 0, "the restored system cannot be started from here");
+    return;
+  }
+  if (!update_restore(why, sizeof(why))) {
+    t_err("update", 0, 0, why);
+    return;
+  }
+  t_out("Restored ", TC_DIM);
+  t_line(name, TC_DIM);
+  t_flush();
+  t_unmount();
+  t_boot(UPDATE_OS_PATH);
+  t_need_sd(0);
+  t_kb_redraw();
+  t_err("update", 0, 0,
+        "the restored AuroraOS did not start; update restore goes back");
+}
+
+static void cmd_update(int argc, char **argv) {
+  static UpdateInfo u;
+  static char why[160], line[160];
+  const char *verb = argc > 1 ? argv[1] : "check";
+  int install = t_streq(verb, "install");
+  if (argc > 2 ||
+      !(install || t_streq(verb, "check") || t_streq(verb, "restore"))) {
+    t_line("usage: update [check|install|restore]", TC_TEXT);
+    return;
+  }
+  if (t_streq(verb, "restore")) {
+    update_restore_cmd();
+    return;
+  }
+  if (!net_join("update"))
+    return;
+  curl_shown = 0xFFFFFFFFu;
+  wifi_direct_on();
+  int ok = update_check(&u, why, sizeof(why));
+  wifi_direct_off();
+  if (!ok) {
+    t_err("update", 0, 0, why);
+    return;
+  }
+  if (!u.update) {
+    t_line("AuroraOS " AURORA_VERSION " is up to date.", TC_TEXT);
+    return;
+  }
+  char *p = t_cpy(line, u.name);
+  p = t_cpy(p, " is available: ");
+  p = t_hsize(p, u.size);
+  if (u.published[0]) {
+    p = t_cpy(p, ", released ");
+    p = t_cpy(p, u.published);
+  }
+  t_cpy(p, ".");
+  t_line(line, TC_EXEC);
+  update_notes_out(update_notes());
+  if (!install) {
+    t_line("update install downloads the updater and starts it.", TC_DIM);
+    return;
+  }
+  if (!update_battery_ok()) {
+    t_err("update", 0, 0,
+          "charge the battery past 20% or plug in the charger");
+    return;
+  }
+  if (!t_launch) {
+    t_err("update", 0, 0, "apps cannot be run from here");
+    return;
+  }
+  if (!t_need_sd("update"))
+    return;
+  curl_shown = 0xFFFFFFFFu;
+  wifi_direct_on();
+  ok = update_fetch(&u, update_progress, why, sizeof(why));
+  wifi_direct_off();
+  if (!ok) {
+    t_err("update", 0, 0, why);
+    return;
+  }
+  t_line("Starting the updater", TC_DIM);
+  t_flush();
+  t_unmount();
+  t_launch(UPDATE_APP); /* returns only when it did not start */
+  t_need_sd(0);
+  t_kb_redraw();
+  t_err("update", 0, 0, "the updater did not start");
+}
+
 void t_help(const TermCmd *c) {
   t_out("usage: ", TC_TEXT);
   t_line(c->usage, TC_TEXT);
@@ -2495,6 +2640,14 @@ const TermCmd t_cmds[] = {
     {"touch", cmd_touch, "touch FILE...", "make empty files", 0},
     {"uname", cmd_uname, "uname [-asnrmo]", "print system information",
      "-s system, -n host, -r release, -m machine, -o OS, -a all of them."},
+    {"update", cmd_update, "update [check|install|restore]",
+     "look for a newer AuroraOS and install it",
+     "check (the default) asks update.aurora3ds.xyz whether a newer release "
+     "exists and prints its notes. install then downloads the updater and "
+     "starts it: it replaces AURORAOS.BIN, assets.pak and the firm, keeps "
+     "the old ones, and restarts into the new AuroraOS. restore puts back "
+     "what the last update replaced. Joins the saved network first, as ping "
+     "does; install needs 20% battery or the charger."},
     {"whoami", cmd_whoami, "whoami", "print the user name", 0},
 };
 

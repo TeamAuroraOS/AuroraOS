@@ -194,6 +194,7 @@ NAME
 | [`systemctl`](#systemctl) | look at Aurora's services |
 | [`touch`](#touch) | make empty files |
 | [`uname`](#uname) | print system information |
+| [`update`](#update) | look for a newer AuroraOS and install it |
 | [`whoami`](#whoami) | print the user name |
 
 Errors use coreutils' wording, for example
@@ -683,6 +684,36 @@ uname [-a] [-s] [-n] [-r] [-m] [-o]
 | `-m` | `armv5tel`, the ARM9 |
 | `-o` | `AuroraOS` |
 | `-a` | all of the above, in that order |
+
+### update
+
+```
+update [check|install|restore]
+```
+
+The terminal's Settings > System Update; [`update.md`](update.md) has the
+whole story.
+
+* `check` (the default) joins the saved network if needed, as
+  [`ping`](#ping) does, asks `update.aurora3ds.xyz` about the newest release
+  and prints `AuroraOS Beta 8 v0.1.7-everest is up to date.`, or the
+  release's name, size and date, then its notes.
+* `install` checks the same way, then needs 20% battery or the charger,
+  downloads the updater (`Downloading the updater: 120K of 251K` below the
+  output), checks its SHA-256 and starts it. The updater replaces
+  `AURORAOS.BIN`, `assets.pak` and the firm, keeps the old ones and restarts
+  into the new AuroraOS.
+* `restore` puts back what the last update replaced (no network needed) and
+  starts the restored AuroraOS. Running it again goes forward again.
+
+```
+Nick@n3ds:/$ update
+Beta 9 v0.1.8 is available: 2.4M, released 2026-12-01.
+  Beta 9
+  New Features:
+  ...
+update install downloads the updater and starts it.
+```
 
 ### whoami
 

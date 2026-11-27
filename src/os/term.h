@@ -58,6 +58,12 @@ extern char t_oldcwd[T_PATH];
 extern const char *t_user;
 extern const char *t_host;
 extern void (*t_launch)(const char *path);
+/* Starts an AURORAOS.BIN in place of the running one (update restore); 0
+ * when the Terminal was opened without it. */
+extern void (*t_boot)(const char *path);
+/* AppNet's mount and waiting hooks for a caller outside the Terminal
+ * (Update.c); 0, 0 gives them back to the Terminal. */
+void t_appnet_hooks(int (*mount)(void), void (*wait)(u32 ms));
 extern int t_quit;
 
 /* `arg` against the working folder, with "." and ".." applied, into `out`.

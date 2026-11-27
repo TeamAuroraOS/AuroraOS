@@ -57,6 +57,9 @@ char t_oldcwd[T_PATH];
 const char *t_user;
 const char *t_host;
 void (*t_launch)(const char *path);
+void (*t_boot)(const char *path);
+
+void terminal_set_boot(void (*boot)(const char *path)) { t_boot = boot; }
 int t_quit;
 
 static char in_buf[T_INPUT];

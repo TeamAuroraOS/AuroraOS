@@ -10,7 +10,8 @@ Aurora is a custom OS for the Nintendo 3DS. **Current version: Beta 8 v0.1.7-eve
 *Built using knowledge from GodMode9 and Luma source code.*
 
 It has a Home Menu with pages, folders and themes, a File Explorer, a terminal,
-Wi-Fi with HTTPS, an app store (aShop), stereoscopic 3D, and apps written in
+Wi-Fi with HTTPS, an app store (aShop), updates over Wi-Fi (Settings > System
+Update), stereoscopic 3D, and apps written in
 [Auric](auric-lang/README.md) or [C](sdk/README.md). The full list of what
 works is in [`docs/features.md`](docs/features.md).
 
@@ -82,6 +83,7 @@ Settings. More in [`docs/home.md`](docs/home.md).
 * [`docs/terminal.md`](docs/terminal.md): the terminal and every command
 * [`docs/input.md`](docs/input.md): touch calibration, the circle pad, screenshots
 * [`docs/power.md`](docs/power.md): clock, battery, power, the lid, brightness
+* [`docs/update.md`](docs/update.md): System Update, the updater, the update server and publishing a release
 * [`docs/wifi.md`](docs/wifi.md): Wi-Fi bring-up and copying the firmware
 * [`docs/tls.md`](docs/tls.md): HTTPS and the certificates it trusts
 * [`docs/audio.md`](docs/audio.md): CSND playback and the ARM11 core

@@ -24,6 +24,7 @@
 #include "touchcal.h"
 #include "timer.h"
 #include "uisound.h"
+#include "update.h"
 #include "audio.h"
 #include "container.h"
 #include "crash.h"
@@ -465,6 +466,7 @@ typedef enum {
   SET_GPUTEST,
   SET_MODELTEST,
   SET_CLEAR_CACHE,
+  SET_UPDATE,
   SET_ABOUT,
   SET_CRASH,
   SET_RESET,
@@ -589,6 +591,10 @@ static void settings_content(int id, u32 *asset, const unsigned char **icon,
     case SET_CLEAR_CACHE:
       *asset = ASSET_ICON_SETTINGS_32;
       *icon = icon_settings_bits; *name = "Clear Cache";
+      *value = ""; break;
+    case SET_UPDATE:
+      *asset = ASSET_ICON_FILE_AURORA_32;
+      *icon = icon_boot_bits; *name = "System Update";
       *value = ""; break;
     case SET_ABOUT:
       *asset = ASSET_ICON_INFO_32;
@@ -3388,6 +3394,10 @@ static void touch_cal_screen(void) {
 
 static void account_open(void) { account_screen(g_cfg.name); }
 
+static void os_launch_app(const char *path);
+static void os_boot_system(const char *path);
+static void update_open(void) { update_screen(os_launch_app, os_boot_system); }
+
 static void reset_screen(void) {
   int confirmed = 0;
   ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
@@ -3540,6 +3550,7 @@ static void settings_open(void) {
           }
           settings_draw(sel);
           break;
+        case SET_UPDATE:   sub = update_open; break;
         case SET_ABOUT:    sub = about_screen; break;
         case SET_CRASH:    crash_force(); break;
         case SET_RESET:    sub = reset_screen; break;
@@ -3873,9 +3884,11 @@ static void os_run_stub(u32 src, u32 dst, u32 size, u32 entry) {
                                                              entry);
 }
 
-/* Never returns on success: the app replaces the Home Menu. On an error it
- * shows a message and returns. */
-static void os_launch_app(const char *path) {
+/* Never returns on success: the app replaces the Home Menu, or with `system`
+ * the AURORAOS.BIN at `path` replaces this one (Settings > System Update >
+ * Restore), started the way the firm would start it. On an error it shows a
+ * message and returns. */
+static void os_start_file(const char *path, int system) {
   static FATFS app_fs;
   static FIL app_file;
 
@@ -3904,14 +3917,20 @@ static void os_launch_app(const char *path) {
     launch_wait_back();
     return;
   }
-  /* A damaged header must not overwrite the core or this very code. */
+  /* A damaged header must not overwrite the core or this very code. An OS
+   * runs from its first byte at the OS's place, with the core in its image. */
   if (hdr.arm9_load_addr < AURORA_APP_LOAD_ADDR || !hdr.arm9_size ||
       hdr.arm9_size > AURORA_APP_MAX_SIZE ||
       hdr.arm9_load_addr - AURORA_APP_LOAD_ADDR >
           AURORA_APP_MAX_SIZE - hdr.arm9_size ||
       hdr.arm9_entry < hdr.arm9_load_addr ||
-      hdr.arm9_entry - hdr.arm9_load_addr >= hdr.arm9_size) {
-    launch_msg("Not an Aurora app.  B: back", COLOR_RED);
+      hdr.arm9_entry - hdr.arm9_load_addr >= hdr.arm9_size ||
+      (system && (aurora_magic_kind(hdr.magic) != 'A' ||
+                  hdr.arm9_load_addr != AURORA_APP_LOAD_ADDR ||
+                  hdr.arm9_entry != hdr.arm9_load_addr || hdr.arm11_size))) {
+    launch_msg(system ? "Not an AuroraOS system file.  B: back"
+                      : "Not an Aurora app.  B: back",
+               COLOR_RED);
     f_close(&app_file);
     f_mount(NULL, "", 0);
     launch_wait_back();
@@ -3926,17 +3945,25 @@ static void os_launch_app(const char *path) {
     return;
   }
   f_close(&app_file);
-  if (aurora_magic_kind(hdr.magic) == 'C')
+  if (!system && aurora_magic_kind(hdr.magic) == 'C')
     aurora_c_data_make(path); /* where the app's app_dir() points */
   f_mount(NULL, "", 0);
 
   gpu_show_a(); /* the app draws to framebuffer A */
-  os_launch_info(path);
-  os_install_return();
+  if (system) {
+    audio_voices_stop();
+  } else {
+    os_launch_info(path);
+    os_install_return();
+  }
 
   os_run_stub(AURORA_APP_STAGE_ADDR, hdr.arm9_load_addr, hdr.arm9_size,
               hdr.arm9_entry);
 }
+
+static void os_launch_app(const char *path) { os_start_file(path, 0); }
+
+static void os_boot_system(const char *path) { os_start_file(path, 1); }
 
 #define MUSIC_DIR    "Aurora/Music"
 #define MAX_TRACKS   32
@@ -4535,6 +4562,15 @@ void os_main(void) {
 
   if (assets_failed)
     assets_warning();
+  {
+    const char *title, *line;
+    if (update_at_boot(&title, &line)) {
+      ui_wallpaper(VRAM_BOT_A, BOT_SCREEN_WIDTH, BOT_SCREEN_HEIGHT,
+                   BOT_SCREEN_HEIGHT);
+      notice(title, line);
+    }
+  }
+  terminal_set_boot(os_boot_system);
 
   scan_apps();
   build_home();

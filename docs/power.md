@@ -247,6 +247,10 @@ file).
 
 ## Starting the firm from any loader
 
+(Since System Update the firm also keeps the path it was started from, for the
+OS to replace that file, and offers the backup when `AURORAOS.BIN` will not
+start; see [`update.md`](update.md), "The firm's path" and "Safety".)
+
 Until Beta 8 the firm drew into VRAM and left the screens to the loader, so it
 showed only when Luma3DS's chainloader menu had already turned them on with
 its framebuffers at Aurora's addresses (`0x18300000` top, `0x18346500`

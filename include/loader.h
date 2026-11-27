@@ -22,6 +22,13 @@
 #define AURORA_LAUNCH_INFO_ADDR     0x25008100u
 #define AURORA_LAUNCH_MAGIC         0x314E4C41u /* "ALN1" */
 #define AURORA_LAUNCH_PATH_MAX      256u        /* bytes, including the NUL */
+/* Written by the firm's loader before it starts the OS: the magic, then the
+ * path the firm was booted from as a FatFs path ("/luma/payloads/x.firm"),
+ * from the argv Luma3DS and fastboot3DS pass. The OS and the updater read it
+ * to know which firm to replace (docs/update.md). */
+#define AURORA_FIRM_INFO_ADDR       0x25008400u
+#define AURORA_FIRM_INFO_MAGIC      0x31505746u /* "FWP1" */
+#define AURORA_FIRM_PATH_MAX        256u        /* bytes, including the NUL */
 /* C apps (magic "AURC") go here, and each keeps its data in a folder here
  * named after it; see aurora_c_data_dir() in container.h. */
 #define AURORA_C_APPS_DIR           "Aurora/Apps/C"

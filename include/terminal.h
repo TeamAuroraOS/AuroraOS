@@ -6,5 +6,7 @@
  * redraw. Scrollback, history and the working folder persist until the next
  * app. */
 void terminal_screen(const char *user, void (*launch)(const char *path));
+/* How the Terminal's update restore starts the restored AURORAOS.BIN. */
+void terminal_set_boot(void (*boot)(const char *path));
 
 #endif
